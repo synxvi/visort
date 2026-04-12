@@ -1,0 +1,39 @@
+{
+  "active_profile": "Default",
+  "profiles": {
+    "Default": {
+      "folders": [
+        {
+          "key": "s",
+          "label": "类别 2"
+        },
+        {
+          "key": "d",
+          "label": "类别 3"
+        },
+        {
+          "key": "f",
+          "label": "Category 4"
+        },
+        {
+          "key": "q",
+          "label": "Category 5"
+        },
+        {
+          "key": "w",
+          "label": "类别 6"
+        },
+        {
+          "key": "e",
+          "label": "Category 7"
+        }
+      ],
+      "action_keys": {
+        "undo": "z",
+        "delete": "x",
+        "skip": "c"
+      }
+    }
+  },
+  "language": "zh"
+}

@@ -1,0 +1,2273 @@
+<!DOCTYPE html>
+<!--
+  SORTR — Image Organizer
+  Version: 1.2.0
+
+  Single-page application served by app.py (Flask).
+
+  Structure
+  ─────────
+  Screen 1 (setup)   — directory inputs and folder list preview
+  Screen 2 (sort)    — image viewer + action buttons / keyboard shortcuts
+  Screen 3 (review)  — full change summary before committing
+  Screen 4 (results) — post-run outcome display
+
+  Only one screen is visible at a time; `.screen.active` controls visibility.
+
+  API endpoints consumed
+  ──────────────────────
+  GET  /api/browse              open native directory picker
+  POST /api/scan-subdirs        scan child directories of a parent dir
+  GET/POST /api/profiles        multi-group profile management
+  POST /api/scan          scan a directory; initialise session
+  GET  /api/image/<index> stream image bytes for display
+  POST /api/decide        record a move/delete/skip decision
+  GET  /api/review        fetch all pending decisions
+  POST /api/undo          step back one image and clear its decision
+  POST /api/run           apply all decisions to the filesystem
+  POST /api/run-stream    SSE streaming version of run with progress
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- SORTR — 图片整理工具 (Image Organizer) -->
+<title>SORTR — Image Organizer</title>
+<!-- 本地字体：通过 Flask /fonts/ 路由提供，无需 CDN -->
+<style>
+  /* ── 本地字体声明（替代 Google Fonts CDN）────────────────────────────── */
+  @font-face {
+    font-family: 'Space Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/fonts/SpaceMono-Regular.ttf') format('truetype');
+  }
+  @font-face {
+    font-family: 'Space Mono';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('/fonts/SpaceMono-Bold.ttf') format('truetype');
+  }
+  @font-face {
+    font-family: 'Syne';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/fonts/Syne-Regular.ttf') format('truetype');
+  }
+  @font-face {
+    font-family: 'Syne';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('/fonts/Syne-Bold.ttf') format('truetype');
+  }
+  @font-face {
+    font-family: 'Syne';
+    font-style: normal;
+    font-weight: 800;
+    font-display: swap;
+    src: url('/fonts/Syne-ExtraBold.ttf') format('truetype');
+  }
+
+  :root {
+    --bg: #0d0d0d;
+    --surface: #161616;
+    --border: #2a2a2a;
+    --accent: #e8ff47;
+    --accent2: #ff6b35;
+    --text: #f0f0f0;
+    --muted: #666;
+    --danger: #ff3b3b;
+    --success: #3bff8a;
+    --mono: 'Consolas', 'Courier New', monospace;
+    --sans: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    --logo-font: 'Syne', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+    /* 初始隐藏，等字体和 init 就绪后再显示，消除闪烁 */
+    opacity: 0;
+    transition: opacity 0.15s ease-in;
+  }
+
+  body.ready {
+    opacity: 1;
+  }
+
+  /* ── NOISE TEXTURE ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.35;
+  }
+
+  /* ── HEADER ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 40px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(13,13,13,0.92);
+    backdrop-filter: blur(12px);
+    z-index: 100;
+  }
+
+  .logo {
+    font-family: var(--logo-font);
+    font-weight: 800;
+    font-size: 1.6rem;
+    letter-spacing: -0.02em;
+  }
+  .logo span { color: var(--accent); }
+
+  .header-meta {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--muted);
+    text-align: right;
+    line-height: 1.6;
+  }
+
+  /* ── PROGRESS BAR ── */
+  .progress-bar-outer {
+    height: 3px;
+    background: var(--border);
+    width: 100%;
+  }
+  .progress-bar-inner {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.4s ease;
+    width: 0%;
+  }
+
+  /* ── SCREENS ── */
+  .screen { display: none; padding: 40px; max-width: 1200px; margin: 0 auto; }
+  .screen.active { display: block; }
+
+  /* ── SETUP SCREEN ── */
+  .setup-wrap {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 60px;
+    align-items: start;
+    margin-top: 40px;
+  }
+
+  .setup-right { }
+
+  #lang-btn {
+    background: var(--surface);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 0.6rem;
+    cursor: pointer;
+    font-family: var(--mono);
+    margin-bottom: 4px;
+  }
+  #lang-btn:hover { color: var(--text); border-color: var(--accent); }
+
+  .field-label {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-bottom: 8px;
+  }
+
+  .dir-rows {
+    display: grid;
+    grid-template-columns: 1fr 90px 90px;
+    gap: 10px;
+    margin-bottom: 32px;
+  }
+  .dir-rows .dir-label {
+    grid-column: 1 / -1;
+    margin-bottom: 0;
+  }
+  .dir-rows .tiny-btn {
+    width: 100%;
+    text-align: center;
+    font-size: 0.66rem;
+    line-height: 1.25;
+    padding: 8px 4px;
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: keep-all;
+  }
+  .dir-row-gap { margin-bottom: 24px; }
+  .start-btn-row { margin-bottom: 32px; }
+  .start-btn-row .btn { width: 100%; }
+
+  input[type="text"] {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 14px 18px;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  input[type="text"]:focus { border-color: var(--accent); }
+  input[type="text"]::placeholder { color: var(--muted); }
+
+  /* select dropdown for profiles */
+  select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 14px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    outline: none;
+    cursor: pointer;
+  }
+  select:focus { border-color: var(--accent); }
+
+  .btn {
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 0.85rem;
+    padding: 14px 24px;
+    border: none;
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .btn-accent { background: var(--accent); color: #000; }
+  .btn-accent:hover { background: #fff; }
+  .start-btn-row .btn {
+    background: var(--bg);
+    color: var(--accent);
+    border: 2px solid var(--accent);
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    font-size: 1rem;
+  }
+  .start-btn-row .btn:hover {
+    background: var(--accent);
+    color: #000;
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-danger:hover { background: #ff6060; }
+  .btn-success { background: var(--success); color: #000; }
+  .btn-success:hover { background: #70ffb0; }
+  .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  #scan-mode-btn { min-width: unset; width: 100%; }
+
+  /* Folder list */
+  .folders-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .folder-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-size: 0.8rem;
+  }
+  .folder-chip .fkey {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    background: var(--border);
+    color: var(--accent);
+    padding: 2px 7px;
+    font-weight: 700;
+  }
+  .folder-chip .fpath {
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    color: var(--muted);
+    margin-top: 2px;
+    word-break: break-all;
+  }
+  .folder-info { flex: 1; }
+  .folder-name { font-weight: 700; }
+
+  .folder-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .folder-editor-row {
+    display: grid;
+    grid-template-columns: 66px 1fr auto;
+    gap: 8px;
+    align-items: center;
+    transition: opacity 0.15s;
+    position: relative;
+  }
+  .folder-editor-row.dragging { opacity: 1; }
+  .folder-editor-row.dragging .small-input,
+  .folder-editor-row.dragging .name-cell { opacity: 0.4; }
+  .folder-editor-row.drop-above::before {
+    content: '';
+    position: absolute;
+    top: -5px;
+    left: 96px;
+    width: calc(100% - 96px - 80px);
+    height: 2px;
+    background: var(--accent);
+    border-radius: 1px;
+  }
+  .folder-editor-row.drop-below::after {
+    content: '';
+    position: absolute;
+    bottom: -5px;
+    left: 96px;
+    width: calc(100% - 96px - 80px);
+    height: 2px;
+    background: var(--accent);
+    border-radius: 1px;
+  }
+  .name-cell {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .name-cell .small-input {
+    width: 100%;
+    padding-right: 32px;
+  }
+  .drag-handle {
+    position: absolute;
+    right: 4px;
+    top: 0;
+    bottom: 0;
+    width: 24px;
+    cursor: grab;
+    color: var(--muted);
+    font-size: 0.8rem;
+    -webkit-user-select: none;
+    user-select: none;
+    line-height: 1;
+    opacity: 0.5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .drag-handle:active { cursor: grabbing; }
+  .folder-editor-row .small-input {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    outline: none;
+    height: 36px;
+    box-sizing: border-box;
+  }
+  .folder-editor-row .small-input:focus { border-color: var(--accent); }
+  .folder-editor-row .small-input[maxlength="1"] {
+    text-align: center;
+  }
+  .tiny-btn {
+    padding: 10px 12px;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* Profile switcher bar */
+  .profile-switcher {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+  }
+  .profile-row-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1 0 100%;
+  }
+  .profile-switcher label {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    white-space: nowrap;
+    min-width: 48px;
+    text-align: right;
+  }
+  .action-key-label {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    white-space: nowrap;
+    min-width: 48px;
+    text-align: right;
+    box-sizing: border-box;
+  }
+  .profile-switcher select {
+    flex: 1;
+    max-width: 220px;
+  }
+  .profile-actions {
+    display: flex;
+    gap: 6px;
+    flex: 1;
+  }
+  .profile-actions .tiny-btn {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    text-align: center;
+    height: 36px;
+    box-sizing: border-box;
+  }
+  .profile-switcher select {
+    height: 36px;
+    box-sizing: border-box;
+  }
+  .profile-switcher .folder-editor-row .small-input {
+    height: 36px;
+    box-sizing: border-box;
+    padding: 8px 12px;
+  }
+  #action-keys-editor {
+    flex: 1 0 100%;
+  }
+  #action-keys-editor .folder-editor-row {
+    gap: 4px;
+  }
+  #action-keys-editor .action-key-input {
+    flex: 1;
+    text-align: center;
+  }
+
+  /* ── SORT SCREEN ── */
+  .sort-layout {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 32px;
+    align-items: start;
+  }
+
+  .image-meta-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 6px;
+  }
+  .img-filename {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    margin-right: 12px;
+  }
+  .img-progress {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+
+  .image-stage {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    min-height: 500px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .image-stage img {
+    max-width: 100%;
+    max-height: 600px;
+    object-fit: contain;
+    display: block;
+    transition: opacity 0.25s;
+  }
+
+  /* ── Image detail below image stage ── */
+  .img-detail {
+    margin-top: 6px;
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    color: var(--muted);
+    line-height: 1.8;
+  }
+  .img-detail-row {
+    display: flex;
+    gap: 16px;
+  }
+  .img-detail-row span {
+    white-space: nowrap;
+  }
+
+  .sort-panel { display: flex; flex-direction: column; gap: 16px; }
+
+  .sort-panel h3 {
+    font-size: 0.65rem;
+    font-family: var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+
+  .folder-btns { display: flex; flex-direction: column; gap: 6px; }
+
+  .folder-btn {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    cursor: pointer;
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 0.85rem;
+    transition: all 0.15s;
+    text-align: left;
+    width: 100%;
+  }
+  .folder-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(232,255,71,0.05); }
+  .folder-btn .kbd {
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    background: var(--border);
+    color: var(--accent);
+    padding: 3px 7px;
+    min-width: 24px;
+    text-align: center;
+  }
+  .root-dir-btn {
+    border-color: rgba(232,255,71,0.35) !important;
+    background: rgba(232,255,71,0.05) !important;
+  }
+  .root-dir-btn:hover {
+    border-color: var(--accent) !important;
+    background: rgba(232,255,71,0.1) !important;
+  }
+
+  .action-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .action-row-wide {
+    width: 100%;
+    display: block;
+  }
+  .action-row-wide .btn { width: 100%; }
+
+  .skip-btn { background: var(--surface); border: 1px solid var(--border); color: var(--muted); }
+  .skip-btn:hover { border-color: var(--text); color: var(--text); }
+
+  .progress-info {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--muted);
+    padding: 12px 0;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+  }
+  .progress-info span { color: var(--accent); }
+
+  /* ── REVIEW SCREEN ── */
+  .review-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 32px;
+  }
+  .review-header h2 { font-size: 2rem; font-weight: 800; }
+  .review-header p { color: var(--muted); font-size: 0.85rem; margin-top: 6px; }
+
+  .review-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 32px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 20px;
+  }
+  .stat-card .num {
+    font-size: 2rem;
+    font-weight: 800;
+    font-family: var(--mono);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .stat-card .lbl {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+  .stat-card.moves .num { color: var(--accent); }
+  .stat-card.deletes .num { color: var(--danger); }
+  .stat-card.skips .num { color: var(--muted); }
+  .stat-card.undecided .num { color: var(--accent2); }
+
+  .changes-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    margin-bottom: 32px;
+  }
+  .changes-table th {
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    padding: 10px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  .changes-table td {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 0.75rem;
+  }
+  .changes-table tr:hover td { background: var(--surface); }
+  .badge {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    padding: 3px 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+  }
+  .badge-move { background: rgba(232,255,71,0.15); color: var(--accent); }
+  .badge-delete { background: rgba(255,59,59,0.15); color: var(--danger); }
+  .badge-skip { background: rgba(102,102,102,0.2); color: var(--muted); }
+
+  .review-actions { display: flex; gap: 12px; justify-content: flex-end; margin-bottom: 24px; }
+
+  /* ── RESULTS SCREEN ── */
+  .results-wrap { text-align: center; max-width: 600px; margin: 80px auto; }
+  .results-wrap .big-check {
+    font-size: 4rem;
+    margin-bottom: 24px;
+    display: block;
+  }
+  .results-wrap h2 {
+    font-size: 2.5rem;
+    font-weight: 800;
+    margin-bottom: 12px;
+  }
+  .results-wrap p { color: var(--muted); font-size: 0.9rem; line-height: 1.7; margin-bottom: 32px; }
+  .result-detail {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 20px 24px;
+    text-align: left;
+    margin-bottom: 24px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    line-height: 2;
+  }
+
+  /* ── ERROR TOAST ── */
+  .toast {
+    position: fixed;
+    bottom: 32px;
+    right: 32px;
+    background: var(--danger);
+    color: #fff;
+    padding: 14px 20px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    max-width: 360px;
+    z-index: 9000;
+    transform: translateY(20px);
+    opacity: 0;
+    transition: all 0.3s;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+
+  /* ── LOADING ── */
+  .spinner {
+    width: 32px; height: 32px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    margin: auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── LOADING OVERLAY (scan / run) ── */
+  .loading-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(13,13,13,0.94);
+    display: none; flex-direction: column;
+    align-items: center; justify-content: center;
+    z-index: 8000;
+  }
+  .loading-overlay.active { display: flex; }
+  .loading-overlay .spinner { width: 48px; height: 48px; margin: 0 0 20px 0; }
+  .loading-overlay .overlay-msg {
+    font-family: var(--mono); color: var(--muted);
+    font-size: 0.85rem; margin-bottom: 6px;
+  }
+  .loading-overlay .overlay-submsg {
+    font-family: var(--mono); color: var(--accent);
+    font-size: 0.75rem; font-weight: 700;
+  }
+
+  /* ── KBD hint (vertical list) ── */
+  .kb-hint {
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+  .kb-hint-list { list-style: none; padding: 0; margin: 0; display: flex; gap: 12px; }
+  .kb-hint-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .kb-hint-item kbd-like {
+    display: inline-block;
+    min-width: 24px;
+    text-align: center;
+    background: var(--border);
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 0.58rem;
+    padding: 2px 7px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 800px) {
+    .setup-wrap { grid-template-columns: 1fr; gap: 32px; }
+    .sort-layout { grid-template-columns: 1fr; }
+    .review-stats { grid-template-columns: 1fr 1fr; }
+    header { padding: 16px 20px; }
+    .screen { padding: 24px 20px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">SORT<span>R</span></div>
+  <div class="header-meta">
+    <button type="button" id="lang-btn" onclick="toggleLang()">中文</button>
+    <div style="color:var(--muted)" data-i18n="app_title">Image Organizer v1.2</div>
+  </div>
+</header>
+
+<div class="progress-bar-outer">
+  <div class="progress-bar-inner" id="progress-bar"></div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SCREEN 1 — SETUP
+════════════════════════════════════════ -->
+<div class="screen active" id="screen-setup">
+  <div class="setup-wrap">
+    <div class="setup-left">
+      <!-- Directory Inputs (shared grid for column alignment) -->
+      <div class="dir-rows">
+        <div class="field-label dir-label" data-i18n="source_dir">SOURCE DIRECTORY</div>
+        <input type="text" id="dir-input" data-i18n-placeholder="dir_ph" placeholder="e.g. C:\Users\You\Downloads or ~/Pictures" />
+        <button type="button" class="btn btn-ghost tiny-btn" onclick="browseDir('source')" data-i18n-title="browse_src" title="Browse source directory"><span data-i18n="browse">📂 Browse</span></button>
+        <button type="button" class="btn btn-ghost tiny-btn" id="scan-mode-btn" onclick="toggleScanMode()" data-i18n-title="toggle_scan" title="Toggle scan mode">Recursive</button>
+
+        <div class="field-label dir-label dir-row-gap" data-i18n="dest_parent">DESTINATION PARENT</div>
+        <input type="text" id="dest-parent-input" data-i18n-placeholder="dest_ph" placeholder="e.g. C:/Users/You/Pictures" value="{{ default_dest_parent }}" />
+        <button type="button" class="btn btn-ghost tiny-btn" onclick="browseDir('dest')" data-i18n-title="browse_dst" title="Browse destination directory"><span data-i18n="browse">📂 Browse</span></button>
+        <button type="button" class="btn btn-ghost tiny-btn" onclick="importSubdirs()" data-i18n-title="import_subdirs" title="Import subdirectories as folder types" data-i18n="import_subdirs">Import Subfolders</button>
+      </div>
+
+      <!-- Start Button -->
+      <div class="start-btn-row">
+        <button type="button" class="btn btn-accent" onclick="scanDirectory()">Start</button>
+      </div>
+
+      <!-- ── Profile switcher ── -->
+      <div class="profile-switcher">
+        <div class="profile-row-top">
+          <label data-i18n="profile_group">Profile</label>
+          <select id="profile-select" onchange="switchProfile(this.value)">
+            <!-- injected by JS -->
+          </select>
+          <div class="profile-actions">
+            <button type="button" class="btn btn-ghost tiny-btn" onclick="createProfile()" data-i18n-title="new_profile_tt" title="New profile" data-i18n="profile_new">+ New</button>
+            <button type="button" class="btn btn-ghost tiny-btn" onclick="deleteProfile()" data-i18n-title="del_profile_tt" title="Delete current profile" style="color:var(--danger)" data-i18n="profile_delete">🗑 Delete</button>
+          </div>
+        </div>
+        <div id="action-keys-editor"></div>
+      </div>
+
+      <!-- Target Sub-folders -->
+      <div class="field-label" style="margin:18px 0 10px" id="folder-section-title">TARGET SUB-FOLDERS</div>
+      <div class="folder-editor" id="folder-editor"></div>
+      <div class="action-row action-row-wide">
+        <!-- + Add Folder -->
+        <button type="button" class="btn btn-ghost" onclick="addFolderRow()" data-i18n="add_folder">+ Add Folder</button>
+      </div>
+    </div>
+
+    <div class="setup-right">
+      <!-- Destination Folders Preview -->
+      <div class="field-label" style="margin-bottom:8px" data-i18n="dest_preview">DESTINATION PREVIEW</div>
+      <div class="folders-grid" id="folders-grid">
+        <!-- injected by JS -->
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SCREEN 2 — SORT
+════════════════════════════════════════ -->
+<div class="screen" id="screen-sort">
+  <div class="sort-layout">
+    <div>
+      <div class="image-meta-row">
+        <span class="img-filename" id="img-filename"></span>
+        <span class="img-progress" id="img-progress"></span>
+      </div>
+      <div class="image-stage" id="image-stage">
+        <div class="spinner" id="img-spinner"></div>
+        <img id="main-image" src="" alt="" style="display:none" onload="onImageLoad()" onerror="onImageError()">
+      </div>
+      <div class="img-detail" id="img-detail">
+        <div class="img-detail-row">
+          <span id="img-detail-size"></span>
+        </div>
+        <div class="img-detail-row">
+          <span id="img-detail-created"></span>
+          <span id="img-detail-modified"></span>
+        </div>
+        <div class="img-detail-row" id="img-detail-path"></div>
+      </div>
+    </div>
+
+    <div class="sort-panel">
+      <div>
+        <!-- Move to → -->
+        <h3 data-i18n="move_to">Move to →</h3>
+        <div class="folder-btns" id="folder-btns">
+          <!-- injected -->
+        </div>
+        <button class="folder-btn root-dir-btn" onclick="decide('move','__root__')">
+          <span class="kbd">␣</span> <span data-i18n="root_dir">Root</span>
+        </button>
+      </div>
+
+      <div>
+        <div class="action-row">
+          <button type="button" class="btn btn-ghost" onclick="undo()" id="btn-undo"><span id="kbd-undo">Z</span> <span data-i18n="undo">Undo</span></button>
+          <button type="button" class="btn btn-danger" onclick="decide('delete')" id="btn-delete"><span class="kbd" id="kbd-delete">D</span> <span data-i18n="delete_btn">Delete</span></button>
+          <button type="button" class="btn skip-btn" onclick="decide('skip')" id="btn-skip"><span class="kbd" id="kbd-skip">S</span> <span data-i18n="skip">Skip</span></button>
+          <button type="button" class="btn btn-ghost" onclick="goReview()" data-i18n="review_go">Review →</button>
+        </div>
+      </div>
+
+      <div class="kb-hint" id="kb-hint-container"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SCREEN 3 — REVIEW
+════════════════════════════════════════ -->
+<div class="screen" id="screen-review">
+  <div class="review-header">
+    <div>
+      <!-- Review Changes -->
+      <h2 data-i18n="review_title">Review Changes</h2>
+      <!-- These changes will be applied... -->
+      <p data-i18n="review_desc">Click "Run" to apply the changes below. No files have been moved yet.</p>
+    </div>
+    <!-- ← BACK -->
+    <button type="button" class="btn btn-ghost" onclick="goSort()" data-i18n="back">← Back</button>
+  </div>
+
+  <div class="review-stats" id="review-stats"></div>
+
+  <table class="changes-table">
+    <thead>
+      <tr>
+        <!-- File / Action / Destination -->
+        <th data-i18n="file">File</th><th data-i18n="action">Action</th><th data-i18n="dest_col">Destination</th>
+      </tr>
+    </thead>
+    <tbody id="review-tbody"></tbody>
+  </table>
+
+  <div class="review-actions">
+    <!-- KEEP SORTING -->
+    <button type="button" class="btn btn-ghost" onclick="goSort()" data-i18n="back">← Back</button>
+    <!-- ▶ RUN — APPLY CHANGES -->
+    <button type="button" class="btn btn-success" id="run-btn" onclick="runChanges()" data-i18n="run_apply">▶ Run — Apply All Changes</button>
+  </div>
+
+  <div id="undecided-block" style="display:none; margin-bottom:24px">
+    <!-- Undecided (will be skipped) -->
+    <div class="field-label" style="margin-bottom:8px; color:var(--accent2)" data-i18n="undecided_label">Unprocessed files (will be skipped)</div>
+    <div id="undecided-list" style="font-family:var(--mono);font-size:0.7rem;color:var(--muted);line-height:2"></div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════
+     SCREEN 4 — RESULTS
+════════════════════════════════════════ -->
+<div class="screen" id="screen-results">
+  <div class="results-wrap">
+    <span class="big-check">✦</span>
+    <!-- Done. -->
+    <h2 data-i18n="done">Done!</h2>
+    <!-- All changes have been applied successfully. -->
+    <p data-i18n="all_applied">All changes have been applied successfully.</p>
+    <div class="result-detail" id="result-detail"></div>
+    <!-- START OVER -->
+    <button type="button" class="btn btn-accent" onclick="reset()" data-i18n="continue_btn">Continue</button>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- Loading overlay for scan/run operations -->
+<div class="loading-overlay" id="loading-overlay">
+  <div class="spinner"></div>
+  <div class="overlay-msg" id="overlay-msg">Processing...</div>
+</div>
+
+<script id="folders-data" type="application/json">{{ folders | tojson }}</script>
+<script id="folder-templates-data" type="application/json">{{ folder_templates | tojson }}</script>
+
+<script>
+// ── i18n ─────────────────────────────────────────────────────────────────────
+const T = {
+  en: {
+    app_title: "Image Organizer v1.2",
+    lang_toggle: "中文",
+    source_dir: "SOURCE DIRECTORY",
+    dest_parent: "DESTINATION PARENT",
+    browse: "📂 Browse",
+    recursive: "Recursive",
+    flat: "Flat",
+    import_subdirs: "Import Subfolders",
+    profile_group: "Profile",
+    profile_new: "+ New",
+    profile_delete: "🗑 Delete",
+    target_subdirs_suffix: " · Target Sub-folders",
+    add_folder: "+ Add Folder",
+    dest_preview: "DESTINATION PREVIEW",
+    dir_ph: "e.g. C:\\Users\\You\\Downloads or ~/Pictures",
+    dest_ph: "e.g. C:/Users/You/Pictures",
+    move_to: "Move to →",
+    root_dir: "Root",
+    undo: "Undo",
+    delete_btn: "Delete",
+    skip: "Skip",
+    review_go: "Review →",
+    preview_na: "  [Preview unavailable]",
+    created: "Created ",
+    modified: "Modified ",
+    review_title: "Review Changes",
+    review_desc: 'Click "Run" to apply the changes below. No files have been moved yet.',
+    back: "← Back",
+    file: "File",
+    action: "Action",
+    dest_col: "Destination",
+    undecided_label: "Unprocessed files (will be skipped)",
+    continue_sort: "← Continue Sorting",
+    run_apply: "▶ Run — Apply All Changes",
+    moved: "Moved", deleted: "Deleted", skipped: "Skipped", unprocessed: "Unprocessed",
+    done: "Done!",
+    all_applied: "All changes have been applied successfully.",
+    continue_btn: "Continue",
+    moved_label: "Moved", deleted_label: "Deleted", skipped_label: "Skipped", errors_label: "Errors",
+    files_unit: " files",
+    processing: "Processing...",
+    scanning: "Scanning directory...",
+    applying: "Applying changes...",
+    processing_of: "Processing: ",
+    switch_failed: "Switch failed",
+    switch_profile_failed: "Failed to switch profile",
+    enter_profile_name: "Enter a name for the new profile:",
+    profile_exists: 'Profile "{0}" already exists',
+    profile_created: 'Profile "{0}" created',
+    create_failed: "Create failed",
+    create_profile_failed: "Failed to create profile",
+    keep_one_profile: "At least one profile is required",
+    confirm_delete: 'Delete profile "{0}"? This cannot be undone.',
+    delete_failed: "Delete failed",
+    profile_deleted: "Profile deleted",
+    delete_profile_failed: "Failed to delete profile",
+    cannot_open_picker: "Cannot open directory picker",
+    enter_dest_parent: "Please enter destination parent path",
+    scan_subdirs_failed: "Failed to scan subdirectories",
+    no_subdirs: "No subfolders found",
+    no_new_subdirs: "No new subfolders to import",
+    imported_count: "Imported {0} subfolders",
+    import_failed: "Failed to import subfolders",
+    default_label: "General",
+    remove: "Remove",
+    undo_label: "Undo", delete_label: "Delete", skip_label: "Skip",
+    key_bound: '"{0}" is bound to "{1}", use another key',
+    key_used_folder: '"{0}" is used by folder "{1}"',
+    key_reserved: '"{0}" is reserved, cannot use',
+    key_used_folder2: '"{0}" is already used by folder "{1}"',
+    space: "Space",
+    row_key_len: "Row {0}: shortcut must be 1 character",
+    row_dup: 'Row {0}: duplicate shortcut "{1}"',
+    row_empty: "Row {0}: name cannot be empty",
+    need_folder: "At least one folder type is required",
+    save_failed: "Save failed",
+    config_saved: "Configuration saved",
+    enter_source: "Please enter source directory",
+    enter_dest: "Please enter destination parent",
+    conn_error: "Connection error",
+    nothing_undo: "Nothing to undo",
+    action_error: "Action error",
+    req_failed: "Request failed ({0})",
+    conn_interrupt: "Connection interrupted",
+    exec_failed: "Execution failed",
+    category: "Category {0}",
+    browse_src: "Browse source directory",
+    browse_dst: "Browse destination directory",
+    toggle_scan: "Toggle scan mode",
+    new_profile_tt: "New profile",
+    del_profile_tt: "Delete current profile",
+    hotkey: "Hotkey",
+    folder_name: "Folder name",
+    undo_key: "Undo key", delete_key: "Delete key", skip_key: "Skip key",
+  },
+  zh: {
+    app_title: "图片整理工具 v1.2",
+    lang_toggle: "EN",
+    source_dir: "源目录",
+    dest_parent: "目标父目录",
+    browse: "📂 浏览",
+    recursive: "递归",
+    flat: "同层级",
+    import_subdirs: "导入子文件夹",
+    profile_group: "配置组",
+    profile_new: "+ 新建",
+    profile_delete: "🗑 删除",
+    target_subdirs_suffix: " · 目标子目录",
+    add_folder: "+ 新增文件夹",
+    dest_preview: "目标文件夹预览",
+    dir_ph: "如 C:\\Users\\你\\Downloads 或 ~/Pictures",
+    dest_ph: "如 C:/Users/你/Pictures",
+    move_to: "移动到 →",
+    root_dir: "根目录",
+    undo: "撤销",
+    delete_btn: "删除",
+    skip: "跳过",
+    review_go: "审核 →",
+    preview_na: "  [预览不可用]",
+    created: "创建 ",
+    modified: "修改 ",
+    review_title: "审核变更",
+    review_desc: "点击「执行」后以下变更将被应用。目前尚未移动任何文件。",
+    back: "← 返回",
+    file: "文件",
+    action: "操作",
+    dest_col: "目标位置",
+    undecided_label: "未处理的文件（将被跳过）",
+    continue_sort: "← 继续分类",
+    run_apply: "▶ 执行 —— 应用所有变更",
+    moved: "移动", deleted: "删除", skipped: "跳过", unprocessed: "未处理",
+    done: "完成！",
+    all_applied: "所有变更已成功应用。",
+    continue_btn: "继续",
+    moved_label: "已移动", deleted_label: "已删除", skipped_label: "已跳过", errors_label: "错误",
+    files_unit: " 个文件",
+    processing: "正在处理…",
+    scanning: "正在扫描目录…",
+    applying: "正在应用变更…",
+    processing_of: "正在处理: ",
+    switch_failed: "切换失败",
+    switch_profile_failed: "切换配置组失败",
+    enter_profile_name: "请输入新配置组的名称（请使用中文或英文）：",
+    profile_exists: "配置组「{0}」已存在，请使用其他名称",
+    profile_created: "配置组「{0}」已创建",
+    create_failed: "创建失败",
+    create_profile_failed: "创建配置组失败",
+    keep_one_profile: "至少需要保留一个配置组",
+    confirm_delete: "确定要删除当前配置组「{0}」吗？此操作不可撤销。",
+    delete_failed: "删除失败",
+    profile_deleted: "配置组已删除",
+    delete_profile_failed: "删除配置组失败",
+    cannot_open_picker: "无法打开目录选择器",
+    enter_dest_parent: "请先填写目标父目录路径",
+    scan_subdirs_failed: "扫描子目录失败",
+    no_subdirs: "该目录下没有子文件夹",
+    no_new_subdirs: "没有新的子文件夹可导入（可能都已存在）",
+    imported_count: "已导入 {0} 个子文件夹",
+    import_failed: "导入子文件夹失败",
+    default_label: "通用",
+    remove: "移除",
+    undo_label: "撤销", delete_label: "删除", skip_label: "跳过",
+    key_bound: "「{0}」已绑定给功能「{1}」，请使用其他键",
+    key_used_folder: "「{0}」已被文件夹「{1}」使用，请使用其他键",
+    key_reserved: "「{0}」已被功能键占用，不可使用",
+    key_used_folder2: "「{0}」已被文件夹「{1}」使用",
+    space: "空格",
+    row_key_len: "第 {0} 行：每个快捷键必须恰好 1 个字符",
+    row_dup: "第 {0} 行：重复的快捷键「{1}」，已在上方使用",
+    row_empty: "第 {0} 行：文件夹名称不能为空",
+    need_folder: "至少需要一个文件夹类型",
+    save_failed: "保存失败",
+    config_saved: "配置已保存",
+    enter_source: "请输入源目录路径",
+    enter_dest: "请输入目标父目录路径",
+    conn_error: "连接错误",
+    nothing_undo: "无可撤销的操作",
+    action_error: "操作出错",
+    req_failed: "请求失败 ({0})",
+    conn_interrupt: "执行过程中连接中断",
+    exec_failed: "执行失败",
+    category: "类别 {0}",
+    browse_src: "浏览选择目录",
+    browse_dst: "浏览选择目标父目录",
+    toggle_scan: "切换扫描方式",
+    new_profile_tt: "新建配置组",
+    del_profile_tt: "删除当前配置组",
+    hotkey: "快捷键",
+    folder_name: "文件夹名称",
+    undo_key: "撤销键", delete_key: "删除键", skip_key: "跳过键",
+  }
+};
+
+let currentLang = "{{ default_lang }}";  // 从后端注入，默认 "en"
+
+/** 翻译，支持 {0} {1} 占位符 */
+function t(key, ...args) {
+  let s = (T[currentLang] && T[currentLang][key]) || (T.en[key]) || key;
+  args.forEach((a, i) => { s = s.replace(`{${i}}`, a); });
+  return s;
+}
+
+/** 应用语言到所有带 data-i18n 的元素 */
+function applyLang() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    el.placeholder = t(el.dataset.i18nPlaceholder);
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    el.title = t(el.dataset.i18nTitle);
+  });
+  // 更新扫描模式按钮
+  document.getElementById('scan-mode-btn').textContent = scanMode === 'recursive' ? t('recursive') : t('flat');
+  // 更新标题栏
+  document.title = "SORTR" + (currentLang === 'zh' ? " — 图片整理工具" : " — Image Organizer");
+  // 语言按钮文字
+  document.getElementById('lang-btn').textContent = t('lang_toggle');
+  // 文件夹标题
+  updateFolderSectionTitle();
+  // 重新渲染动态生成的 UI（确保热切换）
+  renderActionKeysEditor();
+  renderFolderEditor();
+  renderFoldersGrid();
+  renderFolderButtons();
+  renderKbHint();
+}
+
+async function toggleLang() {
+  currentLang = currentLang === 'en' ? 'zh' : 'en';
+  applyLang();
+  // 持久化
+  try { await fetch('/api/lang', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({lang: currentLang}) }); } catch(e) {}
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let folders = JSON.parse(document.getElementById('folders-data').textContent);
+let folderTemplates = JSON.parse(document.getElementById('folder-templates-data').textContent);
+let images = [];          // relative paths returned by /api/scan
+let currentIndex = 0;     // index of the image currently on screen
+let totalImages = 0;      // total images in the current scan
+let decidedCount = 0;     // running count for the "N decided" display
+
+// Multi-profile state
+let profileNames = [];       // array of profile name strings
+let activeProfileName = 'Default';
+
+// 功能键绑定（可自定义）
+let actionKeys = { undo: 'Z', delete: 'X', skip: 'C' };
+
+// 扫描模式：'recursive' 递归 | 'flat' 同层级
+let scanMode = 'recursive';
+
+// ★ 默认键位分配顺序
+const KEY_ORDER = 'ASDFQWER1234';
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function init() {
+  try {
+    recomputeFoldersFromTemplates();
+    renderActionKeysEditor();
+    renderFolderEditor();
+    renderFoldersGrid();
+    renderFolderButtons();
+    renderKbHint();
+
+    const destInput = document.getElementById('dest-parent-input');
+    if (destInput) {
+      destInput.addEventListener('input', () => {
+        recomputeFoldersFromTemplates();
+        renderFoldersGrid();
+        renderFolderButtons();
+        renderKbHint();
+      });
+    }
+
+    // Load profiles from server (non-fatal on error)
+    await loadProfiles();
+  } catch(e) {
+    console.error('init error:', e);
+  }
+
+  // Always bind keyboard handler, even if init had partial failures
+  document.addEventListener('keydown', handleKey);
+}
+
+// ── Profiles (multi-group config) ────────────────────────────────────────────
+async function loadProfiles() {
+  try {
+    const res = await fetch('/api/profiles');
+    const data = await res.json();
+    if (!res.ok) return;
+
+    profileNames = data.profiles || [];
+    activeProfileName = data.active_profile || 'Default';
+    folderTemplates = data.templates || [];
+    folders = data.folders || [];
+    if (data.action_keys) actionKeys = data.action_keys;
+
+    renderProfileSelect();
+    renderActionKeysEditor();
+    renderFolderEditor();
+    renderFoldersGrid();
+    renderFolderButtons();
+    renderKbHint();
+
+    // ★ 恢复上次使用的源目录和目标父目录
+    if (data.last_dirs) {
+      const srcInput = document.getElementById('dir-input');
+      const dstInput = document.getElementById('dest-parent-input');
+      if (data.last_dirs.source_dir && srcInput && !srcInput.value) {
+        srcInput.value = data.last_dirs.source_dir;
+      }
+      if (data.last_dirs.dest_parent && dstInput && !dstInput.value) {
+        dstInput.value = data.last_dirs.dest_parent;
+        // 触发路径重算
+        recomputeFoldersFromTemplates();
+        renderFoldersGrid();
+        renderFolderButtons();
+      }
+    }
+  } catch(e) {}
+}
+
+function renderProfileSelect() {
+  const sel = document.getElementById('profile-select');
+  sel.innerHTML = '';
+  profileNames.forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    if (name === activeProfileName) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  updateFolderSectionTitle();
+}
+
+function updateFolderSectionTitle() {
+  const el = document.getElementById('folder-section-title');
+  if (el) el.textContent = activeProfileName + t('target_subdirs_suffix');
+}
+
+async function switchProfile(name) {
+  try {
+    const res = await fetch('/api/profiles', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ action: 'switch', name })
+    });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || t('switch_failed')); return; }
+
+    activeProfileName = data.active_profile || name;
+    folderTemplates = data.templates || [];
+    if (data.action_keys) actionKeys = data.action_keys;
+    // ★ 用当前输入框的目标父目录重新计算路径（修复：切换配置组时路径不更新的问题）
+    folders = data.folders || [];
+    recomputeFoldersFromTemplates();
+    renderProfileSelect();
+    renderActionKeysEditor();
+    renderFolderEditor();
+    renderFoldersGrid();
+    renderFolderButtons();
+    renderKbHint();
+  } catch(e) { showToast(t('switch_profile_failed')); }
+}
+
+async function createProfile() {
+  const name = prompt(t('enter_profile_name'));
+  if (!name || !name.trim()) return;
+  const trimmed = name.trim();
+
+  // ★ 前端防重名检查：在发送请求前就拦截
+  if (profileNames.includes(trimmed)) {
+    showToast(t('profile_exists', trimmed));
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/profiles', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ action: 'create', name: trimmed })
+    });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || t('create_failed')); return; }
+
+    profileNames = data.profiles || [];
+    activeProfileName = data.active_profile || trimmed;
+    folderTemplates = data.templates || [];
+    if (data.action_keys) actionKeys = data.action_keys;
+    folders = data.folders || [];
+    renderProfileSelect();
+    renderActionKeysEditor();
+    renderFolderEditor();
+    renderFoldersGrid();
+    renderFolderButtons();
+    renderKbHint();
+    showToast(t('profile_created', trimmed));
+  } catch(e) { showToast(t('create_profile_failed')); }
+}
+
+async function deleteProfile() {
+  if (profileNames.length <= 1) {
+    showToast(t('keep_one_profile'));
+    return;
+  }
+  if (!confirm(t('confirm_delete', activeProfileName))) return;
+
+  try {
+    const res = await fetch('/api/profiles', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ action: 'delete', name: activeProfileName })
+    });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || t('delete_failed')); return; }
+
+    profileNames = data.profiles || [];
+    activeProfileName = data.active_profile || '';
+    folderTemplates = data.templates || [];
+    if (data.action_keys) actionKeys = data.action_keys;
+    folders = data.folders || [];
+    renderProfileSelect();
+    renderActionKeysEditor();
+    renderFolderEditor();
+    renderFoldersGrid();
+    renderFolderButtons();
+    renderKbHint();
+    showToast(t('profile_deleted'));
+  } catch(e) { showToast(t('delete_profile_failed')); }
+}
+
+// ── 扫描模式切换 ──────────────────────────────────────────────────────────────
+function toggleScanMode() {
+  scanMode = scanMode === 'recursive' ? 'flat' : 'recursive';
+  document.getElementById('scan-mode-btn').textContent = scanMode === 'recursive' ? t('recursive') : t('flat');
+}
+
+// ── Browse directory (native picker) ───────────────────────────────────────────
+async function browseDir(type) {
+  try {
+    const res = await fetch('/api/browse');
+    const data = await res.json();
+    if (!data.path) return; // user cancelled
+
+    if (type === 'source') {
+      document.getElementById('dir-input').value = data.path;
+    } else if (type === 'dest') {
+      document.getElementById('dest-parent-input').value = data.path;
+      recomputeFoldersFromTemplates();
+      renderFoldersGrid();
+      renderFolderButtons();
+    }
+  } catch(e) { showToast(t('cannot_open_picker')); }
+}
+
+// ── Import subdirectories as folder types ────────────────────────────────────
+async function importSubdirs() {
+  const parent = document.getElementById('dest-parent-input').value.trim();
+  if (!parent) { showToast(t('enter_dest_parent')); return; }
+
+  try {
+    const res = await fetch('/api/scan-subdirs', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ parent })
+    });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || t('scan_subdirs_failed')); return; }
+
+    if (!data.subdirs || data.subdirs.length === 0) {
+      showToast(t('no_subdirs'));
+      return;
+    }
+
+    // ★ 如果当前只有一条默认"通用"，则替换为子文件夹列表
+    const isOnlyDefault = folderTemplates.length === 1 && (folderTemplates[0].label === t('default_label') || folderTemplates[0].label === 'General' || folderTemplates[0].label === '通用');
+    if (isOnlyDefault) {
+      folderTemplates = [];
+    }
+
+    // Merge subdirs into current templates, assigning unused keys
+    const usedKeys = new Set([
+      ...folderTemplates.map(t => t.key.toLowerCase()),
+      ...getReservedKeys()
+    ]);
+    const priority = KEY_ORDER.split('');
+    const fallback = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').filter(c => !priority.includes(c));
+    const candidates = [...priority, ...fallback];
+    let addedCount = 0;
+
+    data.subdirs.forEach(name => {
+      // Check if a template with this label already exists
+      if (folderTemplates.some(t => t.label === name)) return;
+
+      const key = candidates.find(c => !usedKeys.has(c.toLowerCase())) || 'X';
+      usedKeys.add(key.toLowerCase());
+      folderTemplates.push({ key, label: name });
+      addedCount++;
+    });
+
+    if (addedCount === 0) {
+      showToast(t('no_new_subdirs'));
+      return;
+    }
+
+    recomputeFoldersFromTemplates();
+    renderFolderEditor();
+    renderFoldersGrid();
+    renderFolderButtons();
+    renderKbHint();
+    autoSaveFolderTemplates();
+    showToast(t('imported_count', addedCount));
+  } catch(e) { showToast(t('import_failed')); }
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function recomputeFoldersFromTemplates() {
+  const destinationParent = document.getElementById('dest-parent-input').value.trim();
+  const root = destinationParent || '{{ default_dest_parent }}';
+  const normalizedRoot = root.replace(/[\\/]+$/, '');
+  const separator = normalizedRoot.includes('\\') ? '\\' : '/';
+  folders = folderTemplates.map(t => ({
+    key: t.key,
+    label: t.label,
+    path: normalizedRoot + separator + t.label
+  }));
+}
+
+function renderFoldersGrid() {
+  const grid = document.getElementById('folders-grid');
+  grid.innerHTML = '';
+  folders.forEach(f => {
+    grid.innerHTML += `
+      <div class="folder-chip">
+        <span class="fkey">${f.key}</span>
+        <div class="folder-info">
+          <div class="folder-name">${f.label}</div>
+          <div class="fpath">${f.path}</div>
+        </div>
+      </div>`;
+  });
+}
+
+function renderFolderButtons() {
+  const btnContainer = document.getElementById('folder-btns');
+  btnContainer.innerHTML = '';
+  folders.forEach(f => {
+    btnContainer.innerHTML += `
+      <button class="folder-btn" onclick="decide('move','${f.key}')">
+        <span class="kbd">${f.key}</span> ${f.label}
+      </button>`;
+  });
+}
+
+function renderKbHint() {
+  const container = document.getElementById('kb-hint-container');
+  let html = '<ul class="kb-hint-list">';
+  html += `<li class="kb-hint-item"><kbd-like>${actionKeys.undo}</kbd-like> ${t('undo_label')}</li>`;
+  html += `<li class="kb-hint-item"><kbd-like>${actionKeys.delete}</kbd-like> ${t('delete_label')}</li>`;
+  html += `<li class="kb-hint-item"><kbd-like>${actionKeys.skip}</kbd-like> ${t('skip_label')}</li>`;
+  html += '</ul>';
+  container.innerHTML = html;
+
+  // 同步更新排序界面的按钮快捷键文字
+  const kbdDel = document.getElementById('kbd-delete');
+  const kbdSkip = document.getElementById('kbd-skip');
+  const kbdUndo = document.getElementById('kbd-undo');
+  if (kbdDel) kbdDel.textContent = actionKeys.delete;
+  if (kbdSkip) kbdSkip.textContent = actionKeys.skip;
+  if (kbdUndo) kbdUndo.textContent = actionKeys.undo;
+}
+
+// ── Action Keys Editor ────────────────────────────────────────────────────────
+function renderActionKeysEditor() {
+  const container = document.getElementById('action-keys-editor');
+  if (!container) return;
+  container.innerHTML = `
+    <div class="folder-editor-row" style="grid-template-columns: 1fr 1fr 1fr;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span class="action-key-label">${t("undo_label")}</span>
+        <input class="small-input action-key-input" value="${escapeHtml(actionKeys.undo)}" maxlength="1"
+          data-action="undo" aria-label="${t("undo_key")}" />
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span class="action-key-label">${t("delete_label")}</span>
+        <input class="small-input action-key-input" value="${escapeHtml(actionKeys.delete)}" maxlength="1"
+          data-action="delete" aria-label="${t("delete_key")}" />
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span class="action-key-label">${t("skip_label")}</span>
+        <input class="small-input action-key-input" value="${escapeHtml(actionKeys.skip)}" maxlength="1"
+          data-action="skip" aria-label="${t("skip_key")}" />
+      </div>
+    </div>`;
+
+  // 绑定事件
+  container.querySelectorAll('.action-key-input').forEach(input => {
+    input.addEventListener('change', function() {
+      updateActionKey(this.dataset.action, this.value);
+    });
+  });
+}
+
+function updateActionKey(action, value) {
+  const rawKey = (value || '').trim().slice(0, 1);
+  if (!rawKey) {
+    renderActionKeysEditor();
+    return;
+  }
+  const newKey = rawKey.toLowerCase();
+
+  // 检查功能键之间的互斥
+  const otherActions = Object.entries(actionKeys).filter(([k]) => k !== action);
+  for (const [act, key] of otherActions) {
+    if (key.toLowerCase() === newKey) {
+      const actionLabel = { undo: t('undo_label'), delete: t('delete_label'), skip: t('skip_label') };
+      showToast(t("key_bound", rawKey.toUpperCase(), actionLabel[act]));
+      renderActionKeysEditor(); // 回退
+      return;
+    }
+  }
+
+  // 检查是否与文件夹快捷键冲突
+  if (folderTemplates.some(t => t.key.toLowerCase() === newKey)) {
+    const conflict = folderTemplates.find(t => t.key.toLowerCase() === newKey);
+    showToast(t("key_used_folder", rawKey.toUpperCase(), conflict.label));
+    renderActionKeysEditor(); // 回退
+    return;
+  }
+
+  actionKeys[action] = rawKey.toUpperCase();
+  renderActionKeysEditor();
+  renderKbHint();
+  autoSaveFolderTemplates();
+}
+
+let _dragIdx = null;
+
+function renderFolderEditor() {
+  const editor = document.getElementById('folder-editor');
+  editor.innerHTML = '';
+  folderTemplates.forEach((template, idx) => {
+    editor.innerHTML += `
+      <div class="folder-editor-row" data-idx="${idx}"
+        ondragover="onRowDragOver(event)" ondragleave="onRowDragLeave(event)"
+        ondrop="onRowDrop(event, ${idx})" ondragend="onRowDragEnd()">
+        <input
+          class="small-input"
+          value="${escapeHtml(template.key)}"
+          maxlength="1"
+          aria-label="${t("hotkey")}"
+          onchange="updateTemplateField(${idx}, 'key', this.value)"
+        />
+        <div class="name-cell">
+          <input
+            class="small-input"
+            value="${escapeHtml(template.label)}"
+            aria-label="${t("folder_name")}"
+            onchange="updateTemplateField(${idx}, 'label', this.value)"
+          />
+          <span class="drag-handle" draggable="true"
+            ondragstart="onRowDragStart(event, ${idx})">⠿</span>
+        </div>
+        <!-- Remove -->
+        <button class="btn btn-ghost tiny-btn" onclick="removeFolderRow(${idx})">${t("remove")}</button>
+      </div>`;
+  });
+}
+
+function onRowDragStart(e, idx) {
+  _dragIdx = idx;
+  e.dataTransfer.effectAllowed = 'move';
+  e.target.closest('.folder-editor-row').classList.add('dragging');
+}
+function onRowDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const row = e.target.closest('.folder-editor-row');
+  if (!row) return;
+  const targetIdx = parseInt(row.dataset.idx);
+  if (targetIdx === _dragIdx) return;
+  // 向下拖显示下方线，向上拖显示上方线
+  row.classList.remove('drop-above', 'drop-below');
+  row.classList.add(targetIdx > _dragIdx ? 'drop-below' : 'drop-above');
+}
+function onRowDragLeave(e) {
+  const row = e.target.closest('.folder-editor-row');
+  if (row) row.classList.remove('drop-above', 'drop-below');
+}
+function onRowDrop(e, targetIdx) {
+  e.preventDefault();
+  if (_dragIdx === null || _dragIdx === targetIdx) return;
+  // 向下拖：插入到目标行之后；向上拖：插入到目标行之前
+  const insertIdx = targetIdx > _dragIdx ? targetIdx : targetIdx;
+  if (_dragIdx === insertIdx) return;
+  const label = folderTemplates[_dragIdx].label;
+  if (_dragIdx < insertIdx) {
+    for (let i = _dragIdx; i < insertIdx; i++) {
+      folderTemplates[i].label = folderTemplates[i + 1].label;
+    }
+  } else {
+    for (let i = _dragIdx; i > insertIdx; i--) {
+      folderTemplates[i].label = folderTemplates[i - 1].label;
+    }
+  }
+  folderTemplates[insertIdx].label = label;
+  _dragIdx = null;
+  recomputeFoldersFromTemplates();
+  renderFolderEditor();
+  renderFoldersGrid();
+  renderFolderButtons();
+  renderKbHint();
+  autoSaveFolderTemplates();
+}
+function onRowDragEnd() {
+  _dragIdx = null;
+  document.querySelectorAll('.folder-editor-row').forEach(r => {
+    r.classList.remove('dragging', 'drop-above', 'drop-below');
+  });
+}
+
+function updateTemplateField(index, field, value) {
+  if (!folderTemplates[index]) return;
+
+  if (field === 'key') {
+    const rawKey = (value || '').trim().slice(0, 1);
+    if (!rawKey) { renderFolderEditor(); return; }
+    const newKey = rawKey.toLowerCase();
+
+    // ★ 冲突检测：是否与功能键冲突
+    if (getReservedKeys().includes(newKey)) {
+      const displayKey = newKey === ' ' ? t('space') : rawKey.toUpperCase();
+      showToast(t("key_reserved", displayKey));
+      renderFolderEditor(); // 回退到旧值
+      return;
+    }
+
+    // ★ 冲突检测：是否与其他文件夹行冲突
+    const conflictIdx = folderTemplates.findIndex((t, i) => i !== index && t.key.toLowerCase() === newKey);
+    if (conflictIdx >= 0) {
+      showToast(t("key_used_folder2", rawKey.toUpperCase(), folderTemplates[conflictIdx].label));
+      renderFolderEditor(); // 回退
+      return;
+    }
+
+    folderTemplates[index].key = rawKey.toUpperCase();
+  } else if (field === 'label') {
+    folderTemplates[index].label = (value || '').trim();
+  }
+  recomputeFoldersFromTemplates();
+  renderFoldersGrid();
+  renderFolderButtons();
+  renderKbHint();
+  renderFolderEditor();
+  // ★ 实时自动保存到后端
+  autoSaveFolderTemplates();
+}
+
+function removeFolderRow(index) {
+  folderTemplates.splice(index, 1);
+  if (folderTemplates.length === 0) {
+    folderTemplates.push({ key: 'A', label: t('default_label') });
+  }
+  recomputeFoldersFromTemplates();
+  renderFoldersGrid();
+  renderFolderButtons();
+  renderKbHint();
+  renderFolderEditor();
+  // ★ 实时自动保存
+  autoSaveFolderTemplates();
+}
+
+function addFolderRow() {
+  const used = new Set([
+    ...folderTemplates.map(t => (t.key || '').toLowerCase()),
+    ...getReservedKeys()
+  ]);
+  // ★ 优先使用 KEY_ORDER 中的键，再用剩余字母数字
+  const priority = KEY_ORDER.split('');
+  const fallback = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').filter(c => !priority.includes(c));
+  const candidates = [...priority, ...fallback];
+  const key = candidates.find(c => !used.has(c.toLowerCase())) || 'X';
+  folderTemplates.push({ key, label: t('category', folderTemplates.length + 1) });
+  recomputeFoldersFromTemplates();
+  renderFoldersGrid();
+  renderFolderButtons();
+  renderKbHint();
+  renderFolderEditor();
+  // ★ 实时自动保存
+  autoSaveFolderTemplates();
+}
+
+/**
+ * ★ 静默自动保存文件夹模板（实时持久化，不弹 toast）
+ * 每次编辑/增删模板后自动调用，让切换配置组也能记住之前的修改。
+ */
+async function autoSaveFolderTemplates() {
+  const validationError = validateFolderTemplates();
+  if (validationError) return; // 不合法时不保存
+
+  try {
+    const res = await fetch('/api/folders', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ folders: folderTemplates, action_keys: actionKeys })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      folderTemplates = data.templates;
+      if (data.action_keys) actionKeys = data.action_keys;
+      // ★ 基于当前输入框路径重新计算，避免覆盖为后端默认C盘路径
+      recomputeFoldersFromTemplates();
+    }
+    // 静默失败不提示用户（避免编辑时频繁打扰）
+  } catch(e) {}
+}
+
+// ★ 获取当前所有保留键（功能键 + 空格）
+function getReservedKeys() {
+  return [actionKeys.undo.toLowerCase(), actionKeys.delete.toLowerCase(), actionKeys.skip.toLowerCase(), ' '];
+}
+
+function validateFolderTemplates() {
+  if (!Array.isArray(folderTemplates) || folderTemplates.length === 0) {
+    return t('need_folder');
+  }
+  // ★ 动态获取系统保留快捷键
+  const RESERVED_KEYS = getReservedKeys();
+  const seen = new Set();
+  for (let i = 0; i < folderTemplates.length; i++) {
+    const template = folderTemplates[i];
+    const key = (template.key || '').trim();
+    const label = (template.label || '').trim();
+    if (key.length !== 1) return t('row_key_len', i+1);
+    const low = key.toLowerCase();
+
+    // ★ 检查是否使用了功能键
+    if (RESERVED_KEYS.includes(low)) {
+      const displayKey = low === ' ' ? t('space') : key.toUpperCase();
+      return t('key_reserved', displayKey);
+    }
+
+    // ★ 检查是否与已有行重复
+    if (seen.has(low)) return t('row_dup', i+1, key);
+    seen.add(low);
+
+    if (!label) return t('row_empty', i+1);
+  }
+  return null;
+}
+
+async function saveFolderTemplates() {
+  const validationError = validateFolderTemplates();
+  if (validationError) { showToast(validationError); return; }
+
+  try {
+    const res = await fetch('/api/folders', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ folders: folderTemplates })
+    });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || t('save_failed')); return; }
+
+    folderTemplates = data.templates;
+    // ★ 基于当前输入框的目标父目录重新计算路径，避免后端返回默认C盘路径
+    recomputeFoldersFromTemplates();
+    renderFolderEditor();
+    renderFoldersGrid();
+    renderFolderButtons();
+    renderKbHint();
+    showToast(t('config_saved'));
+  } catch(e) {
+    showToast(t('save_failed'));
+  }
+}
+
+// ── Screen switching ──────────────────────────────────────────────────────────
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById('screen-' + id).classList.add('active');
+}
+
+// ── Loading overlay ──────────────────────────────────────────────────────────
+function showLoadingOverlay(msg) {
+  const overlay = document.getElementById('loading-overlay');
+  const msgEl = document.getElementById('overlay-msg');
+  msgEl.textContent = msg || t('processing');
+  overlay.classList.add('active');
+}
+
+function hideLoadingOverlay() {
+  const overlay = document.getElementById('loading-overlay');
+  overlay.classList.remove('active');
+  if (window._scanMsgInterval) {
+    clearInterval(window._scanMsgInterval);
+    window._scanMsgInterval = null;
+  }
+}
+
+// ── Scan ─────────────────────────────────────────────────────────────────────
+async function scanDirectory() {
+  const dir = document.getElementById('dir-input').value.trim();
+  const destinationParent = document.getElementById('dest-parent-input').value.trim();
+  if (!dir) { showToast(t('enter_source')); return; }
+  if (!destinationParent) { showToast(t('enter_dest')); return; }
+
+  const validationError = validateFolderTemplates();
+  if (validationError) { showToast(validationError); return; }
+
+  // Show loading overlay
+  showLoadingOverlay(t('scanning'));
+
+  try {
+    const res = await fetch('/api/scan', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        directory: dir,
+        destination_parent: destinationParent,
+        folder_templates: folderTemplates,
+        recursive: scanMode === 'recursive',
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) { hideLoadingOverlay(); showToast(data.error); return; }
+
+    hideLoadingOverlay();
+
+    folderTemplates = data.templates;
+    folders = data.folders;
+    renderFolderEditor();
+    renderFoldersGrid();
+    renderFolderButtons();
+    renderKbHint();
+    images = data.images;
+    totalImages = data.count;
+    _preloadImg = null;
+    _preloadIdx = -1;
+    currentIndex = 0;
+    decidedCount = 0;
+
+    showScreen('sort');
+    loadImage(0);
+  } catch(e) { hideLoadingOverlay(); showToast(t('conn_error')); } // Connection error
+}
+
+// ── Image loading ─────────────────────────────────────────────────────────────
+let _preloadImg = null;   // 隐藏的预加载 Image 对象
+let _preloadIdx = -1;     // 已预加载的图片索引
+
+function preloadNextImage(idx) {
+  // 预加载 idx+1 张图片到隐藏 Image 对象
+  const nextIdx = idx + 1;
+  if (nextIdx >= totalImages || _preloadIdx === nextIdx) return;
+  _preloadIdx = nextIdx;
+  _preloadImg = new Image();
+  _preloadImg.src = `/api/image/${nextIdx}?t=${Date.now()}`;
+}
+
+function loadImage(idx) {
+  if (idx >= totalImages) { goReview(); return; }
+
+  const img = document.getElementById('main-image');
+  const spinner = document.getElementById('img-spinner');
+
+  // 更新图片名称和进度
+  document.getElementById('img-filename').textContent = images[idx].split(/[\\/]/).pop();
+  document.getElementById('img-progress').textContent = `${idx+1} / ${totalImages}`;
+
+  // 如果预加载已完成且尺寸一致，直接复用
+  if (_preloadIdx === idx && _preloadImg && _preloadImg.complete && _preloadImg.naturalWidth > 0) {
+    img.src = _preloadImg.src;
+    img.style.display = 'block';
+    spinner.style.display = 'none';
+    _preloadImg = null;
+    _preloadIdx = -1;
+    preloadNextImage(idx);
+  } else {
+    img.style.display = 'none';
+    spinner.style.display = 'block';
+    img.src = `/api/image/${idx}?t=${Date.now()}`;
+  }
+
+  // 加载图片元数据
+  loadImageMeta(idx);
+  updateSortProgress();
+  updateProgressBar();
+}
+
+function onImageLoad() {
+  document.getElementById('img-spinner').style.display = 'none';
+  document.getElementById('main-image').style.display = 'block';
+  // 当前图加载完成，预加载下一张
+  preloadNextImage(currentIndex);
+}
+function onImageError() {
+  document.getElementById('img-spinner').style.display = 'none';
+  document.getElementById('img-filename').textContent += t('preview_na');
+  document.getElementById('main-image').style.display = 'none';
+}
+
+// ── Image Meta ────────────────────────────────────────────────────────────────
+async function loadImageMeta(idx) {
+  const detail = document.getElementById('img-detail');
+  try {
+    const res = await fetch(`/api/image/${idx}/meta?t=${Date.now()}`);
+    if (!res.ok) { detail.style.display = 'none'; return; }
+    const m = await res.json();
+    document.getElementById('img-detail-path').textContent = m.path;
+    document.getElementById('img-detail-size').textContent = m.size;
+    document.getElementById('img-detail-created').textContent = t('created') + m.created;
+    document.getElementById('img-detail-modified').textContent = t('modified') + m.modified;
+    detail.style.display = 'block';
+  } catch(e) {
+    detail.style.display = 'none';
+  }
+}
+
+// ── Decide ────────────────────────────────────────────────────────────────────
+async function decide(action, destKey) {
+  const body = { index: currentIndex, action };
+  if (destKey) body.dest = destKey;
+
+  try {
+    const res = await fetch('/api/decide', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error); return; }
+
+    decidedCount++;
+    currentIndex = data.next_index;
+
+    if (data.done) {
+      goReview();
+    } else {
+      loadImage(currentIndex);
+    }
+  } catch(e) { showToast(t('action_error')); } // Error
+}
+
+// ── Undo ──────────────────────────────────────────────────────────────────────
+async function undo() {
+  try {
+    const res = await fetch('/api/undo', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || t('nothing_undo')); return; } // Nothing to undo
+    if (decidedCount > 0) decidedCount--;
+    currentIndex = data.index;
+    loadImage(currentIndex);
+  } catch(e) {}
+}
+
+// ── Review ────────────────────────────────────────────────────────────────────
+async function goReview() {
+  const res = await fetch('/api/review');
+  const data = await res.json();
+
+  const decisions = data.decisions;
+  const undecided = data.undecided;
+
+  let moves = 0, deletes = 0, skips = 0;
+  const tbody = document.getElementById('review-tbody');
+  tbody.innerHTML = '';
+
+  Object.entries(decisions).forEach(([file, d]) => {
+    let badge, dest;
+    if (d.action === 'move')   { moves++;   badge = 'badge-move';   dest = `→ ${d.dest_label}`; }
+    if (d.action === 'delete') { deletes++; badge = 'badge-delete'; dest = '—'; }
+    if (d.action === 'skip')   { skips++;   badge = 'badge-skip';   dest = '—'; }
+    tbody.innerHTML += `<tr>
+      <td>${file}</td>
+      <td><span class="badge ${badge}">${d.action}</span></td>
+      <td style="color:var(--muted)">${dest}</td>
+    </tr>`;
+  });
+
+  document.getElementById('review-stats').innerHTML = `
+    <div class="stat-card moves"><div class="num">${moves}</div><div class="lbl">${t('moved')}</div></div>
+    <div class="stat-card deletes"><div class="num">${deletes}</div><div class="lbl">${t('deleted')}</div></div>
+    <div class="stat-card skips"><div class="num">${skips}</div><div class="lbl">${t('skipped')}</div></div>
+    <div class="stat-card undecided"><div class="num">${undecided.length}</div><div class="lbl">${t('unprocessed')}</div></div>
+  `;
+
+  const ub = document.getElementById('undecided-block');
+  if (undecided.length > 0) {
+    ub.style.display = 'block';
+    document.getElementById('undecided-list').textContent = undecided.join('  ·  ');
+  } else {
+    ub.style.display = 'none';
+  }
+
+  showScreen('review');
+}
+
+function goSort() { showScreen('sort'); }
+
+// ── Run (SSE streaming with progress) ────────────────────────────────────────
+async function runChanges() {
+  const runBtn = document.getElementById('run-btn');
+  runBtn.disabled = true;
+
+  // Show loading overlay with progress bar
+  showLoadingOverlay(t('applying'));
+
+  try {
+    const res = await fetch('/api/run-stream', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'}
+    });
+
+    if (!res.ok || !res.body) {
+      throw new Error(t('req_failed', res.status));
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (!payload) continue;
+
+        const event = JSON.parse(payload);
+
+        if (event.done) {
+          hideLoadingOverlay();
+          renderResults(event.results);
+          return;
+        }
+
+        // Update progress
+        if (event.total && event.progress) {
+          const pct = Math.round((event.progress / event.total) * 100);
+          document.getElementById('overlay-msg').textContent =
+            t('processing_of') + event.progress + ' / ' + event.total;
+        }
+      }
+    }
+
+    // If we get here without a done event, something went wrong
+    hideLoadingOverlay();
+    showToast(t('conn_interrupt'));
+  } catch(e) {
+    hideLoadingOverlay();
+    showToast(e.message || t('exec_failed'));
+  } finally {
+    runBtn.disabled = false;
+  }
+}
+
+function renderResults(results) {
+  const detail = document.getElementById('result-detail');
+  detail.innerHTML =
+    `<span style="color:var(--accent)">✔ ${t('moved_label')}</span>: ${results.moved.length}${t('files_unit')}<br>` +
+    `<span style="color:var(--danger)">✖ ${t('deleted_label')}</span>: ${results.deleted.length}${t('files_unit')}<br>` +
+    `<span style="color:var(--muted)">⊘ ${t('skipped_label')}</span>: ${results.skipped.length}${t('files_unit')}<br>` +
+    (results.errors.length ? `<span style="color:var(--accent2)">⚠ ${t('errors_label')}</span>: ${results.errors.length}<br>` : '') +
+    (results.errors.map(e => `&nbsp;&nbsp;${e.file}: ${e.reason}`).join('<br>'));
+
+  showScreen('results');
+}
+
+// ── Reset ─────────────────────────────────────────────────────────────────────
+function reset() {
+  images = []; currentIndex = 0; totalImages = 0; decidedCount = 0;
+  // ★ 保留源目录、目标父目录、配置组和文件夹模板，只重置图片相关状态
+  //   用户期望返回首页界面完全不变，方便继续下一批操作
+  document.getElementById('progress-bar').style.width = '0%';
+  recomputeFoldersFromTemplates();
+  renderFoldersGrid();
+  renderFolderButtons();
+  renderKbHint();
+  showScreen('setup');
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function updateSortProgress() {
+  // 进度信息已移至图片上方 img-progress 元素
+}
+
+function updateProgressBar() {
+  const pct = totalImages > 0 ? Math.round((currentIndex / totalImages) * 100) : 0;
+  document.getElementById('progress-bar').style.width = pct + '%';
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+// ── Keyboard ──────────────────────────────────────────────────────────────────
+function handleKey(e) {
+  const screen = document.querySelector('.screen.active').id;
+  if (screen !== 'screen-sort') return;
+  const tag = e.target.tagName;
+  if (tag === 'INPUT' || tag === 'SELECT') return;
+
+  const key = e.key.toLowerCase();
+  const numFolder = folders.find(f => f.key.toLowerCase() === key);
+  if (numFolder) { e.preventDefault(); decide('move', numFolder.key); return; }
+  if (e.code === 'Space' || key === ' ') { e.preventDefault(); decide('move', '__root__'); return; }
+  if (key === actionKeys.delete.toLowerCase()) { e.preventDefault(); decide('delete'); return; }
+  if (key === actionKeys.skip.toLowerCase()) { e.preventDefault(); decide('skip'); return; }
+  if (key === actionKeys.undo.toLowerCase()) { e.preventDefault(); undo(); return; }
+}
+
+// 先显示页面，非关键操作异步加载
+(async function() {
+  // ① 基础初始化（同步，极快）
+  recomputeFoldersFromTemplates();
+  renderFolderButtons();
+  renderKbHint();
+  document.addEventListener('keydown', handleKey);
+
+  // ② 绑定目标路径输入事件
+  const destInput = document.getElementById('dest-parent-input');
+  if (destInput) {
+    destInput.addEventListener('input', () => {
+      recomputeFoldersFromTemplates();
+      renderFoldersGrid();
+      renderFolderButtons();
+      renderKbHint();
+    });
+  }
+
+  // ③ 立即显示页面（不等字体、不等 API）
+  applyLang();
+  document.body.classList.add('ready');
+
+  // ④ 异步加载配置（不阻塞页面显示）
+  try {
+    await loadProfiles();
+  } catch(e) {}
+  renderActionKeysEditor();
+  renderFolderEditor();
+
+  // 心跳：每 15 秒通知后端浏览器标签页仍然打开
+  setInterval(() => {
+    fetch('/api/heartbeat', { method: 'POST' }).catch(() => {});
+  }, 15000);
+  fetch('/api/heartbeat', { method: 'POST' }).catch(() => {});
+})();
+</script>
+</body>
+</html>
