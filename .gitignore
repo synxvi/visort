@@ -8,6 +8,9 @@ dist/
 build/
 .eggs/
 
+# Tools
+.zcode/
+
 # Virtual environments
 .venv*
 venv/
