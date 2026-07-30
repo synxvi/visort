@@ -17,6 +17,7 @@ dependencies:
   path: ^1.9.0
   collection: ^1.18.0
   window_manager: ^0.5.0
+  shared_preferences: ^2.2.0
 
 dev_dependencies:
   flutter_test:
@@ -43,6 +44,8 @@ flutter:
           weight: 700
         - asset: assets/fonts/Syne-ExtraBold.ttf
           weight: 800
-    - family: NotoSansSC
+    - family: HarmonyOS_Sans_SC
       fonts:
-        - asset: assets/fonts/NotoSansSC-Regular.ttf
+        - asset: assets/fonts/HarmonyOS_Sans_SC_Regular.ttf
+        - asset: assets/fonts/HarmonyOS_Sans_SC_Bold.ttf
+          weight: 700

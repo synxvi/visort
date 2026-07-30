@@ -6,6 +6,8 @@
 //   --text:#f0f0f0  --muted:#666
 //   --danger:#ff3b3b  --success:#3bff8a
 
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 
 class AppColors {
@@ -51,14 +53,31 @@ class AppFonts {
   AppFonts._();
   static const syne = 'Syne';
   static const spaceMono = 'SpaceMono';
-  // 系统正文字体（源 --sans）
-  static const sans = ['Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Roboto'];
 
-  /// CJK 回退字体。首选用打包的 NotoSansSC（确定可用，不依赖系统字体安装）。
+  /// 系统正文字体（源 --sans）。按平台返回，避免在不存在的字体上浪费查找：
+  /// 安卓用 Roboto（系统原生、零加载成本），Windows 用 Segoe UI。
+  /// 仅在 app_theme.dart 通过 `.first` 取主字体，非 const 上下文。
+  static List<String> get sans => Platform.isAndroid
+      ? const ['Roboto', 'Segoe UI', 'Microsoft YaHei']
+      : const ['Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Roboto'];
+
+  /// CJK 回退字体链（保持 const，被 40+ 处 const TextStyle 引用）。
+  ///
+  /// 第一位是打包的 HarmonyOS Sans SC 子集（已裁剪，只含常用字 + 应用 UI 文案），
+  /// 其后按平台接系统 CJK 字体兜底生僻字（安卓 Noto/Source Han，Windows 微软雅黑/苹方）。
   ///
   /// 背景：Flutter 桌面端 fontFamilyFallback 引用系统已安装字体不可靠
   /// （flutter/flutter#103811），Windows 上 Microsoft YaHei 经常不生效，
-  /// 中文渲染成豆腐块。因此必须打包一个支持中文的字体文件。
-  /// NotoSansSC 已子集化（仅 GB2312 常用字 + 标点，约 7MB）。
-  static const cjkFallback = ['NotoSansSC', 'Microsoft YaHei', 'PingFang SC'];
+  /// 故打包 HarmonyOS 作为确定性首选。安卓系统自带 Noto CJK，排在兜底链即可，
+  /// 不必也不应全量打包（16MB 全集会严重拖慢冷启动）。
+  static const cjkFallback = [
+    'HarmonyOS_Sans_SC',
+    // Android 系统兜底（子集缺生僻字 / 用户文件名罕用字时）
+    'Noto Sans CJK SC',
+    'Source Han Sans SC',
+    'sans-serif',
+    // Windows / macOS 兜底
+    'Microsoft YaHei',
+    'PingFang SC',
+  ];
 }

@@ -185,13 +185,6 @@ class _FolderEditorState extends ConsumerState<FolderEditor> {
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(
                 children: [
-                  ReorderableDragStartListener(
-                    index: idx,
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 8),
-                      child: Icon(Icons.drag_handle, color: AppColors.muted),
-                    ),
-                  ),
                   SizedBox(
                     width: 60,
                     child: TextField(
@@ -221,8 +214,21 @@ class _FolderEditorState extends ConsumerState<FolderEditor> {
                       onChanged: (_) => _schedulePersist(),
                     ),
                   ),
+                  ReorderableDragStartListener(
+                    index: idx,
+                    child: const Tooltip(
+                      message: 'Drag to reorder',
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 4),
+                        child: Icon(Icons.drag_indicator,
+                            size: 20, color: AppColors.muted),
+                      ),
+                    ),
+                  ),
                   IconButton(
-                    icon: const Icon(Icons.close, size: 18),
+                    tooltip: t(ref, 'remove'),
+                    icon: const Icon(Icons.close, size: 20),
+                    color: AppColors.muted,
                     onPressed: () => _removeAt(idx),
                   ),
                 ],

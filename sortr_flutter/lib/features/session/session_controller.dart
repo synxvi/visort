@@ -39,14 +39,19 @@ class SessionController extends Notifier<SessionState> {
 
   /// 扫描完成后由 ScanController 调用，注入图片列表与配置。
   /// 会重置 decisions、计算 folders。
+  ///
+  /// [prebuiltFolders]：若传入则直接用（安卓 MediaStore 模式，folders 已由 setup 层构建好，
+  /// path 存 RELATIVE_PATH）。否则用 destinationParent + folderTemplates 走 computeDestinationFolders（Windows）。
   void initFromScan({
     required String sourceDir,
     required String destinationParent,
     required List<ImageRef> images,
     required List<FolderTemplate> folderTemplates,
+    List<FolderDescriptor>? prebuiltFolders,
   }) {
-    final folders = _profilesService.computeDestinationFolders(
-        destinationParent, folderTemplates);
+    final folders = prebuiltFolders ??
+        _profilesService.computeDestinationFolders(
+            destinationParent, folderTemplates);
     state = SessionState(
       sourceDir: sourceDir,
       destinationParent: destinationParent,

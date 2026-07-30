@@ -70,6 +70,42 @@ ThemeData buildAppTheme() {
       ),
     ),
     iconTheme: const IconThemeData(color: AppColors.text),
+    // 全局去除 Material 的波纹/高亮点击动画（InkWell ripple & highlight）
+    splashFactory: NoSplash.splashFactory,
+    splashColor: Colors.transparent,
+    highlightColor: Colors.transparent,
+    hoverColor: AppColors.surface,
+    // 菜单弹层（PopupMenu / MenuBar / Menu）—— 全局暗色 + 零阴影，
+    // 避免展开动画起始帧用 M3 默认亮色 Material 绘制导致的白色闪烁。
+    popupMenuTheme: PopupMenuThemeData(
+      color: AppColors.surface,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      shadowColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        side: const BorderSide(color: AppColors.border),
+        borderRadius: BorderRadius.circular(6),
+      ),
+    ),
+    menuTheme: MenuThemeData(
+      style: MenuStyle(
+        backgroundColor: const WidgetStatePropertyAll(AppColors.surface),
+        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+        elevation: const WidgetStatePropertyAll(0),
+        shadowColor: const WidgetStatePropertyAll(Colors.transparent),
+        shape: WidgetStatePropertyAll(RoundedRectangleBorder(
+          side: const BorderSide(color: AppColors.border),
+          borderRadius: BorderRadius.circular(6),
+        )),
+      ),
+    ),
+    menuBarTheme: const MenuBarThemeData(
+      style: MenuStyle(
+        backgroundColor: WidgetStatePropertyAll(AppColors.surface),
+        surfaceTintColor: WidgetStatePropertyAll(Colors.transparent),
+        elevation: WidgetStatePropertyAll(0),
+      ),
+    ),
   );
 }
 
@@ -82,8 +118,8 @@ TextTheme _buildTextTheme(TextTheme base) {
   // 技术信息：SpaceMono
   const monoFamily = AppFonts.spaceMono;
 
-  // 中文回退字体（SpaceMono / Syne 都不含中文，必须回退）
-  const cjkFallback = ['Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', 'sans-serif'];
+  // 中文回退字体（SpaceMono / Syne 都不含中文，必须回退到打包的鸿蒙字体）
+  const cjkFallback = AppFonts.cjkFallback;
 
   TextStyle syneStyle(TextStyle? s, {FontWeight? w, Color? c}) => TextStyle(
         fontFamily: syneFamily,

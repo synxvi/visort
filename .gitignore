@@ -37,11 +37,24 @@ desktop.ini
 # Logs
 *.log
 
+# 调试截图（adb screencap 临时产物）
+s_*.png
+
 # App data
 config/
-docs/
-QA_TESTING.md
+docs/dev-branch-changelog.md
+docs/QA_TESTING.md
 
 # Tool caches
 .claude/
 .workbuddy/
+
+# Flutter
+sortr_flutter/.dart_tool/
+sortr_flutter/.flutter-plugins
+sortr_flutter/.flutter-plugins-dependencies
+sortr_flutter/.packages
+sortr_flutter/build/
+# 字体子集化的原始全集备份（16MB，不入库；由 tools/subset_fonts.py 重新生成）
+# 必须在 assets 之外，否则会被 pubspec 打进 APK
+sortr_flutter/.font-source/

@@ -20,35 +20,38 @@ class DesktopFileSystem implements FileSystemRepository {
   DesktopFileSystem();
 
   @override
-  Future<String?> pickDirectory() async {
+  Future<List<String>> pickDirectories() async {
     final result = await FilePicker.platform.getDirectoryPath(
       dialogTitle: 'Select directory',
     );
-    return result;
+    // 单目录包成单元素 list（用户取消返回空 list）
+    return result == null ? const [] : [result];
   }
 
   @override
-  Future<ScanResult> scanImages(String root,
+  Future<ScanResult> scanImages(List<String> roots,
       {required bool recursive}) async {
-    final dir = Directory(root);
-    if (!dir.existsSync()) {
-      return ScanResult(images: const [], error: 'dir_not_exist');
-    }
     final images = <ImageRef>[];
-    // 递归 vs 同层级
-    final entities = dir.list(recursive: recursive, followLinks: false);
-    await for (final entry in entities) {
-      if (entry is File) {
-        final ext = p.extension(entry.path).toLowerCase();
-        if (imageExtensions.contains(ext)) {
-          final rel = p.relative(entry.path, from: root);
-          // 统一用 / 作为相对路径分隔符（与 Python relative_to 跨平台一致）
-          final relNormalized = rel.replaceAll(r'\', '/');
-          images.add(ImageRef(
-            root: root,
-            relativePath: relNormalized,
-            extension: ext,
-          ));
+    for (final root in roots) {
+      final dir = Directory(root);
+      if (!dir.existsSync()) {
+        return ScanResult(images: const [], error: 'dir_not_exist');
+      }
+      // 递归 vs 同层级
+      final entities = dir.list(recursive: recursive, followLinks: false);
+      await for (final entry in entities) {
+        if (entry is File) {
+          final ext = p.extension(entry.path).toLowerCase();
+          if (imageExtensions.contains(ext)) {
+            final rel = p.relative(entry.path, from: root);
+            // 统一用 / 作为相对路径分隔符（与 Python relative_to 跨平台一致）
+            final relNormalized = rel.replaceAll(r'\', '/');
+            images.add(ImageRef(
+              root: root,
+              relativePath: relNormalized,
+              extension: ext,
+            ));
+          }
         }
       }
     }
@@ -133,6 +136,40 @@ class DesktopFileSystem implements FileSystemRepository {
     } catch (_) {
       return false;
     }
+  }
+
+  @override
+  Future<Set<String>> deleteBatch(List<String> ids, String root) async {
+    // 桌面端逐个删除，返回成功集合
+    final ok = <String>{};
+    for (final id in ids) {
+      final file = File(p.join(root, id));
+      try {
+        if (file.existsSync()) {
+          await file.delete();
+          ok.add(id);
+        }
+      } catch (_) {}
+    }
+    return ok;
+  }
+
+  @override
+  Future<Set<String>> moveBatch(List<String> ids, String destPath) async {
+    // 桌面端逐个移动（destPath = 目标目录绝对路径）
+    final ok = <String>{};
+    for (final id in ids) {
+      try {
+        await Directory(destPath).create(recursive: true);
+        final srcFile = File(id); // 桌面端 id = 源文件绝对路径
+        if (srcFile.existsSync()) {
+          final destFile = File(p.join(destPath, p.basename(id)));
+          await srcFile.rename(destFile.path);
+          ok.add(id);
+        }
+      } catch (_) {}
+    }
+    return ok;
   }
 
   @override

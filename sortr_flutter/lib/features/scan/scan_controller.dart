@@ -10,6 +10,7 @@
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sortr_flutter/core/config/models.dart';
+import 'package:sortr_flutter/core/config/profiles_service.dart';
 import 'package:sortr_flutter/core/fs/file_system_repository.dart';
 import 'package:sortr_flutter/core/fs/fs_provider.dart';
 import 'package:sortr_flutter/features/session/session_controller.dart';
@@ -43,13 +44,18 @@ class ScanController extends StateNotifier<ScanState> {
   final SessionController _sessionController;
 
   /// 执行扫描。
-  /// [source] 源目录、[destinationParent] 目标父目录、[recursive] 是否递归
+  /// [source] 源标识列表（Windows=目录路径 / 安卓=bucket id 列表）
+  /// [sourceRoot] ImageRef.root 用的根标识（Windows=source.first / 安卓=MediaStore authority 常量）
+  /// [destinationParent] 目标父目录
+  /// [prebuiltFolders] 安卓 MediaStore 模式下预构建的 folders（path 存 RELATIVE_PATH）
   /// 返回 null 表示成功，否则返回错误 i18n key
   Future<String?> scan({
-    required String source,
+    required List<String> source,
+    required String sourceRoot,
     required String destinationParent,
     required bool recursive,
     required AppConfig config,
+    List<FolderDescriptor>? prebuiltFolders,
   }) async {
     state = const ScanState(status: ScanStatus.scanning);
 
@@ -67,12 +73,13 @@ class ScanController extends StateNotifier<ScanState> {
     final profile = config.activeProfileData;
     final templates = profile.folders;
 
-    // 初始化 session
+    // 初始化 session（sourceDir = sourceRoot，run 阶段用它重建 ImageRef.root）
     _sessionController.initFromScan(
-      sourceDir: source,
+      sourceDir: sourceRoot,
       destinationParent: destinationParent,
       images: result.images,
       folderTemplates: templates,
+      prebuiltFolders: prebuiltFolders,
     );
 
     state = ScanState(status: ScanStatus.done, imageCount: result.images.length);

@@ -25,8 +25,8 @@ class ReviewStats {
   final int skipped;
   final int undecided;
 
-  /// 明细：移动项（fileId → destLabel）
-  final List<({String fileId, String destLabel})> moveEntries;
+  /// 明细：移动项（fileId → destLabel + destPath 全路径）
+  final List<({String fileId, String destLabel, String destPath})> moveEntries;
   /// 删除项（fileId 列表）
   final List<String> deleteEntries;
   /// 跳过项（fileId 列表）
@@ -40,14 +40,18 @@ class ReviewStats {
 /// 从当前 session 派生 Review 统计
 ReviewStats computeReviewStats(SessionState session) {
   final decisions = session.decisions ?? {};
-  final moves = <({String fileId, String destLabel})>[];
+  final moves = <({String fileId, String destLabel, String destPath})>[];
   final deletes = <String>[];
   final skips = <String>[];
 
   decisions.forEach((fileId, d) {
     switch (d.action) {
       case DecisionAction.move:
-        moves.add((fileId: fileId, destLabel: d.destLabel ?? ''));
+        moves.add((
+          fileId: fileId,
+          destLabel: d.destLabel ?? '',
+          destPath: d.destPath ?? '',
+        ));
         break;
       case DecisionAction.delete:
         deletes.add(fileId);

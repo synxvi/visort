@@ -77,6 +77,12 @@ class RunController {
     final entries = decisions.entries.toList();
     final total = entries.length;
 
+    // MediaStore 批量语义：delete 和 move 决策先收集，循环结束后批量提交
+    final pendingDeleteIds = <String>[];
+    final pendingDeleteFileNames = <String, String>{}; // fileId → 显示名
+    // move 按 destDir(RELATIVE_PATH) 分组：<relativePath, List<fileId>>
+    final pendingMoveByDest = <String, List<String>>{};
+
     for (var i = 0; i < entries.length; i++) {
       final entry = entries[i];
       final fileId = entry.key;
@@ -101,35 +107,71 @@ class RunController {
         continue;
       }
 
-      // 检查源文件存在
-      final exists = await _fs.exists(imgRef);
-      if (!exists) {
-        errors.add((file: fileId, reason: 'source_missing'));
-        continue;
-      }
-
       if (decision.action == DecisionAction.delete) {
-        final ok = await _fs.delete(imgRef);
-        if (ok) {
-          deleted.add(fileId);
-        } else {
-          errors.add((file: fileId, reason: 'delete_failed'));
+        // 检查源文件存在（桌面端精确；MediaStore 端 deleteBatch 内部兜底）
+        final exists = await _fs.exists(imgRef);
+        if (!exists) {
+          errors.add((file: fileId, reason: 'source_missing'));
+          continue;
         }
+        // 批量收集，不逐个删除（MediaStore createDeleteRequest 批量提交）
+        pendingDeleteIds.add(imgRef.relativePath);
+        pendingDeleteFileNames[fileId] = imgRef.name;
         continue;
       }
 
       if (decision.action == DecisionAction.move) {
-        // 解析 destDir（三级回退）
+        // 解析 destDir（三级回退；MediaStore 下 destDir = RELATIVE_PATH）
         final destDir = _resolveDestDir(decision, folderMap, destParent);
         if (destDir == null || destDir.isEmpty) {
           errors.add((file: fileId, reason: 'dest_unresolved'));
           continue;
         }
-        final result = await _fs.move(imgRef, destDir);
-        if (result.success) {
-          moved.add((file: fileId, to: decision.destLabel ?? ''));
-        } else {
-          errors.add((file: fileId, reason: result.error ?? 'move_failed'));
+        // 按目标分组收集（批量移动，每组一次 createWriteRequest）
+        pendingMoveByDest.putIfAbsent(destDir, () => []).add(imgRef.relativePath);
+      }
+    }
+
+    // 批量移动（MediaStore createWriteRequest 按目标分组；桌面端逐个移）
+    for (final entry in pendingMoveByDest.entries) {
+      final destPath = entry.key;
+      final ids = entry.value;
+      final movedIds = await _fs.moveBatch(ids, destPath);
+      // 找回 fileId 记入结果
+      for (final entry2 in entries) {
+        if (entry2.value.action == DecisionAction.move) {
+          final fileId = entry2.key;
+          final imgRef = session.images.firstWhere(
+            (img) => img.id == fileId,
+            orElse: () => ImageRef(root: session.sourceDir, relativePath: fileId, extension: ''),
+          );
+          if (ids.contains(imgRef.relativePath)) {
+            if (movedIds.contains(imgRef.relativePath)) {
+              moved.add((file: fileId, to: entry2.value.destLabel ?? ''));
+            } else {
+              errors.add((file: fileId, reason: 'move_failed'));
+            }
+          }
+        }
+      }
+    }
+
+    // 批量删除（MediaStore createDeleteRequest 一次系统弹窗；桌面端逐个删）
+    if (pendingDeleteIds.isNotEmpty) {
+      final deletedIds = await _fs.deleteBatch(pendingDeleteIds, session.sourceDir);
+      for (final entry in entries) {
+        if (entry.value.action == DecisionAction.delete) {
+          final fileId = entry.key;
+          // 用 ImageRef.relativePath 匹配（与 pendingDeleteIds 同语义）
+          final imgRef = session.images.firstWhere(
+            (img) => img.id == fileId,
+            orElse: () => ImageRef(root: session.sourceDir, relativePath: fileId, extension: ''),
+          );
+          if (deletedIds.contains(imgRef.relativePath)) {
+            deleted.add(fileId);
+          } else {
+            errors.add((file: fileId, reason: 'delete_failed'));
+          }
         }
       }
     }

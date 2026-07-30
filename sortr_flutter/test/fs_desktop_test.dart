@@ -50,7 +50,7 @@ void main() {
       await createImage('ignore.txt'); // 非图片
       await createImage('.hidden.jpg'); // 不排除（Python 版也不排除隐藏文件）
 
-      final result = await fs.scanImages(tempDir.path, recursive: true);
+      final result = await fs.scanImages([tempDir.path], recursive: true);
       expect(result.error, isNull);
       // 子目录文件排在前面（sub/a.jpg < b.jpg，因 's' > 'b'，实际 b 在前）
       final names = result.images.map((e) => e.relativePath).toList();
@@ -63,7 +63,7 @@ void main() {
     test('同层级：不含子目录文件', () async {
       await createImage('top.jpg');
       await createImage('sub/nested.jpg');
-      final result = await fs.scanImages(tempDir.path, recursive: false);
+      final result = await fs.scanImages([tempDir.path], recursive: false);
       final names = result.images.map((e) => e.relativePath).toList();
       expect(names, ['top.jpg']);
     });
@@ -77,13 +77,13 @@ void main() {
       for (final ext in exts) {
         await createImage('file$ext');
       }
-      final result = await fs.scanImages(tempDir.path, recursive: false);
+      final result = await fs.scanImages([tempDir.path], recursive: false);
       expect(result.images.length, exts.length);
     });
 
     test('目录不存在 → dir_not_exist', () async {
       final result =
-          await fs.scanImages(p.join(tempDir.path, 'nope'), recursive: true);
+          await fs.scanImages([p.join(tempDir.path, 'nope')], recursive: true);
       expect(result.error, 'dir_not_exist');
     });
   });

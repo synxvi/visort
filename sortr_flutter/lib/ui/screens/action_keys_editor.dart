@@ -75,10 +75,6 @@ class _ActionKeysEditorState extends ConsumerState<ActionKeysEditor> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _FieldLabel(
-            text:
-                '${t(ref, 'undo_label')} / ${t(ref, 'delete_label')} / ${t(ref, 'skip_label')}'),
-        const SizedBox(height: 8),
         Row(
           children: [
             _field(t(ref, 'undo_label'), _undoCtrl),
@@ -121,21 +117,5 @@ class _ActionKeysEditorState extends ConsumerState<ActionKeysEditor> {
         ),
       ],
     );
-  }
-}
-
-class _FieldLabel extends StatelessWidget {
-  const _FieldLabel({required this.text});
-  final String text;
-  @override
-  Widget build(BuildContext context) {
-    return Text(text,
-        style: const TextStyle(
-            fontFamily: 'SpaceMono',
-            fontFamilyFallback: AppFonts.cjkFallback,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            color: AppColors.muted,
-            letterSpacing: 0.5));
   }
 }

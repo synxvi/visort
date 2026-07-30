@@ -17,6 +17,7 @@ const Map<String, String> stringsEn = {
   'browse_src': 'Browse source directory',
   'browse_dst': 'Browse destination directory',
   'toggle_scan': 'Toggle scan mode',
+  'start': 'Start',
 
   // ───────── Setup · Profile ─────────
   'profile_group': 'Profile',
@@ -35,12 +36,13 @@ const Map<String, String> stringsEn = {
   'create_failed': 'Create failed',
   'create_profile_failed': 'Failed to create profile',
   'delete_failed': 'Delete failed',
+  'dest_unresolved': 'Destination not resolved',
   'delete_profile_failed': 'Failed to delete profile',
   'profile_name_empty': 'Please provide a profile name',
 
   // ───────── Setup · 文件夹编辑器 ─────────
   'target_subdirs_suffix': ' · Target Sub-folders',
-  'add_folder': '+ Add Folder',
+  'add_folder': 'Add Folder',
   'dest_preview': 'DESTINATION PREVIEW',
   'hotkey': 'Hotkey',
   'folder_name': 'Folder name',
@@ -81,6 +83,61 @@ const Map<String, String> stringsEn = {
   'dir_not_exist': 'Directory does not exist',
   'no_images': 'No image files found in this directory',
 
+  // ───────── Setup (Android, A2) ─────────
+  'setup_title_android': 'Sort Images',
+  'setup_hint_android':
+      'Pick a directory. Images will be sorted into subfolders within it.',
+  'pick_dir_android': 'Pick Directory',
+  'auth_revoked': 'Directory access was revoked. Please pick again.',
+
+  // ───────── Setup (Android MediaStore, A1') ─────────
+  'select_albums': 'Select Albums',
+  'select_albums_hint': 'Choose one or more albums as image sources.',
+  'no_album_selected': 'Please select at least one album.',
+  'selected_count': '{0} album(s) selected',
+  'no_selection': 'No album selected',
+  'no_albums': 'No albums found',
+  'permission_denied': 'Storage permission denied',
+  'permission_needed':
+      'SORTR needs to read your photo albums to sort images. Please grant the permission.',
+  'grant_permission': 'Grant Permission',
+  'retry': 'Retry',
+  'cancel': 'Cancel',
+
+  // ───────── Setup (Android 双模式分类) ─────────
+  'mode_to_album': 'Between Albums',
+  'mode_to_newdir': 'Subdirs',
+  'source_albums': 'Source Albums',
+  'target_albums': 'Target Albums',
+  'parent_dir': 'Target Parent Folder',
+  'parent_dir_hint': 'Sort Results',
+  'sub_dirs': 'Target Subdirs',
+  'no_target_album': 'Please select at least one target album.',
+  'no_subdir': 'Please add at least one sub directory.',
+  'source_count': 'Source {0}',
+  'target_count': 'Target {0}',
+  'subdir_count': 'Subdirs {0}',
+  'manage_media_title': 'Enable silent operations',
+  'manage_media_hint': 'Grant media management access to move/delete without confirmation dialogs.',
+  'manage_media_granted': 'Media management enabled. Batch operations now silent.',
+  'enable': 'Enable',
+
+  // ───────── Gallery (相册浏览) ─────────
+  'gallery_title': 'Albums',
+  'album_sort': 'Sort',
+  'sort_by_name': 'By Name',
+  'sort_by_date_taken': 'By Date Taken',
+  'sort_by_date_added': 'By Date Added',
+  'sort_asc': 'Ascending',
+  'sort_desc': 'Descending',
+  'photo_count': '{0} photos',
+  'album_empty': 'This album is empty',
+  'photo_taken_at': 'Taken',
+  'photo_added_at': 'Added',
+  'photo_size': 'Size',
+  'delete_photo': 'Delete',
+  'delete_confirm': 'Delete this photo?',
+
   // ───────── Sort ─────────
   'move_to': 'Move to →',
   'root_dir': 'Root',
@@ -101,9 +158,10 @@ const Map<String, String> stringsEn = {
   'action': 'Action',
   'dest_col': 'Destination',
   'undecided_label': 'Unprocessed files (will be skipped)',
-  'continue_sort': '← Continue Sorting',
-  'run_apply': '▶ Run — Apply All Changes',
+  'continue_sort': 'Continue Sorting',
+  'run_apply': 'Apply All Changes',
   'moved': 'Moved',
+  'move_failed': 'Move failed',
   'deleted': 'Deleted',
   'skipped': 'Skipped',
   'unprocessed': 'Unprocessed',

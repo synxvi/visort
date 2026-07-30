@@ -3,7 +3,11 @@
 // 业务逻辑（session/run/scan controllers）只依赖此抽象。
 // 平台差异在此分叉：
 //   - Windows: DesktopFileSystem（dart:io + file_picker）
-//   - 安卓:    AndroidSafFileSystem（platform channel → SAF/DocumentFile）
+//   - 安卓:    AndroidMediaStoreFileSystem（platform channel → MediaStore）
+//
+// scanImages/pickDirectories 改为多根（List）语义：
+//   - Windows: 单目录包成单元素 list
+//   - 安卓 MediaStore: 多个相册 bucket id 的列表
 
 import 'image_ref.dart';
 
@@ -51,12 +55,17 @@ class ScanResult {
 
 /// 文件系统仓储抽象
 abstract class FileSystemRepository {
-  /// 选择一个目录。返回根标识（Windows=路径 / 安卓=tree URI），用户取消返回 null
-  Future<String?> pickDirectory();
+  /// 选择一个或多个目录。
+  /// Windows：返回 `[path]`（单目录，单元素 list）
+  /// 安卓 MediaStore：返回所有相册 bucket id 列表（UI 层做勾选筛选）
+  /// 用户取消返回空列表
+  Future<List<String>> pickDirectories();
 
-  /// 扫描目录下的图片（按扩展名过滤、排序）。
-  /// [root] 是 pickDirectory 返回的根标识。
-  Future<ScanResult> scanImages(String root, {required bool recursive});
+  /// 扫描多个根下的图片（按扩展名过滤、排序）。
+  /// [roots] 是 pickDirectories 返回的标识列表：
+  ///   - Windows = 目录路径列表
+  ///   - 安卓 MediaStore = bucket id 列表
+  Future<ScanResult> scanImages(List<String> roots, {required bool recursive});
 
   /// 列出目录的直接子文件夹（过滤 . 开头、排序）。
   /// 对应 Python /api/scan-subdirs
@@ -70,6 +79,18 @@ abstract class FileSystemRepository {
 
   /// 删除图片
   Future<bool> delete(ImageRef ref);
+
+  /// 批量移动（按 id 列表 + 目标路径）。
+  /// - 安卓 MediaStore：走 createWriteRequest 改 RELATIVE_PATH（系统弹窗一次确认）
+  /// - Windows：逐个移动
+  /// 返回成功移动的 id 集合
+  Future<Set<String>> moveBatch(List<String> ids, String destPath);
+
+  /// 批量删除（按 id 列表 + root）。
+  /// - 安卓 MediaStore：走 createDeleteRequest（系统弹窗一次确认）
+  /// - Windows：逐个删除
+  /// 返回成功删除的 id 集合
+  Future<Set<String>> deleteBatch(List<String> ids, String root);
 
   /// 图片是否存在
   Future<bool> exists(ImageRef ref);

@@ -18,6 +18,7 @@ import 'package:sortr_flutter/core/theme/app_colors.dart';
 import 'package:sortr_flutter/features/scan/scan_controller.dart';
 import 'package:sortr_flutter/features/session/session_controller.dart';
 import 'package:sortr_flutter/features/setup/setup_controller.dart';
+import 'package:sortr_flutter/shared/widgets/profile_dropdown.dart';
 import 'package:sortr_flutter/shared/widgets/toast.dart';
 import 'package:sortr_flutter/ui/router.dart';
 import 'package:sortr_flutter/ui/screens/action_keys_editor.dart';
@@ -61,16 +62,17 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
   Future<void> _browseSource() async {
     final fs = ref.read(fileSystemRepositoryProvider);
-    final path = await fs.pickDirectory();
-    if (path != null && mounted) {
-      setState(() => _sourceCtrl.text = path);
+    final paths = await fs.pickDirectories();
+    if (paths.isNotEmpty && mounted) {
+      setState(() => _sourceCtrl.text = paths.first);
     }
   }
 
   Future<void> _browseDest() async {
     final fs = ref.read(fileSystemRepositoryProvider);
-    final path = await fs.pickDirectory();
-    if (path != null && mounted) {
+    final paths = await fs.pickDirectories();
+    if (paths.isNotEmpty && mounted) {
+      final path = paths.first;
       setState(() => _destCtrl.text = path);
       // 实时重算 folders 预览
       ref
@@ -142,7 +144,8 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     await ref.read(profilesServiceProvider).save(updated);
 
     final err = await ref.read(scanControllerProvider.notifier).scan(
-          source: source,
+          source: [source],
+          sourceRoot: source,
           destinationParent: dest,
           recursive: _recursive,
           config: ref.read(configProvider),
@@ -164,10 +167,16 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       appBar: AppBar(
         title: _buildLogo(),
         actions: [
+          // 仅 Android + debug：A0 SAF PoC demo 入口（A2 后移除）
+          if (shouldShowSafDemoEntry())
+            TextButton(
+              onPressed: () => Navigator.pushNamed(context, AppRoutes.safDemo),
+              child: const Text('SAF', style: TextStyle(fontFamily: 'SpaceMono')),
+            ),
           TextButton(
             onPressed: () => setLanguage(
                 ref, ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh'),
-            child: Text(t(ref, 'lang_toggle')),
+            child: Text(ref.read(currentLanguageProvider) == 'zh' ? '中文' : 'EN'),
           ),
         ],
       ),
@@ -181,9 +190,9 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                   ? Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(flex: 3, child: _buildLeftColumn(profile)),
+                        Expanded(child: _buildLeftColumn(profile)),
                         const SizedBox(width: 40),
-                        Expanded(flex: 2, child: _buildRightColumn(profile)),
+                        Expanded(child: _buildRightColumn(profile)),
                       ],
                     )
                   : Column(
@@ -315,7 +324,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       width: double.infinity,
       child: FilledButton(
         onPressed: _scanning ? null : _startScan,
-        child: Text(_recursive ? t(ref, 'recursive') : t(ref, 'flat')),
+        child: Text(t(ref, 'start')),
       ),
     );
   }
@@ -333,65 +342,13 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
         Row(
           children: [
             Expanded(
-              child: PopupMenuButton<String>(
-                position: PopupMenuPosition.under,
-                tooltip: '',
-                color: AppColors.surface,
-                surfaceTintColor: Colors.transparent,
-                shape: RoundedRectangleBorder(
-                  side: const BorderSide(color: AppColors.border),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                itemBuilder: (ctx) => names
-                    .map((n) => PopupMenuItem<String>(
-                          value: n,
-                          height: 40,
-                          child: Text(
-                            n,
-                            style: TextStyle(
-                              fontFamily: 'SpaceMono',
-                              fontFamilyFallback: AppFonts.cjkFallback,
-                              fontSize: 13,
-                              color: n == config.activeProfile
-                                  ? AppColors.accent
-                                  : AppColors.text,
-                              fontWeight: n == config.activeProfile
-                                  ? FontWeight.w700
-                                  : FontWeight.w400,
-                            ),
-                          ),
-                        ))
-                    .toList(),
+              child: ProfileDropdown(
+                value: config.activeProfile,
+                items: names,
                 onSelected: (v) async {
                   final err = await SetupController(ref).switchProfile(v);
                   if (err != null && mounted) toast(context, t(ref, err));
                 },
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    border: Border.all(color: AppColors.border),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          config.activeProfile,
-                          style: const TextStyle(
-                            fontFamily: 'SpaceMono',
-                            fontFamilyFallback: AppFonts.cjkFallback,
-                            fontSize: 13,
-                            color: AppColors.text,
-                          ),
-                        ),
-                      ),
-                      const Icon(Icons.unfold_more,
-                          size: 18, color: AppColors.muted),
-                    ],
-                  ),
-                ),
               ),
             ),
             const SizedBox(width: 8),

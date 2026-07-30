@@ -11,10 +11,11 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path/path.dart' as p;
 import 'package:sortr_flutter/core/fs/fs_provider.dart';
 import 'package:sortr_flutter/core/fs/file_system_repository.dart';
+import 'package:sortr_flutter/core/fs/image_loader.dart';
 import 'package:sortr_flutter/core/fs/image_ref.dart';
+import 'package:sortr_flutter/core/config/models.dart';
 import 'package:sortr_flutter/core/i18n/i18n.dart';
 import 'package:sortr_flutter/core/theme/app_colors.dart';
 import 'package:sortr_flutter/features/session/session_controller.dart';
@@ -38,51 +39,75 @@ class SortScreen extends ConsumerWidget {
       return const Scaffold(body: SizedBox.shrink());
     }
 
-    return WindowsKeyboardHandler(
-      child: Scaffold(
-        appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            onPressed: () => Navigator.pushNamedAndRemoveUntil(
-                context, AppRoutes.setup, (_) => false),
-          ),
-          title: _Logo(),
-          actions: [
-            TextButton(
-              onPressed: () => setLanguage(ref,
-                  ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh'),
-              child: Text(t(ref, 'lang_toggle')),
-            ),
-          ],
+    // 安卓端无物理键盘，跳过 WindowsKeyboardHandler；两端布局分叉
+    final useAndroidLayout = Platform.isAndroid;
+    final scaffold = Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pushNamedAndRemoveUntil(
+              context, AppRoutes.setup, (_) => false),
         ),
-        body: ResponsiveBuilder(builder: (context, width) {
-          final isWide = width > 800;
-          return Padding(
-            padding: const EdgeInsets.all(16),
-            child: isWide
-                ? Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Expanded(flex: 3, child: _ImageArea(session: session)),
-                      const SizedBox(width: 16),
-                      SizedBox(
-                          width: 320,
-                          child: _SortPanel(session: session)),
-                    ],
-                  )
-                : Column(
-                    children: [
-                      Expanded(child: _ImageArea(session: session)),
-                      const SizedBox(height: 16),
-                      SizedBox(
-                          height: 280,
-                          child: _SortPanel(session: session)),
-                    ],
-                  ),
-          );
-        }),
+        title: const _Logo(),
+        actions: [
+          TextButton(
+            onPressed: () => setLanguage(ref,
+                ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh'),
+            child: Text(
+                ref.read(currentLanguageProvider) == 'zh' ? '中文' : 'EN'),
+          ),
+        ],
+      ),
+      body: useAndroidLayout
+          ? _buildAndroidLayout(session)
+          : _buildDesktopLayout(session),
+    );
+
+    // Windows 键盘处理仅桌面端需要
+    if (Platform.isWindows) {
+      return WindowsKeyboardHandler(child: scaffold);
+    }
+    return scaffold;
+  }
+
+  /// 安卓布局：全屏图（上）+ 底部横滑目标按钮（下）
+  Widget _buildAndroidLayout(SessionState session) {
+    return SafeArea(
+      child: Column(
+        children: [
+          // 图片区占满主区域
+          Expanded(child: _ImageArea(session: session)),
+          // 底部操作栏
+          _AndroidBottomBar(session: session),
+        ],
       ),
     );
+  }
+
+  /// 桌面布局：宽屏左右分栏，窄屏上下
+  Widget _buildDesktopLayout(SessionState session) {
+    return ResponsiveBuilder(builder: (context, width) {
+      final isWide = width > 800;
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: isWide
+            ? Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(flex: 3, child: _ImageArea(session: session)),
+                  const SizedBox(width: 16),
+                  SizedBox(width: 320, child: _SortPanel(session: session)),
+                ],
+              )
+            : Column(
+                children: [
+                  Expanded(child: _ImageArea(session: session)),
+                  const SizedBox(height: 16),
+                  SizedBox(height: 280, child: _SortPanel(session: session)),
+                ],
+              ),
+      );
+    });
   }
 }
 
@@ -99,15 +124,15 @@ class _ImageArea extends ConsumerStatefulWidget {
 class _ImageAreaState extends ConsumerState<_ImageArea> {
   ImageMeta? _meta;
   bool _loadError = false;
-  String? _currentPath;
+  String? _currentImgId;
 
   @override
   void didUpdateWidget(_ImageArea oldWidget) {
     super.didUpdateWidget(oldWidget);
     final img = widget.session.currentImage;
-    final newPath = img == null ? null : p.join(img.root, img.relativePath);
-    if (newPath != _currentPath) {
-      _currentPath = newPath;
+    final newId = img?.id;
+    if (newId != _currentImgId) {
+      _currentImgId = newId;
       _loadError = false;
       _meta = null;
       _loadMeta(img);
@@ -118,7 +143,7 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
   void initState() {
     super.initState();
     final img = widget.session.currentImage;
-    _currentPath = img == null ? null : p.join(img.root, img.relativePath);
+    _currentImgId = img?.id;
     _loadMeta(img);
   }
 
@@ -128,15 +153,12 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
     try {
       final meta = await fs.readMeta(img);
       if (mounted) setState(() => _meta = meta);
-      // 预加载下一张
+      // 预加载下一张（跨平台）
       final session = ref.read(sessionControllerProvider);
       if (session.hasNext) {
         final next = session.images[session.currentIndex + 1];
         if (mounted) {
-          precacheImage(
-            FileImage(File(p.join(next.root, next.relativePath))),
-            context,
-          );
+          precacheNextImage(context, next);
         }
       }
     } catch (_) {}
@@ -164,7 +186,6 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
       );
     }
 
-    final absPath = p.join(img.root, img.relativePath);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -190,7 +211,7 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
             ],
           ),
         ),
-        // 大图
+        // 大图（跨平台加载）
         Expanded(
           child: Container(
             decoration: BoxDecoration(
@@ -202,11 +223,10 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
                 ? Center(
                     child: Text(t(ref, 'preview_na'),
                         style: const TextStyle(color: AppColors.muted)))
-                : Image.file(
-                    File(absPath),
+                : Image(
+                    image: buildImageProvider(img),
                     fit: BoxFit.contain,
                     errorBuilder: (ctx, error, stack) {
-                      // 标记失败，下次重建显示提示
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (mounted) setState(() => _loadError = true);
                       });
@@ -458,7 +478,186 @@ class _ActionButton extends StatelessWidget {
 
 // ───────────── 辅助组件 ─────────────
 
+/// 安卓底部操作栏：横滑目标文件夹按钮 + 撤销/删除/跳过行
+class _AndroidBottomBar extends ConsumerWidget {
+  const _AndroidBottomBar({required this.session});
+  final SessionState session;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final controller = ref.read(sessionControllerProvider.notifier);
+    // toAlbum 模式下目标是已有相册（bucket），不存在「父目录根」概念，
+    // 且 destinationParent 被设为 MediaStore authority（非法 RELATIVE_PATH），
+    // 选「根目录」会导致 Kotlin update 返回 0 行 → 移动失败。故此模式不显示根目录。
+    final isToAlbum = ref.watch(configProvider
+        .select((c) => c.activeProfileData.classifyMode == ClassifyMode.toAlbum));
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.bg,
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 横滑目标文件夹按钮列（roadmap 共识 #5）
+          SizedBox(
+            height: 52,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                ...session.folders.map((f) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: _AndroidFolderChip(
+                        label: f.label,
+                        onTap: () => controller.decide(DecisionAction.move,
+                            destKey: f.key),
+                      ),
+                    )),
+                // 根目录按钮 —— 仅 toNewDir 模式可用（toAlbum 模式无父目录根概念）
+                if (!isToAlbum) ...[
+                  const SizedBox(width: 8),
+                  _AndroidFolderChip(
+                    label: t(ref, 'root_dir'),
+                    isRoot: true,
+                    onTap: () => controller.decide(DecisionAction.move,
+                        destKey: kRootDestKey),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          // 操作行：撤销 / 删除 / 跳过（roadmap 共识 #4 可选手势）
+          Row(
+            children: [
+              Expanded(
+                child: _AndroidActionChip(
+                  label: t(ref, 'undo'),
+                  icon: Icons.undo,
+                  onTap: () => controller.undo(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _AndroidActionChip(
+                  label: t(ref, 'delete_btn'),
+                  icon: Icons.delete_outline,
+                  danger: true,
+                  onTap: () => controller.decide(DecisionAction.delete),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _AndroidActionChip(
+                  label: t(ref, 'skip'),
+                  icon: Icons.skip_next,
+                  onTap: () => controller.decide(DecisionAction.skip),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AndroidFolderChip extends StatelessWidget {
+  const _AndroidFolderChip({
+    required this.label,
+    required this.onTap,
+    this.isRoot = false,
+  });
+  final String label;
+  final VoidCallback onTap;
+  final bool isRoot;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: isRoot ? AppColors.rootDirBg : AppColors.surface,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Center(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontFamily: 'SpaceMono',
+                fontFamilyFallback: AppFonts.cjkFallback,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+                color: isRoot
+                    ? AppColors.text.withValues(alpha: 0.7)
+                    : AppColors.text,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AndroidActionChip extends StatelessWidget {
+  const _AndroidActionChip({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+    this.danger = false,
+  });
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool danger;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: danger ? AppColors.danger.withValues(alpha: 0.1) : AppColors.surface,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+                color: danger ? AppColors.danger : AppColors.border),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon,
+                  size: 18,
+                  color: danger ? AppColors.danger : AppColors.text),
+              const SizedBox(height: 2),
+              Text(label,
+                  style: TextStyle(
+                      fontFamily: 'SpaceMono',
+                      fontFamilyFallback: AppFonts.cjkFallback,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 11,
+                      color: danger ? AppColors.danger : AppColors.text)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Logo extends StatelessWidget {
+  const _Logo();
   @override
   Widget build(BuildContext context) {
     return Row(

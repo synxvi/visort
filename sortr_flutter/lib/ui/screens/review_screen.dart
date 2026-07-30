@@ -33,7 +33,8 @@ class ReviewScreen extends ConsumerWidget {
           TextButton(
             onPressed: () => setLanguage(
                 ref, ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh'),
-            child: Text(t(ref, 'lang_toggle')),
+            child: Text(
+                ref.read(currentLanguageProvider) == 'zh' ? '中文' : 'EN'),
           ),
         ],
       ),
@@ -89,34 +90,54 @@ class ReviewScreen extends ConsumerWidget {
                           color: AppColors.muted)),
                   const SizedBox(height: 8),
                   Container(
+                    width: double.infinity,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
                       color: AppColors.surface,
                       border: Border.all(color: AppColors.border),
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: Text(stats.undecidedIds.join(' · '),
-                        style: const TextStyle(
-                            fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
-                            fontSize: 11,
-                            color: AppColors.muted)),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: stats.undecidedIds
+                          .map((id) => Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: AppColors.bg,
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: AppColors.border),
+                                ),
+                                child: Text(id,
+                                    style: const TextStyle(
+                                        fontFamily: 'SpaceMono',
+                                        fontFamilyFallback: AppFonts.cjkFallback,
+                                        fontSize: 11,
+                                        color: AppColors.muted)),
+                              ))
+                          .toList(),
+                    ),
                   ),
                 ],
                 const SizedBox(height: 32),
-                // 操作按钮
+                // 操作按钮（Flexible 防止窄屏溢出）
                 Row(
                   children: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: Text(t(ref, 'continue_sort')),
+                    Flexible(
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: Text(t(ref, 'continue_sort'),
+                            overflow: TextOverflow.ellipsis),
+                      ),
                     ),
-                    const Spacer(),
+                    const SizedBox(width: 8),
                     FilledButton(
                       style: FilledButton.styleFrom(
                         backgroundColor: AppColors.success,
                         foregroundColor: AppColors.bg,
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 24, vertical: 14),
+                            horizontal: 20, vertical: 14),
                       ),
                       onPressed: stats.total == 0
                           ? null
@@ -197,11 +218,11 @@ class _ChangesTable extends ConsumerWidget {
                 Expanded(
                     flex: 3,
                     child: _Header(t(ref, 'file'))),
-                Expanded(
-                    flex: 2,
+                SizedBox(
+                    width: 72,
                     child: _Header(t(ref, 'action'))),
                 Expanded(
-                    flex: 3,
+                    flex: 5,
                     child: _Header(t(ref, 'dest_col'))),
               ],
             ),
@@ -211,7 +232,7 @@ class _ChangesTable extends ConsumerWidget {
                 file: e.fileId,
                 badge: DecisionBadge(
                     type: BadgeType.move, label: t(ref, 'moved')),
-                dest: '→ ${e.destLabel}',
+                dest: e.destPath,
               )),
           ...stats.deleteEntries.map((f) => _Row(
                 file: f,
@@ -271,12 +292,21 @@ class _Row extends StatelessWidget {
           Expanded(
               flex: 3,
               child: Text(file,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                       fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback, fontSize: 12))),
-          Expanded(flex: 2, child: badge),
+          // 固定宽度容器，与表头对齐；badge 左对齐，不撑满
+          SizedBox(
+            width: 72,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: badge,
+            ),
+          ),
           Expanded(
-              flex: 3,
+              flex: 5,
               child: Text(dest,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                       fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback, fontSize: 12))),
         ],

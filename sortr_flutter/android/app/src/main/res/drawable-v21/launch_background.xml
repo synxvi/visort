@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Modify this file to customize your launch splash screen -->
+<!-- 启动屏背景（API 21+）。
+     底色固定为应用深色，不跟随系统 ?colorBackground（亮色模式下仍是深色）。 -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="?android:colorBackground" />
+    <item android:drawable="@color/sortr_launch_bg" />
 
-    <!-- You can insert your own image assets here -->
-    <!-- <item>
+    <!-- 如需启动 logo，可在此插入 bitmap：
+    <item>
         <bitmap
             android:gravity="center"
-            android:src="@mipmap/launch_image" />
+            android:src="@mipmap/ic_launcher" />
     </item> -->
 </layer-list>

@@ -36,10 +36,34 @@ class FakeFileSystem implements FileSystemRepository {
   }
 
   @override
+  Future<Set<String>> moveBatch(List<String> ids, String destPath) async {
+    // 记录批量移动（按目标分组）+ 模拟成功
+    for (final id in ids) {
+      batchMoves.add((id: id, destPath: destPath));
+    }
+    return ids.toSet();
+  }
+
+  /// 批量移动记录（run_controller 现在走 moveBatch 而非 move）
+  final List<({String id, String destPath})> batchMoves = [];
+
+  @override
   Future<bool> delete(ImageRef ref) async {
     deletes.add(ref);
     existing.remove(_key(ref.root, ref.relativePath));
     return true;
+  }
+
+  @override
+  Future<Set<String>> deleteBatch(List<String> ids, String root) async {
+    final ok = <String>{};
+    for (final id in ids) {
+      if (existing.contains(_key(root, id))) {
+        existing.remove(_key(root, id));
+        ok.add(id);
+      }
+    }
+    return ok;
   }
 
   // 以下方法本测试不用
@@ -97,10 +121,11 @@ void main() {
     expect(done.results!.skipped.length, 1);
     expect(done.results!.errors, isEmpty);
 
-    // fs 操作记录
-    expect(fs.moves.length, 1);
-    expect(fs.moves.single.destDir, r'D:\Dest\General');
-    expect(fs.deletes.length, 1);
+    // fs 操作记录（move 走 moveBatch 批量）
+    expect(fs.batchMoves.length, 1);
+    expect(fs.batchMoves.single.destPath, r'D:\Dest\General');
+    // delete 走 deleteBatch（批量），验证结果而非 fs.deletes 单删记录
+    expect(done.results!.deleted.length, 1);
   });
 
   test('move 到根目录：destDir = destinationParent', () async {
@@ -113,7 +138,7 @@ void main() {
     final events = await runner.run(session).toList();
     final done = events.lastWhere((e) => e.done == true);
     expect(done.results!.moved.length, 1);
-    expect(fs.moves.single.destDir, r'D:\Dest'); // 根目录
+    expect(fs.batchMoves.single.destPath, r'D:\Dest'); // 根目录
   });
 
   test('源文件缺失 → 记入 errors', () async {
