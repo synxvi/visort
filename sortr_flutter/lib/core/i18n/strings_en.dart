@@ -126,15 +126,21 @@ const Map<String, String> stringsEn = {
   'gallery_title': 'Albums',
   'album_sort': 'Sort',
   'sort_by_name': 'By Name',
-  'sort_by_date_taken': 'By Date Taken',
-  'sort_by_date_added': 'By Date Added',
+  'sort_by_date_created': 'By Created Date',
+  'sort_by_date_modified': 'By Modified Date',
   'sort_asc': 'Ascending',
   'sort_desc': 'Descending',
   'photo_count': '{0} photos',
   'album_empty': 'This album is empty',
-  'photo_taken_at': 'Taken',
-  'photo_added_at': 'Added',
+  'today': 'Today',
+  'yesterday': 'Yesterday',
+  'photo_created_at': 'Created',
+  'photo_modified_at': 'Modified',
   'photo_size': 'Size',
+  'photo_dimensions': 'Dimensions',
+  'photo_type': 'Type',
+  'photo_filename': 'Filename',
+  'photo_details': 'Details',
   'delete_photo': 'Delete',
   'delete_confirm': 'Delete this photo?',
 
@@ -187,4 +193,46 @@ const Map<String, String> stringsEn = {
   'conn_interrupt': 'Connection interrupted',
   'exec_failed': 'Execution failed',
   'source_missing': 'Source file missing',
+
+  // ───────── P0 · 照片元数据（EXIF）─────────
+  'meta_section_exif': 'Metadata',
+  'meta_make': 'Camera',
+  'meta_model': 'Model',
+  'meta_software': 'Software',
+  'meta_aperture': 'Aperture',
+  'meta_exposure': 'Exposure',
+  'meta_iso': 'ISO',
+  'meta_focal': 'Focal length',
+  'meta_date_taken': 'Date taken',
+  'meta_orientation': 'Orientation',
+  'meta_lat': 'Latitude',
+  'meta_lng': 'Longitude',
+
+  // ───────── P1b · 收藏 ─────────
+  'action_favorite': 'Add to favorites',
+  'action_unfavorite': 'Remove from favorites',
+  'favorited': 'Added to favorites',
+  'unfavorited': 'Removed from favorites',
+  'favorite_failed': 'Failed to update favorite',
+  'favorites_title': 'Favorites',
+  'favorites_empty': 'No favorites yet',
+
+  // ───────── P1a · 回收站 ─────────
+  'trash_title': 'Trash',
+  'trash_empty': 'Trash is empty',
+  'action_trash': 'Move to trash',
+  'action_restore': 'Restore',
+  'confirm_trash': 'Move to trash?',
+  'trashed': 'Moved to trash',
+  'restored': 'Restored',
+  'restore_failed': 'Failed to restore',
+  'trash_unsupported': 'Trash requires Android 10+',
+
+  // ───────── 通用 · 相册管理 ─────────
+  'gallery_manage': 'Gallery',
+
+  // ───────── P1a · 回收站对话框 ─────────
+  'trash_item_title': 'Trash options',
+  'trash_confirm_desc': 'It can be restored from Trash.',
+  'delete_permanently': 'Delete permanently',
 };

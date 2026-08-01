@@ -1,0 +1,26 @@
+SORTR Flutter — Third-party notices
+
+This product includes software developed by third parties:
+
+- metadata-extractor (com.drew:metadata-extractor:2.19.0)
+  Copyright © Drew Noakes
+  Apache License, Version 2.0
+  https://github.com/drewnoakes/metadata-extractor
+
+- AndroidX ExifInterface (androidx.exifinterface:exifinterface:1.3.7)
+  Copyright (C) The Android Open Source Project
+  Apache License, Version 2.0
+  https://developer.android.com/jetpack/androidx/releases/exifinterface
+
+---
+
+Portions of the MediaStore Kotlin plugin (MediaStoreRepository.kt /
+MediaStorePlugin.kt) are ported from or inspired by:
+
+- fluttercandies/flutter_photo_manager — Apache-2.0
+  Copyright 2018 The FlutterCandies author
+  https://github.com/fluttercandies/flutter_photo_manager
+
+- deckers/aves — BSD-3-Clause
+  Copyright (c) Thibault Deckers
+  https://github.com/deckerst/aves

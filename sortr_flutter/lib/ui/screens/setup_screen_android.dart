@@ -11,6 +11,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:sortr_flutter/core/config/models.dart';
 import 'package:sortr_flutter/core/config/profiles_service.dart';
 import 'package:sortr_flutter/core/fs/android_mediastore_file_system.dart';
@@ -34,6 +35,8 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     with WidgetsBindingObserver {
   static const _channel = MediaStoreChannel();
   static const _keyOrder = 'ABCDEFGHIJ'; // 目标相册/子目录的快捷键分配
+  /// 右上角 ⋮ 按钮 key：Overlay 菜单定位（从按钮下方弹出，不遮挡按钮）
+  final GlobalKey _menuBtnKey = GlobalKey();
 
   // 相册数据
   List<MsBucket> _buckets = const [];
@@ -50,6 +53,8 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   final _parentCtrl = TextEditingController(text: '整理结果');
   final _parentFocus = FocusNode();
   List<String> _subDirs = ['保留', '待删'];
+  // 子目录列表的 AnimatedList key（驱动增删入场/退场动画）
+  final _subDirsKey = GlobalKey<AnimatedListState>();
 
   bool _loading = false;
   bool _scanning = false;
@@ -313,6 +318,136 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     Navigator.pushNamed(context, AppRoutes.sort);
   }
 
+  /// 右上角 3 点菜单：收藏 / 回收站快捷入口（相册浏览走首页列表直接点）。
+  void _onMenuSelected(String value) {
+    if (value == 'favorites') {
+      Navigator.pushNamed(context, AppRoutes.album,
+          arguments: const {'favoritesOnly': true});
+    } else if (value == 'trash') {
+      Navigator.pushNamed(context, AppRoutes.album,
+          arguments: const {'trashedOnly': true});
+    }
+  }
+
+  /// 右上角 ⋮ 菜单：showGeneralDialog 实现——从按钮下方矩形选区线性缩放弹出，
+  /// 不遮挡按钮（top=按钮底部+4dp，右缘与按钮对齐）。
+  /// 生命周期由 Navigator 管理（pop 自动收起+清理），可反复打开。
+  void _showOverflowMenu() {
+    final btnContext = _menuBtnKey.currentContext;
+    if (btnContext == null) return;
+    final btnBox = btnContext.findRenderObject() as RenderBox;
+    final btnPos = btnBox.localToGlobal(Offset.zero);
+    final size = MediaQuery.sizeOf(context);
+    const menuWidth = 184.0;
+    const itemHeight = 48.0;
+    final menuHeight = itemHeight * 2;
+    // 菜单右缘与按钮右缘对齐；top = 按钮底部 + 4dp（不遮挡按钮）
+    final left = (btnPos.dx + btnBox.size.width - menuWidth)
+        .clamp(0.0, size.width - menuWidth)
+        .toDouble();
+    final top = (btnPos.dy + btnBox.size.height + 4)
+        .clamp(0.0, size.height - menuHeight - 8)
+        .toDouble();
+
+    // 动画锚点 = 按钮右下角（相对菜单左上角的偏移）。
+    // 菜单右对齐按钮，其左上角在按钮左侧（屏幕中部），若以菜单左上角为锚点
+    // 会表现为「屏幕顶部中间向右下展开」；改为按钮位置后，菜单从点击处向左下展开
+    final anchorDx = btnPos.dx + btnBox.size.width - left;
+    final anchorDy = btnPos.dy + btnBox.size.height - top;
+
+    showGeneralDialog<void>(
+      context: context,
+      barrierColor: Colors.transparent,
+      barrierDismissible: true,
+      barrierLabel: 'menu',
+      transitionDuration: const Duration(milliseconds: 180),
+      pageBuilder: (ctx, anim, secAnim) {
+        return Stack(
+          children: [
+            Positioned(
+              left: left,
+              top: top,
+              width: menuWidth,
+              // 锚点 = Positioned 左上角（即按钮下方）：只缩放菜单本体，
+              // 从点击位置向外线性扩张，不遮挡按钮
+              child: AnimatedBuilder(
+                animation: anim,
+                builder: (ctx, child) {
+                  final s = Curves.linear.transform(anim.value);
+                  return Transform(
+                    alignment: Alignment.topLeft,
+                    // 以锚点（按钮右下角）缩放：T(anchor)·S·T(-anchor)
+                    transform: Matrix4.identity()
+                      ..translateByDouble(anchorDx, anchorDy, 0, 1)
+                      ..scaleByDouble(s, s, 1, 1)
+                      ..translateByDouble(-anchorDx, -anchorDy, 0, 1),
+                    child: child,
+                  );
+                },
+                child: Material(
+                  color: AppColors.surface,
+                  elevation: 2,
+                  borderRadius: BorderRadius.circular(4),
+                  clipBehavior: Clip.antiAlias,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _buildMenuItem(
+                        ctx,
+                        'favorites',
+                        Icons.favorite,
+                        AppColors.danger,
+                        t(ref, 'favorites_title'),
+                      ),
+                      _buildMenuItem(
+                        ctx,
+                        'trash',
+                        Icons.delete_outline,
+                        AppColors.muted,
+                        t(ref, 'trash_title'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+      transitionBuilder: (ctx, anim, secAnim, child) => child,
+    );
+  }
+
+  /// 菜单单项：图标 + 文本；点击后关闭菜单并回调 [_onMenuSelected]。
+  Widget _buildMenuItem(
+    BuildContext ctx,
+    String value,
+    IconData icon,
+    Color iconColor,
+    String label,
+  ) {
+    return InkWell(
+      onTap: () {
+        Navigator.pop(ctx);
+        _onMenuSelected(value);
+      },
+      child: SizedBox(
+        height: 48,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Icon(icon, color: iconColor, size: 20),
+              const SizedBox(width: 12),
+              Text(label,
+                  style: const TextStyle(color: AppColors.text, fontSize: 14)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // 检测相册内排序是否变化（从相册返回时封面需更新）
@@ -322,13 +457,18 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.text,
-        title: const _Logo(),
+        title: InkWell(
+          onTap: () => setLanguage(
+              ref, ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh'),
+          borderRadius: BorderRadius.circular(8),
+          child: const _Logo(),
+        ),
         actions: [
-          TextButton(
-            onPressed: () => setLanguage(
-                ref, ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh'),
-            child: Text(
-                ref.read(currentLanguageProvider) == 'zh' ? '中文' : 'EN'),
+          IconButton(
+            key: _menuBtnKey,
+            icon: const Icon(Icons.more_vert, color: AppColors.text),
+            tooltip: t(ref, 'gallery_manage'),
+            onPressed: _showOverflowMenu,
           ),
         ],
       ),
@@ -413,31 +553,72 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
             }),
           ),
         ),
-        // 区块间分隔：toAlbum 模式用流向分隔线（源→目标），
-        // toNewDir 模式保持纯间距（目标区是配置面板，与相册列表视觉关系不同）
-        // 注：源 header 底部 padding 已改对称(10)，此处 SizedBox 同步收紧 6 以维持原节奏
-        if (_mode == ClassifyMode.toAlbum)
-          _buildFlowDivider(sourceExpanded: _sourceExpanded)
-        else
-          SizedBox(height: _sourceExpanded ? 10 : 0),
-        if (_mode == ClassifyMode.toAlbum)
-          _buildCollapsibleSection(
-            title: t(ref, 'target_albums'),
-            totalCount: _buckets.length,
-            expanded: _targetExpanded,
-            onToggle: () =>
-                setState(() => _targetExpanded = !_targetExpanded),
-            child: _buildBucketList(
-              selectedIds: _targetBucketIds,
-              onToggle: (id) => setState(() {
-                _targetBucketIds.contains(id)
-                    ? _targetBucketIds.remove(id)
-                    : _targetBucketIds.add(id);
-              }),
+        // 目标区随模式交叉切换：
+        //   toAlbum = 流向分隔线 + 目标相册折叠区
+        //   toNewDir = 间距 + 新建目录配置面板
+        // 外层 AnimatedSize 平滑过渡两模式的高度差，内层 AnimatedSwitcher
+        // 做交叉淡入淡出 + 轻微缩放（fade-through 语义，呼应模式切换）。
+        AnimatedSize(
+          duration: 300.ms,
+          curve: Curves.easeInOut,
+          alignment: Alignment.topCenter,
+          child: AnimatedSwitcher(
+            duration: 280.ms,
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: (child, anim) {
+              final scale = Tween<double>(begin: 0.97, end: 1.0).animate(
+                CurvedAnimation(parent: anim, curve: Curves.easeOutCubic),
+              );
+              return FadeTransition(
+                opacity: anim,
+                child: ScaleTransition(scale: scale, child: child),
+              );
+            },
+            // 自定义 layoutBuilder：新旧 child 顶部对齐。默认 alignment.center 在
+            // 变高场景会让较短内容垂直居中悬浮，两模式高度差大时元素上下跳动。
+            layoutBuilder: (currentChild, previousChildren) => Stack(
+              alignment: Alignment.topCenter,
+              children: <Widget>[
+                ...previousChildren,
+                ?currentChild,
+              ],
             ),
-          )
-        else
-          _buildNewDirConfig(),
+            child: KeyedSubtree(
+              key: ValueKey(_mode),
+              child: _mode == ClassifyMode.toAlbum
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildFlowDivider(sourceExpanded: _sourceExpanded),
+                        _buildCollapsibleSection(
+                          title: t(ref, 'target_albums'),
+                          totalCount: _buckets.length,
+                          expanded: _targetExpanded,
+                          onToggle: () => setState(
+                              () => _targetExpanded = !_targetExpanded),
+                          child: _buildBucketList(
+                            selectedIds: _targetBucketIds,
+                            onToggle: (id) => setState(() {
+                              _targetBucketIds.contains(id)
+                                  ? _targetBucketIds.remove(id)
+                                  : _targetBucketIds.add(id);
+                            }),
+                          ),
+                        ),
+                      ],
+                    )
+                  : Padding(
+                      // 展开态 top:20 对齐配置面板内区块分隔（父目录输入框→子目录
+                      // 标题用 SizedBox(20)），让末位相册→「父目录」标题间距与面板内一致；
+                      // 折叠态 top:0（源 header bottom:10 已提供标题间间距）。
+                      padding: EdgeInsets.only(
+                          top: _sourceExpanded ? 20.0 : 0.0),
+                      child: _buildNewDirConfig(),
+                    ),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -519,15 +700,15 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
           onTap: onToggle,
           child: Padding(
             // top:5（距顶部分隔线/模式切换的间距，按需再收紧 1/3）；
-            // bottom:10（距下方内容/分隔线的呼吸间距）
-            padding: const EdgeInsets.fromLTRB(16, 5, 8, 10),
+            // bottom:6（距下方内容/分隔线收紧）
+            padding: const EdgeInsets.fromLTRB(16, 5, 8, 6),
             child: Row(
               children: [
                 Text(title,
                     style: const TextStyle(
                         color: AppColors.accent,
                         fontWeight: FontWeight.w800,
-                        fontSize: 13)),
+                        fontSize: 13, height: 1.1)),
                 const SizedBox(width: 8),
                 Container(
                   padding:
@@ -548,17 +729,27 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
                   asc: config.albumSortAsc,
                   onChanged: _setAlbumSort,
                 ),
+                const SizedBox(width: 4),
+                // 展开/折叠指示箭头，随下方内容同步旋转（180°）。
+                AnimatedRotation(
+                  turns: expanded ? 0.5 : 0.0,
+                  duration: 200.ms,
+                  curve: Curves.easeOutCubic,
+                  child: const Icon(Icons.expand_more,
+                      size: 20, color: AppColors.accent),
+                ),
               ],
             ),
           ),
         ),
-        // 动画展开/收起：AnimatedSize 让高度平滑过渡
+        // 动画展开/收起：AnimatedSize 平滑过渡高度（easeOutCubic 更现代，快进慢出）；
+        // 展开瞬间内容用 flutter_animate 淡入，收起时直接收回。
         AnimatedSize(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeInOut,
+          duration: 240.ms,
+          curve: Curves.easeOutCubic,
           alignment: Alignment.topCenter,
           child: expanded
-              ? child
+              ? child.animate().fadeIn(duration: 200.ms)
               : const SizedBox(width: double.infinity, height: 0),
         ),
       ],
@@ -574,6 +765,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     return Column(
       children: sorted
           .map((b) => _SetupBucketTile(
+                key: ValueKey(b.id),
                 bucket: b,
                 selected: selectedIds.contains(b.id),
                 onCheckToggle: () => onToggle(b.id),
@@ -592,10 +784,11 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
         case SortBy.name:
           cmp = a.name.toLowerCase().compareTo(b.name.toLowerCase());
           break;
-        case SortBy.dateTaken:
-        case SortBy.dateAdded:
-          // bucket 无独立日期字段，按数量降序作为次要键保证稳定
-          cmp = a.count.compareTo(b.count);
+        case SortBy.dateCreated:
+          cmp = a.dateCreatedMs.compareTo(b.dateCreatedMs);
+          break;
+        case SortBy.dateModified:
+          cmp = a.dateModifiedMs.compareTo(b.dateModifiedMs);
           break;
       }
       return config.albumSortAsc ? cmp : -cmp;
@@ -684,7 +877,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
               _sectionTitle(t(ref, 'sub_dirs')),
               const Spacer(),
               GestureDetector(
-                onTap: () => setState(() => _subDirs.add('')),
+                onTap: _addSubDir,
                 child: const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   child: Icon(Icons.add_circle_outline,
@@ -694,50 +887,15 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
             ],
           ),
           const SizedBox(height: 8),
-          // 子目录行列表
-          ..._subDirs.asMap().entries.map((e) {
-            final idx = e.key;
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              // IntrinsicHeight：让字母块高度跟随输入框，消除右侧缺块
-              child: IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // 快捷键标签：正方形，高度跟随输入框
-                    AspectRatio(
-                      aspectRatio: 1,
-                      child: Container(
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: AppColors.accentWithOpacity(0.15),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          idx < _keyOrder.length ? _keyOrder[idx] : '?',
-                          style: const TextStyle(
-                              color: AppColors.accent,
-                              fontWeight: FontWeight.w800,
-                              fontSize: 13),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    // 子目录名输入：删除图标内置 suffix，输入框撑满到右边界
-                    Expanded(
-                      child: _dirInputField(
-                        controller: TextEditingController(text: e.value),
-                        onChanged: (val) => _subDirs[idx] = val,
-                        onDelete: _subDirs.length > 1
-                            ? () => setState(() => _subDirs.removeAt(idx))
-                            : null,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }),
+          // 子目录行列表（AnimatedList：增删带入场/退场动画）
+          AnimatedList(
+            key: _subDirsKey,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            initialItemCount: _subDirs.length,
+            itemBuilder: (ctx, idx, animation) =>
+                _buildSubDirRow(idx, _subDirs[idx], animation),
+          ),
           // 预览路径
           const SizedBox(height: 12),
           Container(
@@ -756,6 +914,75 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
           ),
           const SizedBox(height: 16),
         ],
+      ),
+    );
+  }
+
+  /// 新增子目录行（同步数据后通知 AnimatedList 插入，触发入场动画）。
+  void _addSubDir() {
+    final newIdx = _subDirs.length;
+    setState(() => _subDirs.add(''));
+    _subDirsKey.currentState?.insertItem(newIdx);
+  }
+
+  /// 删除子目录行（保存被删行数据渲染退场动画，再移除数据）。
+  void _removeSubDir(int idx) {
+    if (_subDirs.length <= 1) return;
+    final removed = _subDirs[idx];
+    _subDirsKey.currentState?.removeItem(
+      idx,
+      (ctx, animation) => _buildSubDirRow(idx, removed, animation),
+    );
+    setState(() => _subDirs.removeAt(idx));
+  }
+
+  /// 单个子目录行（AnimatedList 入场/退场共用）：SizeTransition + FadeTransition。
+  Widget _buildSubDirRow(
+      int idx, String value, Animation<double> animation) {
+    return SizeTransition(
+      sizeFactor: animation,
+      alignment: Alignment.topCenter,
+      child: FadeTransition(
+        opacity: animation,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 快捷键标签：正方形，高度跟随输入框
+                AspectRatio(
+                  aspectRatio: 1,
+                  child: Container(
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: AppColors.accentWithOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      idx < _keyOrder.length ? _keyOrder[idx] : '?',
+                      style: const TextStyle(
+                          color: AppColors.accent,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // 子目录名输入：删除图标内置 suffix
+                Expanded(
+                  child: _dirInputField(
+                    controller: TextEditingController(text: value),
+                    onChanged: (val) => _subDirs[idx] = val,
+                    onDelete: _subDirs.length > 1
+                        ? () => _removeSubDir(idx)
+                        : null,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -954,13 +1181,16 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   }
 }
 
-/// 单个相册行（Setup 用）：左封面 + 名称（点击进相册浏览）+ 右侧勾选框
+/// 单个相册行（Setup 用）：左封面 + 名称（点击进相册浏览）+ 右侧圆点勾选。
 ///
 /// 交互分区：
 ///   - 封面缩略图 + 名称区域 → 进入相册内浏览（AlbumScreen）
-///   - 右侧 Checkbox → 勾选/取消勾选（作为源/目标相册）
-class _SetupBucketTile extends StatelessWidget {
+///   - 右侧圆点 → 勾选/取消勾选（作为源/目标相册）
+/// 选中反馈：圆点变实心 + 选中瞬间扩散波动环 + 整行 accent 淡背景高亮，
+/// 让用户清晰知道哪一行是待操作项。
+class _SetupBucketTile extends StatefulWidget {
   const _SetupBucketTile({
+    super.key,
     required this.bucket,
     required this.selected,
     required this.onCheckToggle,
@@ -970,78 +1200,160 @@ class _SetupBucketTile extends StatelessWidget {
   final VoidCallback onCheckToggle;
 
   @override
+  State<_SetupBucketTile> createState() => _SetupBucketTileState();
+}
+
+class _SetupBucketTileState extends State<_SetupBucketTile>
+    with SingleTickerProviderStateMixin {
+  // 选中波动环：selected 由 false→true 时播放一次（从圆点向外扩散并淡出）。
+  late final AnimationController _ripple = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 600),
+  );
+
+  @override
+  void didUpdateWidget(covariant _SetupBucketTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.selected && !oldWidget.selected) {
+      _ripple.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _ripple.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final selected = widget.selected;
     return Padding(
-      // vertical:4：tile 上下间距（含首尾 tile 与标题/分隔线的衔接），进一步收紧
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      // vertical:2：tile 上下间距（收紧，相邻 tile 间距 4px）
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
       child: Row(
         children: [
-          // 封面缩略图 + 名称：点击进入相册浏览
+          // 封面缩略图 + 名称：点击进入相册浏览；选中时整行 accent 淡背景高亮
           Expanded(
             child: InkWell(
               onTap: () => Navigator.pushNamed(context, AppRoutes.album,
                   arguments: {
-                    'bucketId': bucket.id,
-                    'bucketName': bucket.name,
+                    'bucketId': widget.bucket.id,
+                    'bucketName': widget.bucket.name,
+                    'bucketCount': widget.bucket.count,
                   }),
               borderRadius: BorderRadius.circular(8),
-              child: Row(
-                children: [
-                  _CoverThumb(coverId: bucket.coverId, size: 44),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          bucket.name,
-                          style: TextStyle(
-                            fontFamily: 'SpaceMono',
-                            fontFamilyFallback: AppFonts.cjkFallback,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 13,
-                            color: AppColors.text.withValues(alpha: 0.95),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOut,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    _CoverThumb(coverId: widget.bucket.coverId, size: 44),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.bucket.name,
+                            style: TextStyle(
+                              fontFamily: 'SpaceMono',
+                              fontFamilyFallback: AppFonts.cjkFallback,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              color: AppColors.text.withValues(alpha: 0.95),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const SizedBox(height: 2),
-                        Text('${bucket.count}',
-                            style: const TextStyle(
-                                fontFamily: 'SpaceMono',
-                                fontSize: 10,
-                                color: AppColors.muted)),
-                      ],
+                          const SizedBox(height: 2),
+                          Text('${widget.bucket.count}',
+                              style: const TextStyle(
+                                  fontFamily: 'SpaceMono',
+                                  fontSize: 10,
+                                  color: AppColors.muted)),
+                        ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
           const SizedBox(width: 8),
-          // 右侧勾选框（方形圆角 checkbox 样式 + 扩大热区）
+          // 圆点勾选 + 选中波动环
           InkWell(
-            onTap: onCheckToggle,
-            borderRadius: BorderRadius.circular(8),
+            onTap: widget.onCheckToggle,
+            borderRadius: BorderRadius.circular(20),
             child: Padding(
               padding:
                   const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
+              child: SizedBox(
                 width: 24,
                 height: 24,
-                decoration: BoxDecoration(
-                  color: selected ? AppColors.accent : Colors.transparent,
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(
-                    color: selected ? AppColors.accent : AppColors.muted,
-                    width: 2,
-                  ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    // 选中瞬间向外扩散的波动环（播放中才显示）
+                    AnimatedBuilder(
+                      animation: _ripple,
+                      builder: (ctx, _) {
+                        final t = _ripple.value;
+                        if (t == 0.0 || t == 1.0) {
+                          return const SizedBox.shrink();
+                        }
+                        return Container(
+                          width: 20 + t * 44,
+                          height: 20 + t * 44,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: AppColors.accent
+                                  .withValues(alpha: (1 - t) * 0.7),
+                              width: 2,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    // 圆点本体：未选空心圆，选中实心圆 + 内部 bg 小点（略放大弹出）
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
+                      width: selected ? 20 : 18,
+                      height: selected ? 20 : 18,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: selected
+                            ? AppColors.accent
+                            : Colors.transparent,
+                        border: Border.all(
+                          color:
+                              selected ? AppColors.accent : AppColors.muted,
+                          width: 2,
+                        ),
+                      ),
+                      child: selected
+                          ? Center(
+                              child: Container(
+                                width: 6,
+                                height: 6,
+                                decoration: const BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: AppColors.bg,
+                                ),
+                              ),
+                            )
+                          : null,
+                    ),
+                  ],
                 ),
-                child: selected
-                    ? const Icon(Icons.check,
-                        color: AppColors.bg, size: 18)
-                    : null,
               ),
             ),
           ),

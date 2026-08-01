@@ -79,7 +79,7 @@ class RunController {
 
     // MediaStore 批量语义：delete 和 move 决策先收集，循环结束后批量提交
     final pendingDeleteIds = <String>[];
-    final pendingDeleteFileNames = <String, String>{}; // fileId → 显示名
+    final pendingDeleteFileNames = <String, String>{}; // fileId → 显示名（label）
     // move 按 destDir(RELATIVE_PATH) 分组：<relativePath, List<fileId>>
     final pendingMoveByDest = <String, List<String>>{};
 
@@ -116,7 +116,7 @@ class RunController {
         }
         // 批量收集，不逐个删除（MediaStore createDeleteRequest 批量提交）
         pendingDeleteIds.add(imgRef.relativePath);
-        pendingDeleteFileNames[fileId] = imgRef.name;
+        pendingDeleteFileNames[fileId] = imgRef.label;
         continue;
       }
 

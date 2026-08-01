@@ -5,14 +5,17 @@ import android.app.RecoverableSecurityException
 import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.util.Log
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
@@ -24,39 +27,52 @@ import java.util.concurrent.Executors
 //
 // 对接 Dart 侧 AndroidMediaStoreFileSystem。
 // channel: "sortr/mediastore"
+// events channel: "sortr/mediastore-events"（ContentObserver 变更通知）
 //
 // 方法：
 //   listBuckets()               → 列出所有相册（id/name/count）
-//   scanImages(bucketIds, max)  → 按相册扫描图片
+//   scanImages(bucketIds, cursor) → 按相册扫描一页图片（keyset 分页）
 //   readMeta(id)                → 单图元信息
 //   readBytes(id, maxBytes)     → 读字节
+//   readThumbnail(id, w, h)     → 缩略图字节
 //   exists(id)                  → 存在性
 //   requestDelete(ids)          → 批量删除（系统弹窗确认）
+//   requestMove(ids, relPath)   → 批量改 RELATIVE_PATH
+//   getBucketRelativePath(id)   → 查相册 RELATIVE_PATH
 //   hasPermission()             → 检查 READ_MEDIA_IMAGES
 //   requestPermission()         → 请求 READ_MEDIA_IMAGES
+//   hasManageMedia()            → 检查 MANAGE_MEDIA 特殊权限
+//   requestManageMedia()        → 跳转媒体管理设置
 //
 // 关键机制：
 //   1. ActivityAware 管理生命周期
-//   2. ActivityResultListener 处理 createDeleteRequest 的系统弹窗回调
+//   2. ActivityResultListener 处理 createDeleteRequest/createWriteRequest 系统弹窗回调
 //   3. RequestPermissionsResultListener 处理权限请求回调
+//   4. EventChannel + ContentObserver：图库增删时主动通知 Dart 端刷新
 
 private const val CHANNEL = "sortr/mediastore"
+private const val EVENTS_CHANNEL = "sortr/mediastore-events"
 private const val TAG = "MsPlugin"
 
 private const val REQUEST_DELETE = 0x4D53 // "MS"
 private const val REQUEST_MOVE = 0x4D56 // "MV"
 private const val REQUEST_PERMISSION = 0x5045 // "PE"
+private const val REQUEST_FAVORITE = 0x4641 // "FA"
+private const val REQUEST_TRASH = 0x5452 // "TR"
+private const val REQUEST_RESTORE = 0x5253 // "RS"
 
 class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     PluginRegistry.ActivityResultListener,
     PluginRegistry.RequestPermissionsResultListener {
 
     private var channel: MethodChannel? = null
+    private var eventChannel: EventChannel? = null
+    private var mediaObserver: ContentObserver? = null
     private var binding: ActivityPluginBinding? = null
     private var activity: Activity? = null
     private var repository: MediaStoreRepository? = null
 
-    /// IO 线程池：图片字节/缩略图读盘放后台，避免阻塞 UI 线程导致滚动卡顿
+    /// IO 线程池：图片字节/缩略图/查询放后台，避免阻塞 UI 线程导致滚动卡顿
     private val ioExecutor = Executors.newFixedThreadPool(4)
     /// 回主线程回调 MethodChannel.Result（result 必须在主线程调用）
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -73,18 +89,49 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     /// 待处理的权限请求
     private var pendingPermissionResult: Result? = null
 
+    /// 待处理的收藏请求（弹窗异步，P1b）
+    private var pendingFavoriteResult: Result? = null
+
+    /// 待处理的回收站/恢复请求（弹窗异步，P1a）
+    private var pendingTrashResult: Result? = null
+    private var pendingRestoreResult: Result? = null
+
     // ──────────── FlutterPlugin 生命周期 ────────────
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel = MethodChannel(binding.binaryMessenger, CHANNEL).also {
             it.setMethodCallHandler(this)
         }
-        Log.i(TAG, "MediaStorePlugin 已附加（channel=$CHANNEL）")
+        val resolver = binding.applicationContext.contentResolver
+        // EventChannel：ContentObserver 变更通知。Dart 订阅后图库变化收到结构化事件，
+        // 触发精准增量刷新（P1c：insert/update/delete + id/bucketId）。
+        val streamHandler = MediaChangeStreamHandler(resolver)
+        eventChannel = EventChannel(binding.binaryMessenger, EVENTS_CHANNEL).also {
+            it.setStreamHandler(streamHandler)
+        }
+        // 注册 ContentObserver 监听 MediaStore.Images 变化。
+        // observer 回调绑定到 mainHandler（主线程），收到变更时带 uri 转发给 streamHandler 分类。
+        mediaObserver = object : ContentObserver(mainHandler) {
+            override fun onChange(selfChange: Boolean, uri: android.net.Uri?) {
+                streamHandler.notifyChanged(uri)
+            }
+        }.also { observer ->
+            // notifyForDescendants=true：子 URI（单图）变更也通知，确保删图能被捕获
+            resolver.registerContentObserver(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, observer
+            )
+        }
+        Log.i(TAG, "MediaStorePlugin 已附加（channel=$CHANNEL, events=$EVENTS_CHANNEL）")
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        // 注销 ContentObserver
+        mediaObserver?.let { binding.applicationContext.contentResolver.unregisterContentObserver(it) }
+        mediaObserver = null
         channel?.setMethodCallHandler(null)
         channel = null
+        eventChannel?.setStreamHandler(null)
+        eventChannel = null
         ioExecutor.shutdownNow()
     }
 
@@ -156,6 +203,36 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 }
                 return true
             }
+            REQUEST_FAVORITE -> {
+                val pending = pendingFavoriteResult ?: return true
+                pendingFavoriteResult = null
+                if (resultCode == Activity.RESULT_OK) {
+                    pending.success(true)
+                } else {
+                    pending.error(MsError.FavoriteCancelled.code, MsError.FavoriteCancelled.message, null)
+                }
+                return true
+            }
+            REQUEST_TRASH -> {
+                val pending = pendingTrashResult ?: return true
+                pendingTrashResult = null
+                if (resultCode == Activity.RESULT_OK) {
+                    pending.success(true)
+                } else {
+                    pending.error(MsError.TrashCancelled.code, MsError.TrashCancelled.message, null)
+                }
+                return true
+            }
+            REQUEST_RESTORE -> {
+                val pending = pendingRestoreResult ?: return true
+                pendingRestoreResult = null
+                if (resultCode == Activity.RESULT_OK) {
+                    pending.success(true)
+                } else {
+                    pending.error(MsError.RestoreCancelled.code, MsError.RestoreCancelled.message, null)
+                }
+                return true
+            }
         }
         return false
     }
@@ -181,17 +258,45 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             "listBuckets" -> handleListBuckets(call, result)
             "scanImages" -> handleScanImages(call, result)
             "readMeta" -> handleReadMeta(call, result)
+            "getMetadata" -> handleGetMetadata(call, result)
             "readBytes" -> handleReadBytes(call, result)
             "readThumbnail" -> handleReadThumbnail(call, result)
             "exists" -> handleExists(call, result)
             "requestDelete" -> handleRequestDelete(call, result)
             "getBucketRelativePath" -> handleGetBucketRelativePath(call, result)
             "requestMove" -> handleRequestMove(call, result)
+            "requestFavorite" -> handleRequestFavorite(call, result)
+            "requestTrash" -> handleRequestTrash(call, result)
+            "requestRestore" -> handleRequestRestore(call, result)
             "hasPermission" -> result.success(hasReadPermission())
             "requestPermission" -> handleRequestPermission(result)
             "hasManageMedia" -> result.success(hasManageMediaPermission())
             "requestManageMedia" -> handleRequestManageMedia(result)
             else -> result.notImplemented()
+        }
+    }
+
+    // ──────────── 元数据 EXIF（P0）────────────
+
+    private fun handleGetMetadata(call: MethodCall, result: Result) {
+        val repo = repository
+        if (repo == null) {
+            result.error(MsError.InvalidArg("Repository 未就绪").code, null, null); return
+        }
+        val id = call.argument<String>("id")
+        if (id.isNullOrEmpty()) {
+            result.error(MsError.InvalidArg("id 为空").code, null, null); return
+        }
+        ioExecutor.execute {
+            val md = try {
+                repo.getMetadata(id)
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.MetadataFailed(e.message ?: "未知错误").code, e.message, null)
+                }
+                return@execute
+            }
+            mainHandler.post { result.success(md) }
         }
     }
 
@@ -274,12 +379,18 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         if (!hasReadPermission()) {
             result.error(MsError.PermissionDenied.code, MsError.PermissionDenied.message, null); return
         }
-        val sortBy = call.argument<String>("sortBy") ?: "dateTaken"
+        val sortBy = call.argument<String>("sortBy") ?: "dateCreated"
         val asc = call.argument<Boolean>("asc") ?: false
-        try {
-            result.success(repo.listBuckets(sortBy, asc).map { it.toMap() })
-        } catch (e: Exception) {
-            result.error(MsError.QueryFailed("listBuckets 异常: ${e.message}").code, e.message, null)
+        // 全表扫描 + 内存聚合，放后台线程避免主线程卡顿（图库上万张时 100ms+）
+        ioExecutor.execute {
+            try {
+                val buckets = repo.listBuckets(sortBy, asc)
+                mainHandler.post { result.success(buckets.map { it.toMap() }) }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("listBuckets 异常: ${e.message}").code, e.message, null)
+                }
+            }
         }
     }
 
@@ -292,14 +403,132 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         }
         @Suppress("UNCHECKED_CAST")
         val bucketIds = (call.argument<List<String>>("bucketIds") ?: emptyList())
-        val max = call.argument<Int>("max") ?: 2000
-        val offset = call.argument<Int>("offset") ?: 0
-        val sortBy = call.argument<String>("sortBy") ?: "dateTaken"
+        val afterCursor = call.argument<String>("afterCursor")
+        val limit = call.argument<Int>("limit") ?: 60
+        val sortBy = call.argument<String>("sortBy") ?: "dateCreated"
         val asc = call.argument<Boolean>("asc") ?: false
-        try {
-            result.success(repo.scanImages(bucketIds, max, offset, sortBy, asc).map { it.toMap() })
+        val favoritesOnly = call.argument<Boolean>("favoritesOnly") ?: false
+        val trashedOnly = call.argument<Boolean>("trashedOnly") ?: false
+        // 扫描放后台线程：大相册 cursor 遍历耗时，主线程会掉帧
+        ioExecutor.execute {
+            try {
+                val page = repo.scanImages(bucketIds, afterCursor, limit, sortBy, asc, favoritesOnly, trashedOnly)
+                mainHandler.post { result.success(page.toMap()) }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("scanImages 异常: ${e.message}").code, e.message, null)
+                }
+            }
+        }
+    }
+
+    // ──────────── 收藏（P1b）────────────
+
+    private fun handleRequestFavorite(call: MethodCall, result: Result) {
+        val act = activity ?: run {
+            result.error(MsError.InvalidArg("Activity 未绑定").code, null, null); return
+        }
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            result.error(MsError.FavoriteUnsupported.code, MsError.FavoriteUnsupported.message, null); return
+        }
+        @Suppress("UNCHECKED_CAST")
+        val ids = (call.argument<List<String>>("ids") ?: emptyList())
+        val favorite = call.argument<Boolean>("favorite") ?: true
+        if (ids.isEmpty()) {
+            result.success(true); return
+        }
+        if (pendingFavoriteResult != null) {
+            result.error(MsError.InvalidArg("已有收藏请求进行中").code, null, null); return
+        }
+        val intentSender = try {
+            repo.requestFavorite(ids, favorite)
         } catch (e: Exception) {
-            result.error(MsError.QueryFailed("scanImages 异常: ${e.message}").code, e.message, null)
+            result.error(MsError.QueryFailed("requestFavorite 异常: ${e.message}").code, e.message, null); return
+        }
+        if (intentSender == null) {
+            result.success(true); return
+        }
+        pendingFavoriteResult = result
+        try {
+            act.startIntentSenderForResult(intentSender, REQUEST_FAVORITE, null, 0, 0, 0)
+        } catch (e: Exception) {
+            pendingFavoriteResult = null
+            result.error(MsError.QueryFailed("启动收藏弹窗失败: ${e.message}").code, e.message, null)
+        }
+    }
+
+    // ──────────── 回收站（P1a）────────────
+
+    private fun handleRequestTrash(call: MethodCall, result: Result) {
+        val act = activity ?: run {
+            result.error(MsError.InvalidArg("Activity 未绑定").code, null, null); return
+        }
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            result.error(MsError.TrashUnsupported.code, MsError.TrashUnsupported.message, null); return
+        }
+        @Suppress("UNCHECKED_CAST")
+        val ids = (call.argument<List<String>>("ids") ?: emptyList())
+        if (ids.isEmpty()) {
+            result.success(true); return
+        }
+        if (pendingTrashResult != null) {
+            result.error(MsError.InvalidArg("已有回收站请求进行中").code, null, null); return
+        }
+        val intentSender = try {
+            repo.requestTrash(ids)
+        } catch (e: Exception) {
+            result.error(MsError.QueryFailed("requestTrash 异常: ${e.message}").code, e.message, null); return
+        }
+        if (intentSender == null) {
+            result.error(MsError.TrashUnsupported.code, MsError.TrashUnsupported.message, null); return
+        }
+        pendingTrashResult = result
+        try {
+            act.startIntentSenderForResult(intentSender, REQUEST_TRASH, null, 0, 0, 0)
+        } catch (e: Exception) {
+            pendingTrashResult = null
+            result.error(MsError.QueryFailed("启动回收站弹窗失败: ${e.message}").code, e.message, null)
+        }
+    }
+
+    private fun handleRequestRestore(call: MethodCall, result: Result) {
+        val act = activity ?: run {
+            result.error(MsError.InvalidArg("Activity 未绑定").code, null, null); return
+        }
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            result.error(MsError.TrashUnsupported.code, MsError.TrashUnsupported.message, null); return
+        }
+        @Suppress("UNCHECKED_CAST")
+        val ids = (call.argument<List<String>>("ids") ?: emptyList())
+        if (ids.isEmpty()) {
+            result.success(true); return
+        }
+        if (pendingRestoreResult != null) {
+            result.error(MsError.InvalidArg("已有恢复请求进行中").code, null, null); return
+        }
+        val intentSender = try {
+            repo.requestRestore(ids)
+        } catch (e: Exception) {
+            result.error(MsError.QueryFailed("requestRestore 异常: ${e.message}").code, e.message, null); return
+        }
+        if (intentSender == null) {
+            result.error(MsError.TrashUnsupported.code, MsError.TrashUnsupported.message, null); return
+        }
+        pendingRestoreResult = result
+        try {
+            act.startIntentSenderForResult(intentSender, REQUEST_RESTORE, null, 0, 0, 0)
+        } catch (e: Exception) {
+            pendingRestoreResult = null
+            result.error(MsError.QueryFailed("启动恢复弹窗失败: ${e.message}").code, e.message, null)
         }
     }
 
@@ -311,12 +540,17 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         if (id.isNullOrBlank()) {
             result.error(MsError.InvalidArg("id 缺失").code, null, null); return
         }
-        try {
-            result.success(repo.readMeta(id).toMap())
-        } catch (e: MsError) {
-            result.error(e.code, e.message, null)
-        } catch (e: Exception) {
-            result.error(MsError.QueryFailed("readMeta 异常: ${e.message}").code, e.message, null)
+        ioExecutor.execute {
+            try {
+                val meta = repo.readMeta(id)
+                mainHandler.post { result.success(meta.toMap()) }
+            } catch (e: MsError) {
+                mainHandler.post { result.error(e.code, e.message, null) }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("readMeta 异常: ${e.message}").code, e.message, null)
+                }
+            }
         }
     }
 
@@ -377,10 +611,13 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         if (id.isNullOrBlank()) {
             result.error(MsError.InvalidArg("id 缺失").code, null, null); return
         }
-        try {
-            result.success(repo.exists(id))
-        } catch (e: Exception) {
-            result.success(false)
+        ioExecutor.execute {
+            val exists = try {
+                repo.exists(id)
+            } catch (e: Exception) {
+                false
+            }
+            mainHandler.post { result.success(exists) }
         }
     }
 
@@ -429,11 +666,15 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         if (bucketId.isNullOrBlank()) {
             result.error(MsError.InvalidArg("bucketId 缺失").code, null, null); return
         }
-        try {
-            val path = repo.getBucketRelativePath(bucketId)
-            result.success(path)
-        } catch (e: Exception) {
-            result.error(MsError.QueryFailed("getBucketRelativePath 异常: ${e.message}").code, e.message, null)
+        ioExecutor.execute {
+            try {
+                val path = repo.getBucketRelativePath(bucketId)
+                mainHandler.post { result.success(path) }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("getBucketRelativePath 异常: ${e.message}").code, e.message, null)
+                }
+            }
         }
     }
 
@@ -473,5 +714,103 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         } catch (e: Exception) {
             result.error(MsError.QueryFailed("requestMove 异常: ${e.message}").code, e.message, null)
         }
+    }
+}
+
+// ───────────────────────── MediaStore 变更事件流 ─────────────────────────
+
+/// EventChannel StreamHandler：把 ContentObserver 的变更通知转发给 Dart 端。
+///
+/// 工作流：
+///   1. Dart 订阅 events channel → onListen 保存 sink
+///   2. ContentObserver.onChange 触发 → notifyChanged() 经 mainHandler 发 "changed" 事件
+///   3. Dart 取消订阅 → onCancel 清空 sink
+///
+/// 防抖：MediaStore 单次操作（如批量删除）可能触发多次 onChange，
+/// 用 300ms 防抖合并，避免 Dart 端短时间重复刷新。
+class MediaChangeStreamHandler(private val resolver: android.content.ContentResolver) :
+    EventChannel.StreamHandler {
+    private var sink: EventChannel.EventSink? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val pendingUris = mutableSetOf<android.net.Uri>()
+    private var pendingRefresh = false
+    private var debounceToken: Any? = null
+    private val ioPool = Executors.newSingleThreadExecutor()
+
+    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+        sink = events
+    }
+
+    override fun onCancel(arguments: Any?) {
+        sink = null
+    }
+
+    /// 由 ContentObserver 调用。防抖 300ms 后分类并发送结构化事件（P1c）。
+    /// [uri] 为 null（非 item 级变更）或无法解析 → 全量 refresh 兜底。
+    /// 分类启发式（移植自 photo_manager PhotoManagerNotifyChannel）：
+    ///   查不到行 → delete；now - DATE_ADDED < 30s → insert；否则 update。
+    fun notifyChanged(uri: android.net.Uri?) {
+        synchronized(this) {
+            if (uri != null) pendingUris.add(uri) else pendingRefresh = true
+        }
+        val token = Object()
+        debounceToken = token
+        mainHandler.postDelayed({
+            if (token !== debounceToken || sink == null) return@postDelayed
+            val (uris, refresh) = synchronized(this) {
+                val u = pendingUris.toList()
+                pendingUris.clear()
+                val r = pendingRefresh
+                pendingRefresh = false
+                u to r
+            }
+            // 后台分类（查 MediaStore 行），主线程推送 sink
+            ioPool.execute {
+                val events = if (refresh || uris.isEmpty() || uris.size > 20) {
+                    listOf(mapOf<String, Any?>("type" to "refresh"))
+                } else {
+                    classify(uris)
+                }
+                mainHandler.post {
+                    if (sink != null) for (e in events) sink?.success(e)
+                }
+            }
+        }, 300)
+    }
+
+    private fun classify(uris: List<android.net.Uri>): List<Map<String, Any?>> {
+        val result = mutableListOf<Map<String, Any?>>()
+        val nowSec = System.currentTimeMillis() / 1000
+        for (uri in uris) {
+            val id = uri.lastPathSegment
+            val longId = id?.toLongOrNull()
+            if (id.isNullOrEmpty() || longId == null) {
+                // 非数字 id（collection 级 uri）→ 全量刷新兜底
+                return listOf(mapOf<String, Any?>("type" to "refresh"))
+            }
+            val itemUri = android.content.ContentUris.withAppendedId(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
+            )
+            try {
+                var found = false
+                resolver.query(
+                    itemUri,
+                    arrayOf(MediaStore.Images.Media.DATE_ADDED, MediaStore.Images.Media.BUCKET_ID),
+                    null, null, null
+                )?.use { c ->
+                    if (c.moveToFirst()) {
+                        found = true
+                        val da = if (c.isNull(0)) 0L else c.getLong(0)
+                        val bid = if (c.isNull(1)) null else c.getString(1)
+                        val type = if (nowSec - da < 30) "insert" else "update"
+                        result.add(mapOf<String, Any?>("type" to type, "id" to id, "bucketId" to bid))
+                    }
+                }
+                if (!found) result.add(mapOf<String, Any?>("type" to "delete", "id" to id))
+            } catch (e: Exception) {
+                return listOf(mapOf<String, Any?>("type" to "refresh"))
+            }
+        }
+        return if (result.isEmpty()) listOf(mapOf<String, Any?>("type" to "refresh")) else result
     }
 }

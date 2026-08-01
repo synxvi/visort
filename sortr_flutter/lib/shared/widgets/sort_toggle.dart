@@ -47,8 +47,8 @@ class SortToggle extends ConsumerWidget {
       itemBuilder: (ctx) => [
         // ── 维度段 ──
         _dimItem(ref, 'name', SortBy.name),
-        _dimItem(ref, 'date_taken', SortBy.dateTaken),
-        _dimItem(ref, 'date_added', SortBy.dateAdded),
+        _dimItem(ref, 'date_created', SortBy.dateCreated),
+        _dimItem(ref, 'date_modified', SortBy.dateModified),
         // 自定义暗色分隔线（PopupMenuDivider 默认过亮）
         PopupMenuItem<String>(
           enabled: false,
@@ -84,8 +84,8 @@ class SortToggle extends ConsumerWidget {
     switch (by) {
       case SortBy.name:
         return Icons.sort_by_alpha;
-      case SortBy.dateTaken:
-      case SortBy.dateAdded:
+      case SortBy.dateCreated:
+      case SortBy.dateModified:
         return Icons.access_time;
     }
   }

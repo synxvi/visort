@@ -124,15 +124,21 @@ const Map<String, String> stringsZh = {
   'gallery_title': '相册',
   'album_sort': '排序',
   'sort_by_name': '按名称',
-  'sort_by_date_taken': '按拍摄日期',
-  'sort_by_date_added': '按入库日期',
+  'sort_by_date_created': '按创建日期',
+  'sort_by_date_modified': '按修改日期',
   'sort_asc': '升序',
   'sort_desc': '降序',
   'photo_count': '{0} 张',
   'album_empty': '相册为空',
-  'photo_taken_at': '拍摄',
-  'photo_added_at': '入库',
+  'today': '今天',
+  'yesterday': '昨天',
+  'photo_created_at': '创建',
+  'photo_modified_at': '修改',
   'photo_size': '大小',
+  'photo_dimensions': '分辨率',
+  'photo_type': '类型',
+  'photo_filename': '文件名',
+  'photo_details': '详情',
   'delete_photo': '删除',
   'delete_confirm': '确认删除这张图片？',
 
@@ -184,4 +190,46 @@ const Map<String, String> stringsZh = {
   'conn_interrupt': '执行过程中连接中断',
   'exec_failed': '执行失败',
   'source_missing': '源文件已缺失',
+
+  // ───────── P0 · 照片元数据（EXIF）─────────
+  'meta_section_exif': '元数据',
+  'meta_make': '相机厂商',
+  'meta_model': '型号',
+  'meta_software': '软件',
+  'meta_aperture': '光圈',
+  'meta_exposure': '曝光时间',
+  'meta_iso': 'ISO',
+  'meta_focal': '焦距',
+  'meta_date_taken': '拍摄时间',
+  'meta_orientation': '方向',
+  'meta_lat': '纬度',
+  'meta_lng': '经度',
+
+  // ───────── P1b · 收藏 ─────────
+  'action_favorite': '收藏',
+  'action_unfavorite': '取消收藏',
+  'favorited': '已收藏',
+  'unfavorited': '已取消收藏',
+  'favorite_failed': '收藏操作失败',
+  'favorites_title': '收藏',
+  'favorites_empty': '还没有收藏的照片',
+
+  // ───────── P1a · 回收站 ─────────
+  'trash_title': '回收站',
+  'trash_empty': '回收站为空',
+  'action_trash': '移到回收站',
+  'action_restore': '恢复',
+  'confirm_trash': '移到回收站？',
+  'trashed': '已移到回收站',
+  'restored': '已恢复',
+  'restore_failed': '恢复失败',
+  'trash_unsupported': '回收站需要 Android 10+',
+
+  // ───────── 通用 · 相册管理 ─────────
+  'gallery_manage': '相册管理',
+
+  // ───────── P1a · 回收站对话框 ─────────
+  'trash_item_title': '回收站选项',
+  'trash_confirm_desc': '可从回收站恢复。',
+  'delete_permanently': '彻底删除',
 };

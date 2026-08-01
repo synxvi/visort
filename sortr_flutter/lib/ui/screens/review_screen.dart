@@ -12,7 +12,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sortr_flutter/core/i18n/i18n.dart';
 import 'package:sortr_flutter/core/theme/app_colors.dart';
 import 'package:sortr_flutter/features/review/review_controller.dart';
-import 'package:sortr_flutter/features/session/session_models.dart';
 import 'package:sortr_flutter/shared/widgets/kbd_badge.dart';
 import 'package:sortr_flutter/ui/router.dart';
 

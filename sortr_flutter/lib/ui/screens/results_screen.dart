@@ -129,7 +129,7 @@ class _DoneView extends ConsumerWidget {
                 const SizedBox(height: 16),
                 Text(t(ref, 'done'),
                     style: const TextStyle(
-                        fontFamily: 'Syne', fontFamilyFallback: AppFonts.cjkFallback,
+                        fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
                         fontWeight: FontWeight.w800,
                         fontSize: 32)),
                 const SizedBox(height: 8),

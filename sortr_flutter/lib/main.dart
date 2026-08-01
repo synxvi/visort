@@ -11,6 +11,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
@@ -26,6 +27,10 @@ Future<void> main() async {
   if (Platform.isWindows) {
     await _setupWindows();
   } else if (Platform.isAndroid) {
+    // 启用 edge-to-edge：内容绘制延伸到状态栏 / 导航栏（手势条）下方，
+    // 系统栏透明叠加。让图片等全屏内容在物理屏幕正中央居中，而非被
+    // 状态栏占位挤偏。桌面端无系统栏，此调用为 no-op。
+    _enableEdgeToEdge();
     // SharedPreferences 预热改为后台执行，不阻塞首帧。
     // 它的初始化结果直到 SetupScreen 首次真正读写 prefs 时才被需要，
     // 而那发生在首帧绘制之后的 postFrameCallback 里，晚于 runApp。
@@ -81,6 +86,22 @@ Future<void> _setupWindows() async {
 }
 
 // ───────────────────────── Android 初始化 ─────────────────────────
+
+/// 启用边到边（沉浸式）布局：内容画到物理屏幕边缘，系统栏透明叠加。
+///
+/// Android 15+ 已强制 edge-to-edge；这里显式开启以兼容更低版本并让
+/// 全屏看图器（PhotoViewer）中的图片在物理屏幕正中央居中，而非被
+/// 实色状态栏挤偏。深色 App 用亮色系统栏图标。
+void _enableEdgeToEdge() {
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarDividerColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light, // 深底白字
+    systemNavigationBarIconBrightness: Brightness.light,
+  ));
+}
 
 Future<void> _setupAndroid() async {
   // 预热 shared_preferences（首次访问会异步初始化，提前做避免后续访问 jank）。

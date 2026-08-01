@@ -54,21 +54,21 @@ class MediaStoreRepository(private val context: Context) {
     ///
     /// coverId 策略：sortOrder 按指定维度排，游标遍历时每个 bucket 的首条
     /// 即为该排序下的第一张，聚合时保留其 _ID 作为 coverId。
-    fun listBuckets(sortBy: String = "dateTaken", asc: Boolean = false): List<MsBucket> {
+    fun listBuckets(sortBy: String = "dateCreated", asc: Boolean = false): List<MsBucket> {
         val buckets = mutableListOf<MsBucket>()
         val projection = arrayOf(
             MediaStore.Images.Media.BUCKET_ID,
             MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
             MediaStore.Images.Media._ID,
-            MediaStore.Images.Media.DATE_TAKEN,
             MediaStore.Images.Media.DATE_ADDED,
+            MediaStore.Images.Media.DATE_MODIFIED,
             MediaStore.Images.Media.DISPLAY_NAME,
         )
         // 构造 sortOrder：决定每个相册封面（首条）的排序基准
         val sortColumn = when (sortBy) {
             "name" -> MediaStore.Images.Media.DISPLAY_NAME
-            "dateAdded" -> MediaStore.Images.Media.DATE_ADDED
-            else -> MediaStore.Images.Media.DATE_TAKEN
+            "dateModified" -> MediaStore.Images.Media.DATE_MODIFIED
+            else -> MediaStore.Images.Media.DATE_ADDED   // dateCreated 及未知值
         }
         val sortDir = if (asc) "ASC" else "DESC"
         try {
@@ -79,23 +79,33 @@ class MediaStoreRepository(private val context: Context) {
                 val idxId = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_ID)
                 val idxName = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
                 val idxCover = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-                // 用 Map 聚合：bucketId → (name, count, coverId)
-                // coverId 仅首次遇到时记录（游标按指定排序遍历，首条 = 该排序下第一张）
-                data class Agg(val name: String, var count: Int, val coverId: String?)
+                val idxDateAdded = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+                val idxDateModified = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
+                // 聚合：bucketId → (name, count, coverId, minDateAdded=创建, maxDateModified=修改)
+                // coverId 仅在 getOrPut 首次创建时记录（首条 = 该排序下第一张）
+                data class Agg(
+                    val name: String, var count: Int, val coverId: String?,
+                    var minDateAdded: Long = Long.MAX_VALUE, var maxDateModified: Long = 0L,
+                )
                 val agg = mutableMapOf<String, Agg>()
                 while (cursor.moveToNext()) {
                     val bid = cursor.getString(idxId) ?: continue
                     val bname = cursor.getString(idxName) ?: "Unknown"
                     val coverId = cursor.getString(idxCover)
-                    val cur = agg[bid]
-                    if (cur == null) {
-                        agg[bid] = Agg(bname, 1, coverId)
-                    } else {
-                        cur.count++
-                    }
+                    val dateAdded = if (cursor.isNull(idxDateAdded)) 0L else cursor.getLong(idxDateAdded) * 1000
+                    val dateModified = if (cursor.isNull(idxDateModified)) 0L else cursor.getLong(idxDateModified) * 1000
+                    val cur = agg.getOrPut(bid) { Agg(bname, 0, coverId) }
+                    cur.count++
+                    if (dateAdded > 0 && dateAdded < cur.minDateAdded) cur.minDateAdded = dateAdded
+                    if (dateModified > cur.maxDateModified) cur.maxDateModified = dateModified
                 }
                 agg.forEach { (id, a) ->
-                    buckets.add(MsBucket(id = id, name = a.name, count = a.count, coverId = a.coverId))
+                    buckets.add(MsBucket(
+                        id = id, name = a.name, count = a.count,
+                        dateCreatedMs = if (a.minDateAdded == Long.MAX_VALUE) 0L else a.minDateAdded,
+                        dateModifiedMs = a.maxDateModified,
+                        coverId = a.coverId,
+                    ))
                 }
                 // 按数量降序（符合相册 App 习惯：大相册在前）
                 buckets.sortByDescending { it.count }
@@ -107,80 +117,179 @@ class MediaStoreRepository(private val context: Context) {
         return buckets
     }
 
-    // ──────────── 扫描图片 ────────────
+    // ──────────── 扫描图片（keyset 分页） ────────────
 
-    /// 按 bucket id 列表扫描图片，返回 List<MsImageInfo>。
-    /// [bucketIds] 为空表示扫全部。
-    /// [offset] 为跳过的条数（用于相册浏览分页：游标 moveToPosition 跳过前 offset 条）。
+    /// 按 bucket id 列表扫描一页图片（keyset 游标分页）。
+    ///
+    /// keyset 分页用「上一页最后一条的 (排序值, _ID)」作为下一页的 WHERE 起点，
+    /// 天然免疫条目增删导致的偏移（offset 分页在删除后会重复/跳过）。
+    ///
+    /// 排序恒为复合 `(sortColumn, _ID)`，保证同排序值内顺序稳定。
+    ///
+    /// @param bucketIds 为空表示扫全部
+    /// @param afterCursor 上一页返回的 nextCursor（"sortValue|id"），null = 第一页
+    /// @param limit 本页上限（默认 60）
+    /// @return [ScanPage]：本页图片 + 下一页游标（null = 无更多）
     fun scanImages(
         bucketIds: List<String>,
-        max: Int = 2000,
-        offset: Int = 0,
-        sortBy: String = "dateTaken",
+        afterCursor: String? = null,
+        limit: Int = 60,
+        sortBy: String = "dateCreated",
         asc: Boolean = false,
-    ): List<MsImageInfo> {
+        favoritesOnly: Boolean = false,
+        trashedOnly: Boolean = false,
+    ): ScanPage {
         val results = mutableListOf<MsImageInfo>()
-        val projection = arrayOf(
-            MediaStore.Images.Media._ID,
-            MediaStore.Images.Media.DISPLAY_NAME,
-            MediaStore.Images.Media.SIZE,
-            MediaStore.Images.Media.MIME_TYPE,
-            MediaStore.Images.Media.BUCKET_ID,
-            MediaStore.Images.Media.DATE_ADDED,
-            MediaStore.Images.Media.DATE_TAKEN,
-        )
-        // selection：按 bucket id 过滤
-        val (selection, args) = if (bucketIds.isEmpty()) {
-            null to null
-        } else {
-            val placeholders = bucketIds.joinToString(",") { "?" }
-            "${MediaStore.Images.Media.BUCKET_ID} IN ($placeholders)" to bucketIds.toTypedArray()
-        }
-        // 排序：跟随「相册内排序」(photoSortBy)，与 listBuckets 封面取首张的排序基准严格一致，
-        // 保证首页封面 = 进相册看到的第一张。
-        //   name → DISPLAY_NAME，dateAdded → DATE_ADDED，else → DATE_TAKEN
+        // 多查一列 _ID 用作 keyset 二级排序键；sortColumn 用于游标比较
+        val projection = ArrayList<String>().apply {
+            add(MediaStore.Images.Media._ID)
+            add(MediaStore.Images.Media.DISPLAY_NAME)
+            add(MediaStore.Images.Media.SIZE)
+            add(MediaStore.Images.Media.MIME_TYPE)
+            add(MediaStore.Images.Media.BUCKET_ID)
+            add(MediaStore.Images.Media.DATE_ADDED)
+            add(MediaStore.Images.Media.DATE_MODIFIED)
+            // IS_FAVORITE 仅 Android R+ 存在；低版本不加该列，解析时 getColumnIndex 返回 -1 当 false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                add(MediaStore.Images.Media.IS_FAVORITE)
+                add(MediaStore.Images.Media.IS_TRASHED)
+            }
+        }.toTypedArray()
         val sortColumn = when (sortBy) {
             "name" -> MediaStore.Images.Media.DISPLAY_NAME
-            "dateAdded" -> MediaStore.Images.Media.DATE_ADDED
-            else -> MediaStore.Images.Media.DATE_TAKEN
+            "dateModified" -> MediaStore.Images.Media.DATE_MODIFIED
+            else -> MediaStore.Images.Media.DATE_ADDED   // dateCreated 及未知值
         }
-        val sortDir = if (asc) "ASC" else "DESC"
-        val sortOrder = "$sortColumn $sortDir"
 
+        // selection：bucket 过滤 + keyset 游标条件（复合 (sortColumn, _ID) 比较）
+        val (selBuilder, argsList) = buildList<Pair<StringBuilder, MutableList<String>>> {
+            val sb = StringBuilder()
+            val args = mutableListOf<String>()
+            if (bucketIds.isNotEmpty()) {
+                val placeholders = bucketIds.joinToString(",") { "?" }
+                sb.append("${MediaStore.Images.Media.BUCKET_ID} IN ($placeholders)")
+                args.addAll(bucketIds)
+            }
+            // 收藏过滤（P1b）：仅查 IS_FAVORITE=1（Android R+）
+            if (favoritesOnly && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (sb.isNotEmpty()) sb.append(" AND ")
+                sb.append("${MediaStore.Images.Media.IS_FAVORITE} = 1")
+            }
+            // 回收站过滤（P1a）：默认排除(IS_TRASHED=0)；trashedOnly 仅查回收站(IS_TRASHED=1)。Android R+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (sb.isNotEmpty()) sb.append(" AND ")
+                sb.append("${MediaStore.Images.Media.IS_TRASHED} = ${if (trashedOnly) 1 else 0}")
+            }
+            // keyset 游标：解析 "sortValue|id"，构造复合比较
+            //   ASC  → (col > ?) OR (col = ? AND _ID > ?)
+            //   DESC → (col < ?) OR (col = ? AND _ID < ?)
+            // name 排序时 sortValue 是字符串；时间排序时是秒级整数（以字符串传，SQLite 会做类型转换）
+            val parsed = parseCursor(afterCursor)
+            if (parsed != null) {
+                if (sb.isNotEmpty()) sb.append(" AND ")
+                sb.append("(")
+                if (asc) {
+                    sb.append("($sortColumn > ?) OR ($sortColumn = ? AND ${MediaStore.Images.Media._ID} > ?)")
+                } else {
+                    sb.append("($sortColumn < ?) OR ($sortColumn = ? AND ${MediaStore.Images.Media._ID} < ?)")
+                }
+                sb.append(")")
+                args.add(parsed.sortValue)
+                args.add(parsed.sortValue)
+                args.add(parsed.id)
+            }
+            add(sb to args)
+        }.first()
+
+        // 排序：复合 (sortColumn, _ID)，方向一致。
+        // 注意：MediaStore ContentResolver 的 sortOrder 参数不支持 LIMIT 关键字
+        // （真机会报 "Invalid token LIMIT"）。分页靠 keyset WHERE 条件 + 循环读 limit 条停止；
+        // 多读一条用于判断 hasMore。
+        val dir = if (asc) "ASC" else "DESC"
+        val sortOrder = "$sortColumn $dir, ${MediaStore.Images.Media._ID} $dir"
+
+        var nextCursor: String? = null
         try {
-            contentResolver.query(collection, projection, selection, args, sortOrder)?.use { cursor ->
+            val sel = selBuilder.toString().ifEmpty { null }
+            val selArgs = argsList.toTypedArray().ifEmpty { null }
+            val queryBundle = android.os.Bundle().apply {
+                if (sel != null) {
+                    putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, sel)
+                    putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selArgs)
+                }
+                putString(android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sortOrder)
+                // 回收站视图需显式包含回收站项（默认 query 排除 IS_TRASHED=1）
+                if (trashedOnly && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+                }
+            }
+            contentResolver.query(collection, projection, queryBundle, null)?.use { cursor ->
                 val idxId = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
                 val idxName = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
                 val idxSize = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
                 val idxMime = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
                 val idxBucket = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_ID)
                 val idxDate = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
-                val idxDateTaken = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+                val idxDateModified = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
+                val idxSort = cursor.getColumnIndexOrThrow(sortColumn)
+                val idxFav = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                    cursor.getColumnIndex(MediaStore.Images.Media.IS_FAVORITE) else -1
+                val idxTrash = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                    cursor.getColumnIndex(MediaStore.Images.Media.IS_TRASHED) else -1
 
-                // 分页：跳过前 offset 条（moveToPosition 越界安全，返回 false）
-                if (offset > 0 && !cursor.move(offset)) {
-                    // offset 超出总数，无更多数据
-                    return@use
-                }
-                while (cursor.moveToNext() && results.size < max) {
+                var lastSortRaw = ""
+                var lastId = ""
+                // 读最多 limit 条。循环内 moveToNext 推进；返回 false（无更多）则 break。
+                // 这样读满 limit 条时 cursor 停在第 limit 条，退出后用 moveToNext 判断
+                // 是否存在第 limit+1 条（决定 hasMore）。
+                while (results.size < limit && cursor.moveToNext()) {
                     val id = cursor.getString(idxId) ?: continue
                     val name = cursor.getString(idxName) ?: continue
                     val size = if (cursor.isNull(idxSize)) 0L else cursor.getLong(idxSize)
                     val mime = cursor.getString(idxMime) ?: "image/*"
                     val bucketId = cursor.getString(idxBucket) ?: ""
                     val dateAdded = if (cursor.isNull(idxDate)) 0L else cursor.getLong(idxDate) * 1000
-                    // DATE_TAKEN 为毫秒级（与 DATE_ADDED 的秒级不同）；为空时回退到入库日期
-                    val dateTaken = if (cursor.isNull(idxDateTaken)) dateAdded
-                    else cursor.getLong(idxDateTaken)
-                    results.add(MsImageInfo(id, name, size, mime, bucketId, dateAdded, dateTaken))
+                    val dateModified = if (cursor.isNull(idxDateModified)) dateAdded
+                    else cursor.getLong(idxDateModified) * 1000
+                    val isFavorite = idxFav >= 0 && !cursor.isNull(idxFav) && cursor.getInt(idxFav) == 1
+                    val isTrashed = idxTrash >= 0 && !cursor.isNull(idxTrash) && cursor.getInt(idxTrash) == 1
+                    results.add(MsImageInfo(id, name, size, mime, bucketId, dateAdded, dateModified, isFavorite, isTrashed))
+                    lastSortRaw = cursor.getString(idxSort) ?: ""
+                    lastId = id
+                }
+                // 读满 limit 条后，cursor 停在第 limit 条。moveToNext 若 true，说明存在
+                // 第 limit+1 条 → 有下一页；游标用本页最后一条（lastSortRaw/lastId）。
+                if (results.size == limit && cursor.moveToNext() && results.isNotEmpty()) {
+                    nextCursor = encodeCursor(lastSortRaw, lastId)
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "scanImages 异常: ${e.message}")
         }
-        Log.i(TAG, "scanImages: 共 ${results.size} 张图片（offset=$offset, 上限 $max, sortBy=$sortBy, asc=$asc）")
-        return results
+        Log.i(TAG, "scanImages: 本页 ${results.size} 张（limit=$limit, cursor=$afterCursor, hasMore=${nextCursor != null}, sortBy=$sortBy, asc=$asc）")
+        return ScanPage(results, nextCursor)
     }
+
+    /// 解析 keyset 游标 "sortValue|id"。
+    private fun parseCursor(cursor: String?): CursorKey? {
+        if (cursor.isNullOrEmpty()) return null
+        val sep = cursor.indexOf('|')
+        if (sep <= 0 || sep >= cursor.length - 1) return null
+        return CursorKey(cursor.substring(0, sep), cursor.substring(sep + 1))
+    }
+
+    private fun encodeCursor(sortValue: String, id: String): String = "$sortValue|$id"
+
+    private data class CursorKey(val sortValue: String, val id: String)
+
+    /// keyset 分页结果（图片列表 + 下一页游标）。
+    data class ScanPage(val images: List<MsImageInfo>, val nextCursor: String?) {
+        fun toMap(): Map<String, Any?> = mapOf(
+            "images" to images.map { it.toMap() },
+            "nextCursor" to nextCursor,
+        )
+    }
+
 
     // ──────────── 单图元信息 ────────────
 
@@ -210,6 +319,126 @@ class MediaStoreRepository(private val context: Context) {
             Log.w(TAG, "readMeta 异常: ${e.message}")
         }
         throw MsError.QueryFailed("无法读取图片元信息: $id")
+    }
+
+    // ──────────── 完整元数据 EXIF/GPS（P0）────────────
+
+    /// 提取单图的完整元数据（EXIF/GPS/相机参数）。
+    ///
+    /// 优先用 AndroidX ExifInterface 读 JPEG/TIFF EXIF（朝向/GPS/时间/相机参数）；
+    /// 若无 EXIF（如 PNG/RAW）则用 metadata-extractor 兜底多格式（IPTC/XMP/PNG）。
+    /// 返回分组：{ "EXIF": {Make,Model,...}, "GPS": {Latitude,Longitude}, ... }。
+    /// API<Q、流打开失败或格式不支持时返回 emptyMap（不抛错，调用方按空处理）。
+    /// 移植自 aves MetadataFetchHandler + photo_manager IDBUtils.getExif。
+    fun getMetadata(id: String): Map<String, Map<String, String>> {
+        val longId = id.toLongOrNull() ?: return emptyMap()
+        val uri = ContentUris.withAppendedId(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
+        )
+        val result = mutableMapOf<String, MutableMap<String, String>>()
+
+        // 1) ExifInterface 读 JPEG EXIF + GPS
+        try {
+            contentResolver.openInputStream(uri)?.use { input ->
+                val exif = androidx.exifinterface.media.ExifInterface(input)
+                val exifGroup = result.getOrPut("EXIF") { mutableMapOf() }
+                fun put(key: String, v: String?) {
+                    if (!v.isNullOrEmpty()) exifGroup[key] = v
+                }
+                put("Make", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MAKE))
+                put("Model", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MODEL))
+                put("Software", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_SOFTWARE))
+                put("FNumber", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_F_NUMBER))
+                put("ExposureTime", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_EXPOSURE_TIME))
+                put("ISO", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY))
+                put("FocalLength", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_FOCAL_LENGTH))
+                put("DateTime", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME_ORIGINAL))
+                put("Orientation", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION))
+                val latLng = exif.latLong
+                if (latLng != null) {
+                    val gps = result.getOrPut("GPS") { mutableMapOf() }
+                    gps["Latitude"] = latLng[0].toString()
+                    gps["Longitude"] = latLng[1].toString()
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "getMetadata ExifInterface 失败: ${e.message}")
+        }
+
+        // 2) metadata-extractor 兜底（无 EXIF 的格式）。仅当 ExifInterface 未取到字段时启用。
+        if (result.isEmpty()) {
+            try {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    val md = com.drew.imaging.ImageMetadataReader.readMetadata(input)
+                    for (directory in md.directories) {
+                        val g = result.getOrPut(directory.name) { mutableMapOf() }
+                        for (tag in directory.tags) {
+                            if (!g.containsKey(tag.tagName)) {
+                                g[tag.tagName] = tag.description ?: ""
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "getMetadata metadata-extractor 失败: ${e.message}")
+            }
+        }
+        return result
+    }
+
+    // ──────────── 收藏/取消收藏（P1b）────────────
+
+    /// 构造批量收藏/取消收藏请求（Android R+）。
+    /// favorite=true 收藏，false 取消。返回 IntentSender（系统弹窗确认）；
+    /// <R 返回 null（不支持）。移植自 photo_manager PhotoManagerFavoriteManager。
+    fun requestFavorite(ids: List<String>, favorite: Boolean): IntentSender? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        if (ids.isEmpty()) return null
+        val uris = ids.mapNotNull { id ->
+            val longId = id.toLongOrNull() ?: return@mapNotNull null
+            ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId)
+        }
+        return try {
+            MediaStore.createFavoriteRequest(contentResolver, uris, favorite).intentSender
+        } catch (e: Exception) {
+            Log.w(TAG, "requestFavorite 失败: ${e.message}")
+            null
+        }
+    }
+
+    // ──────────── 回收站（P1a）────────────
+
+    /// 构造批量移入回收站请求（Android R+）。返回 IntentSender（系统弹窗确认）；不支持返回 null。
+    /// 移植自 photo_manager PhotoManagerDeleteManager.moveToTrashInApi30。
+    fun requestTrash(ids: List<String>): IntentSender? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        if (ids.isEmpty()) return null
+        val uris = ids.mapNotNull { id ->
+            val longId = id.toLongOrNull() ?: return@mapNotNull null
+            ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId)
+        }
+        return try {
+            MediaStore.createTrashRequest(contentResolver, uris, true).intentSender
+        } catch (e: Exception) {
+            Log.w(TAG, "requestTrash 失败: ${e.message}")
+            null
+        }
+    }
+
+    /// 构造批量从回收站恢复请求（Android R+）。
+    fun requestRestore(ids: List<String>): IntentSender? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        if (ids.isEmpty()) return null
+        val uris = ids.mapNotNull { id ->
+            val longId = id.toLongOrNull() ?: return@mapNotNull null
+            ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId)
+        }
+        return try {
+            MediaStore.createTrashRequest(contentResolver, uris, false).intentSender
+        } catch (e: Exception) {
+            Log.w(TAG, "requestRestore 失败: ${e.message}")
+            null
+        }
     }
 
     // ──────────── 读取字节 ────────────
@@ -495,11 +724,6 @@ class MediaStoreRepository(private val context: Context) {
         // 用空 values + 选中项 selection 来触发权限检查
         return try {
             val cv = android.content.ContentValues() // 空 values，update 只触发权限检查不实际修改
-            contentResolver.update(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv,
-                "${MediaStore.Images.Media._ID} IN (${ids.joinToString(",")})", null
-            )
-            null
             contentResolver.update(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv,
                 "${MediaStore.Images.Media._ID} IN (${ids.joinToString(",")})", null

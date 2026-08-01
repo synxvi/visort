@@ -46,7 +46,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
         foregroundColor: AppColors.text,
         title: Text(t(ref, 'gallery_title'),
             style: const TextStyle(
-                fontFamily: 'Syne',
+                fontFamily: 'SpaceMono',
                 fontWeight: FontWeight.w800,
                 fontSize: 18)),
         actions: [
@@ -91,20 +91,87 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
       );
     }
     final buckets = gallery.sortedBuckets;
-    if (buckets.isEmpty) {
-      return Center(
-          child: Text(t(ref, 'no_albums'),
-              style: const TextStyle(color: AppColors.muted)));
-    }
     return RefreshIndicator(
       color: AppColors.accent,
       onRefresh: () =>
           ref.read(galleryControllerProvider.notifier).loadBuckets(),
       child: ListView.builder(
         padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: buckets.length,
-        itemBuilder: (ctx, i) => _AlbumTile(bucket: buckets[i]),
+        itemCount: buckets.length + 2,
+        itemBuilder: (ctx, i) {
+          if (i == 0) return const _FavoritesTile();
+          if (i == 1) return const _TrashTile();
+          return _AlbumTile(bucket: buckets[i - 2]);
+        },
       ),
+    );
+  }
+}
+
+/// 「收藏」入口行（P1b）：置顶于相册列表，进入跨相册收藏视图。
+class _FavoritesTile extends ConsumerWidget {
+  const _FavoritesTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          color: AppColors.danger.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Icon(Icons.favorite, color: AppColors.danger, size: 24),
+      ),
+      title: Text(
+        t(ref, 'favorites_title'),
+        style: const TextStyle(
+          color: AppColors.text,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          fontFamilyFallback: ['SpaceMono'],
+        ),
+      ),
+      trailing:
+          const Icon(Icons.chevron_right, color: AppColors.muted, size: 20),
+      onTap: () => Navigator.pushNamed(context, AppRoutes.album,
+          arguments: const {'favoritesOnly': true}),
+    );
+  }
+}
+
+/// 「回收站」入口行（P1a）：进入跨相册回收站视图（IS_TRASHED=1）。
+class _TrashTile extends ConsumerWidget {
+  const _TrashTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          color: AppColors.muted.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Icon(Icons.delete_outline, color: AppColors.muted, size: 24),
+      ),
+      title: Text(
+        t(ref, 'trash_title'),
+        style: const TextStyle(
+          color: AppColors.text,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          fontFamilyFallback: ['SpaceMono'],
+        ),
+      ),
+      trailing:
+          const Icon(Icons.chevron_right, color: AppColors.muted, size: 20),
+      onTap: () => Navigator.pushNamed(context, AppRoutes.album,
+          arguments: const {'trashedOnly': true}),
     );
   }
 }
@@ -118,7 +185,11 @@ class _AlbumTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return InkWell(
       onTap: () => Navigator.pushNamed(context, AppRoutes.album,
-          arguments: {'bucketId': bucket.id, 'bucketName': bucket.name}),
+          arguments: {
+            'bucketId': bucket.id,
+            'bucketName': bucket.name,
+            'bucketCount': bucket.count,
+          }),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(

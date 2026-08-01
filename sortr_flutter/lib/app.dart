@@ -9,6 +9,15 @@ import 'core/theme/app_theme.dart';
 import 'core/theme/noise_overlay.dart';
 import 'ui/router.dart';
 
+/// 噪点 overlay 不套用的路由（相册浏览相关）。
+/// 这些页面有大面积滚动列表/全屏看图，每帧全屏 alpha 合成会拖慢渲染；
+/// 且「看照片」时颗粒质感无意义，故绕过。见 currentRouteName 说明。
+const _noiseDisabledRoutes = {
+  AppRoutes.gallery,
+  AppRoutes.album,
+  AppRoutes.photoViewer,
+};
+
 class SortrApp extends ConsumerWidget {
   const SortrApp({super.key});
 
@@ -31,8 +40,20 @@ class SortrApp extends ConsumerWidget {
       ],
       initialRoute: AppRoutes.setup,
       onGenerateRoute: onGenerateRoute,
+      // 记录当前活动路由名，供 builder 判断是否套噪点
+      navigatorObservers: [RouteNameObserver()],
       builder: (context, child) {
-        return WithNoise(child: child ?? const SizedBox.shrink());
+        final content = child ?? const SizedBox.shrink();
+        // 监听当前路由变化，相册浏览相关路由不套噪点（性能 + 观感）
+        return AnimatedBuilder(
+          animation: currentRouteName,
+          builder: (context, _) {
+            final route = currentRouteName.value;
+            final enabled =
+                route == null || !_noiseDisabledRoutes.contains(route);
+            return enabled ? WithNoise(child: content) : content;
+          },
+        );
       },
     );
   }

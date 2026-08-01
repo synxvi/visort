@@ -167,12 +167,6 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       appBar: AppBar(
         title: _buildLogo(),
         actions: [
-          // 仅 Android + debug：A0 SAF PoC demo 入口（A2 后移除）
-          if (shouldShowSafDemoEntry())
-            TextButton(
-              onPressed: () => Navigator.pushNamed(context, AppRoutes.safDemo),
-              child: const Text('SAF', style: TextStyle(fontFamily: 'SpaceMono')),
-            ),
           TextButton(
             onPressed: () => setLanguage(
                 ref, ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh'),

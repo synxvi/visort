@@ -42,7 +42,15 @@ class SortScreen extends ConsumerWidget {
     // 安卓端无物理键盘，跳过 WindowsKeyboardHandler；两端布局分叉
     final useAndroidLayout = Platform.isAndroid;
     final scaffold = Scaffold(
+      // 安卓端：全屏沉浸——图片铺满物理屏幕在正中央居中，
+      // AppBar 与底栏作为透明浮层叠加，不挤占图片空间。
+      extendBodyBehindAppBar: useAndroidLayout,
       appBar: AppBar(
+        // 安卓端 AppBar 透明叠加在图片之上；桌面端保持实色 header。
+        backgroundColor:
+            useAndroidLayout ? Colors.transparent : AppColors.headerBg,
+        forceMaterialTransparency: useAndroidLayout,
+        elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.pushNamedAndRemoveUntil(
@@ -70,17 +78,25 @@ class SortScreen extends ConsumerWidget {
     return scaffold;
   }
 
-  /// 安卓布局：全屏图（上）+ 底部横滑目标按钮（下）
+  /// 安卓布局：全屏图片（物理居中）+ 底部操作栏浮层 + 顶部文件名/进度浮层。
+  ///
+  /// edge-to-edge 沉浸式：图片铺满整个 Scaffold body（含 AppBar 区与手势条区），
+  /// 在物理屏幕正中央居中（BoxFit.contain）；AppBar、文件名、底栏均作为透明
+  /// 浮层叠加，不再挤占图片空间 → 图片不再偏下。
   Widget _buildAndroidLayout(SessionState session) {
-    return SafeArea(
-      child: Column(
-        children: [
-          // 图片区占满主区域
-          Expanded(child: _ImageArea(session: session)),
-          // 底部操作栏
-          _AndroidBottomBar(session: session),
-        ],
-      ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // 底层：图片本体，铺满全屏，在物理屏幕正中央居中
+        _FullscreenImage(session: session),
+        // 顶层：底部操作栏（Positioned 在底，自带底部 inset 避让手势条）
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: _AndroidBottomBar(session: session),
+        ),
+      ],
     );
   }
 
@@ -195,7 +211,7 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
           child: Row(
             children: [
               Expanded(
-                child: Text(img.name,
+                child: Text(img.label,
                     style: const TextStyle(
                         fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
                         fontSize: 13,
@@ -250,6 +266,195 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
             ),
           ),
       ],
+    );
+  }
+}
+
+// ───────────── 全屏图片区（安卓沉浸式）─────────────
+
+/// 安卓 sort 屏的全屏图片：铺满物理屏幕在正中央居中（BoxFit.contain），
+/// 文件名/进度与元信息作为半透明浮层叠加在顶部/底部，不挤占图片空间。
+class _FullscreenImage extends ConsumerStatefulWidget {
+  const _FullscreenImage({required this.session});
+  final SessionState session;
+
+  @override
+  ConsumerState<_FullscreenImage> createState() => _FullscreenImageState();
+}
+
+class _FullscreenImageState extends ConsumerState<_FullscreenImage> {
+  ImageMeta? _meta;
+  bool _loadError = false;
+  String? _currentImgId;
+
+  @override
+  void didUpdateWidget(_FullscreenImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final img = widget.session.currentImage;
+    final newId = img?.id;
+    if (newId != _currentImgId) {
+      _currentImgId = newId;
+      _loadError = false;
+      _meta = null;
+      _loadMeta(img);
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final img = widget.session.currentImage;
+    _currentImgId = img?.id;
+    _loadMeta(img);
+  }
+
+  void _loadMeta(ImageRef? img) async {
+    if (img == null) return;
+    final fs = ref.read(fileSystemRepositoryProvider);
+    try {
+      final meta = await fs.readMeta(img);
+      if (mounted) setState(() => _meta = meta);
+      final session = ref.read(sessionControllerProvider);
+      if (session.hasNext) {
+        final next = session.images[session.currentIndex + 1];
+        if (mounted) precacheNextImage(context, next);
+      }
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = widget.session;
+    final img = session.currentImage;
+
+    // 已处理完 → 引导去 Review
+    if (img == null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(t(ref, 'review_title'), style: const TextStyle(fontSize: 18)),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: () => Navigator.pushNamed(context, AppRoutes.review),
+              child: Text(t(ref, 'review_go')),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // 顶部 inset：避开状态栏 + AppBar 高度，让文件名浮层落在 AppBar 下方。
+    final topInset = MediaQuery.viewPaddingOf(context).top;
+    // AppBar 标准高度 56；用 SliverAppBar 可变高度较复杂，这里用固定值足够。
+    const appBarHeight = 56.0;
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // 图片本体：铺满全屏，物理居中
+        _loadError
+            ? Center(
+                child: Text(t(ref, 'preview_na'),
+                    style: const TextStyle(color: AppColors.muted)))
+            : Image(
+                image: buildImageProvider(img),
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+                errorBuilder: (ctx, error, stack) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) setState(() => _loadError = true);
+                  });
+                  return const SizedBox.shrink();
+                },
+              ),
+        // 顶部文件名 + 进度浮层（避开状态栏 + AppBar）
+        Positioned(
+          left: 0,
+          right: 0,
+          top: topInset + appBarHeight + 8,
+          child: IgnorePointer(
+            child: _TopInfoOverlay(
+              name: img.label,
+              progress: '${session.currentIndex + 1} / ${session.totalCount}',
+              meta: _meta == null
+                  ? null
+                  : [
+                      _meta!.sizeLabel,
+                      '${t(ref, 'created')}${_meta!.createdLabel}',
+                      '${t(ref, 'modified')}${_meta!.modifiedLabel}',
+                    ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 顶部信息浮层：文件名 + 进度 + 元信息，半透明胶囊，不拦截触摸。
+class _TopInfoOverlay extends StatelessWidget {
+  const _TopInfoOverlay({required this.name, required this.progress, this.meta});
+  final String name;
+  final String progress;
+  final List<String>? meta;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.45),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontFamily: 'SpaceMono',
+                            fontFamilyFallback: AppFonts.cjkFallback,
+                            fontSize: 12,
+                            color: AppColors.text)),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(progress,
+                      style: const TextStyle(
+                          fontFamily: 'SpaceMono',
+                          fontFamilyFallback: AppFonts.cjkFallback,
+                          fontSize: 12,
+                          color: AppColors.muted)),
+                ],
+              ),
+              if (meta != null && meta!.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 2,
+                  children: meta!
+                      .map((m) => Text(m,
+                          style: const TextStyle(
+                              fontFamily: 'SpaceMono',
+                              fontFamilyFallback: AppFonts.cjkFallback,
+                              fontSize: 10,
+                              color: AppColors.muted)))
+                      .toList(),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -491,12 +696,15 @@ class _AndroidBottomBar extends ConsumerWidget {
     // 选「根目录」会导致 Kotlin update 返回 0 行 → 移动失败。故此模式不显示根目录。
     final isToAlbum = ref.watch(configProvider
         .select((c) => c.activeProfileData.classifyMode == ClassifyMode.toAlbum));
+    // edge-to-edge：补底部导航栏/手势条高度，让底栏内容不被遮挡、
+    // 背景延伸到屏幕物理底边。
+    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
     return Container(
       decoration: const BoxDecoration(
         color: AppColors.bg,
         border: Border(top: BorderSide(color: AppColors.border)),
       ),
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+      padding: EdgeInsets.fromLTRB(8, 8, 8, 8 + bottomInset),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
