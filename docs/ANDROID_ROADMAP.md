@@ -321,3 +321,93 @@ A4 真机实测（OnePlus PJZ110 / ColorOS / Android 16）暴露了 SAF 方案�
 - 本文档随每次里程碑完成更新「现状基线」与「里程碑」章节
 - 每条共识变更必须记录理由（不删除原条目，标记 `~~旧~~` 并追加新条目）
 - A4 完成后，本文档归档为 `docs/ANDROID_ROADMAP_v1.md`，开启 v2（上架版）路线图
+
+---
+
+## 7. v2 架构定型：相册为重点（2026-07-31）
+
+> 安卓版重新定位为 **「相册快速整理 + 现代相册浏览」**——不只是一个分类工具，本身就要是一个流畅美观的相册应用。
+> 相册功能成为开发重心，本章节把支撑它的架构决策钉死，作为后续相册迭代的基准。
+
+### 7.1 产品定位修订
+
+| 维度 | v1（A0–A4） | v2（本章起） |
+|---|---|---|
+| 定位 | 图片分类工具 | **相册应用**（含浏览/整理） |
+| 相册浏览 | 仅 setup 内联勾选列表 | 独立的 gallery/album 两级浏览 + 全屏 viewer |
+| 实时性 | 快照式（进页面才查） | ContentObserver 实时刷新 |
+| 分页 | offset（有错位 bug） | keyset 游标法 |
+| 可测试 | 相册逻辑无单测 | GalleryController 8 个单测覆盖 |
+
+### 7.2 双数据通路（正式定调，不再试图统一）
+
+相册与分类是**两条并列的数据通路**，对应不同的领域模型，长期共存：
+
+```
+分类流程:  UI → session/run controllers → FileSystemRepository(契约)
+             → AndroidMediaStoreFileSystem → MediaStoreChannel → Kotlin
+             数据模型: ImageRef(root/relativePath/extension/displayName)
+             relativePath = MediaStore _ID（决策字典 key）
+
+相册流程:  UI → GalleryController(Notifier) → MediaStoreChannel 直连 → Kotlin
+             数据模型: MsImageInfo(id/name/size/mime/dateAddedMs/dateModifiedMs)
+             渲染时由 UI 把 id 包成 ImageRef(imageRefFromMediaStoreId)
+```
+
+**不要把相册塞进 `FileSystemRepository`**——该契约的语义是「目录 + 相对路径」，与相册（bucket + _ID）本质不同，硬塞会扭曲契约。相册需要富模型（日期/尺寸/MIME），`ImageRef` 太薄。
+
+### 7.3 v2 共识（19–25）
+
+| # | 决策 | 理由 |
+|---|---|---|
+| 19 | **分页**：keyset 游标法（`afterCursor` = 上一页末条的 sortValue+\|+id），取代 offset | offset 在删除/新增后会错位（重复或跳过）；keyset 天然免疫，是相册 App 标准做法 |
+| 20 | **ContentObserver 实时刷新**：Kotlin 注册 `MediaStore.Images.Media.EXTERNAL_CONTENT_URI` observer，经 EventChannel（`sortr/mediastore-events`）推 Dart，300ms 防抖，静默刷新 | 系统相册都是实时的；其他 app 拍新照/删图时本 app 自动更新列表 |
+| 21 | **MediaStoreChannel 可注入**：`mediaStoreChannelProvider`（Provider），GalleryController 经 ref.read 取得；测试 override 注入 fake | 解除相册逻辑的测试盲区（v1 相册零单测） |
+| 22 | **查询全后台线程**：Kotlin 侧 listBuckets/scanImages/readMeta/exists/getBucketRelativePath 全部走 `ioExecutor`（4 线程池）+ mainHandler 回传 | listBuckets 是全表扫描+内存聚合，上万张时主线程卡 100ms+ 掉帧 |
+| 23 | **ImageRef.displayName**：新增可选字段，安卓从 DISPLAY_NAME 带入；UI 统一用 `label` getter（优先 displayName 回退 name） | 安卓下 `name` 取 relativePath 末段 = _ID 数字，不可读；sort 屏顶部/详情需真实文件名 |
+| 24 | **类型化错误**：`MsException` + `MsErrorCode` 枚举（与 Kotlin `MsError.code` 对齐），取代通用 Exception 字符串 | UI 可据 code 分支（权限引导 vs 重试） |
+| 25 | **PhotoViewer 分页联动**：viewer 接收 `onLoadMore`/`hasMore`，滚动接近末尾（剩 <5 张）触发，新数据经 didUpdateWidget 合并 | v1 viewer 只能看已加载页（每页 60），大相册滑不到底 |
+
+### 7.4 文件结构（v2 现状）
+
+```
+sortr_flutter/
+├─ lib/
+│  ├─ core/fs/
+│  │  ├─ file_system_repository.dart   # 契约（分类通路）
+│  │  ├─ android_mediastore_file_system.dart  # 分类通路实现
+│  │  ├─ mediastore_channel.dart       # channel 客户端（双通路共用，可注入）
+│  │  ├─ mediastore_events.dart        # [新] ContentObserver EventChannel
+│  │  ├─ image_loader.dart             # ImageProvider + 缩略图 provider
+│  │  └─ image_ref.dart                # [改] +displayName/label
+│  └─ features/gallery/
+│     └─ gallery_controller.dart       # [改] channel 注入 + keyset + observer 订阅
+│  └─ ui/screens/
+│     ├─ gallery_screen.dart           # 相册列表
+│     ├─ album_screen.dart             # [改] 相册网格（拆分后仅网格 + 入口）
+│     ├─ photo_viewer.dart             # [新] 全屏 viewer（分页联动）
+│     ├─ photo_details_sheet.dart      # [新] 详情抽屉
+│     └─ album_common.dart             # [新] 共享辅助（extOf/formatSize/...）
+└─ android/.../mediastore/
+   ├─ MediaStorePlugin.kt              # [改] EventChannel + 全后台线程
+   └─ MediaStoreRepository.kt          # [改] keyset 分页 + 修 buildWriteRequest bug
+```
+
+### 7.5 v2 已交付清单（2026-07-31）
+
+- ✅ keyset 分页（Dart + Kotlin），修复 offset 删除错位 bug
+- ✅ ContentObserver + EventChannel 实时刷新（300ms 防抖，静默）
+- ✅ Kotlin 全查询移后台线程
+- ✅ MediaStoreChannel 可注入 + `gallery_controller_test.dart`（8 cases）
+- ✅ ImageRef.displayName（修安卓显示 _ID 数字）
+- ✅ MsException 类型化错误码
+- ✅ PhotoViewer 分页联动（大相册一路滑到底）
+- ✅ album_screen.dart 拆分（825→3 文件，单一职责）
+- ✅ 清理 SAF 死代码（content_uri_image_provider / android_saf / saf_channel / saf_demo + Kotlin saf 包）
+- ✅ 修 Kotlin `buildWriteRequest` 复制粘贴 bug
+- ✅ `flutter analyze` 0 error、`flutter test` 52 通过、Android debug APK 构建通过
+
+### 7.6 §5.5 SAF 备选条款的修订
+
+§5.5 原记「A0/A1 的 SAF 代码保留为备选（不删除）」——**v2 撤销此条款**。SAF 全套代码（Dart `android_saf_file_system` / `saf_channel` / `content_uri_image_provider` / `saf_demo_screen` + Kotlin `saf/` 包）已删除。理由：MediaStore 已是安卓相册/图片的唯一通路，SAF 代码长期零引用、零维护，保留徒增认知负担与死代码；如未来确需非媒体文件场景，重新引入比维护一套僵尸代码成本更低。
+

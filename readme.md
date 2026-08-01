@@ -2,14 +2,14 @@
 
 # SORTR
 
-**Keyboard-Driven Desktop Image Organizer**
+**Keyboard-Driven Image & Album Organizer** — Desktop + Android
 
 Browse photos one by one, sort them into folders with a single keypress. Nothing moves until you confirm.
 
 [**中文文档**](README_zh.md)
 
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/)
-[![Flask](https://img.shields.io/badge/Flask-3.x-green)](https://flask.palletsprojects.com/)
+[![Flutter](https://img.shields.io/badge/Flutter-3.44%2B-blue)](https://flutter.dev)
+[![Dart](https://img.shields.io/badge/Dart-3.12%2B-0175C2)](https://dart.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -18,37 +18,50 @@ Browse photos one by one, sort them into folders with a single keypress. Nothing
 
 ## Why SORTR?
 
-Hundreds of photos piling up in one folder? SORTR lets you sort them as fast as you can type — left hand on shortcuts, eyes on the image. A few minutes to archive hundreds of photos into the right folders.
+Hundreds of photos piling up in one folder? SORTR lets you sort them as fast as you can react — eyes on the image, one key per decision. A few minutes to archive hundreds of photos into the right places.
 
-**Core principle: all operations are staged first, executed only on confirmation.** No accidental deletes, no accidental moves.
+**Core principle: every operation is staged first, executed only on confirmation.** No accidental deletes, no accidental moves.
+
+## Platforms
+
+| Platform | Status | Highlights |
+|---|---|---|
+| **Windows desktop** | Stable · feature-complete | Keyboard-driven sorting, window-state persistence |
+| **Android** | Active development | MediaStore album browser + sorter; the album/gallery experience is the current focus |
+
+The active codebase is the **Flutter app** in [`sortr_flutter/`](sortr_flutter/). The Python/Flask app at the repo root is the legacy build (still shipped via Releases — see [Archive](#legacy-archive)).
 
 ## Features
 
-- **Keyboard First** — Move / delete / skip with single keys, no mouse needed
-- **Custom Shortcuts** — Remap folder keys, undo, delete, skip freely
-- **Multiple Profiles** — Save and switch between sorting schemes
-- **Drag & Reorder** — Drag to rearrange target subdirectories
+- **Keyboard First** — Move / delete / skip with single keys (Windows); tap targets (Android)
+- **Staged Execution** — Every move/delete queues in memory; nothing touches the filesystem until you hit Run
+- **Album Browser** (Android) — Keyset-paginated MediaStore gallery, live ContentObserver refresh, fullscreen viewer
+- **Two Sort Modes** (Android) — Move into an existing album, or into custom sub-folders
 - **Review Before Run** — Full stats of pending operations before execution
-- **Bilingual UI** — Chinese / English toggle, auto-saved
-- **Import Subdirectories** — One-click import existing folders as targets
+- **Bilingual UI** — Chinese / English, auto-saved
 - **Conflict Handling** — Auto-appends numeric suffix on name collision
-- **Directory Memory** — Remembers last used source and target directories
-- **Single-File Build** — Double-click to run, no installer needed
+- **No Code Generation** — Hand-written immutable models throughout
 
-## Quick Start
+## Quick Start (Flutter)
 
-### Download
-
-Grab the latest release from [Releases](https://github.com/synxvi/sortr/releases), double-click to run.
-
-### Run from Source
+Requires [Flutter ≥ 3.44](https://flutter.dev) (Dart ≥ 3.12).
 
 ```bash
 git clone https://github.com/synxvi/sortr.git
-cd sortr
-pip install -r requirements.txt
-python app.py
+cd sortr/sortr_flutter
+flutter pub get
+flutter run -d windows        # Windows desktop
+flutter run -d android        # Android device/emulator
 ```
+
+Build:
+
+```bash
+flutter build windows --release   # → build/windows/x64/runner/Release/
+flutter build apk --release       # → build/app/outputs/flutter-apk/
+```
+
+> Android release builds currently sign with debug keys (no production keystore yet).
 
 ## Workflow
 
@@ -56,32 +69,40 @@ python app.py
 Setup → Sort → Review → Run
 ```
 
-1. **Setup** — Choose source & target directories, customize folders and shortcuts
-2. **Sort** — Browse images one by one:
-
-   | Action | Key |
-   |---|---|
-   | Move to subfolder | `A` `S` `D` ... |
-   | Move to root | `Space` |
-   | Delete | `X` (configurable) |
-   | Skip | `C` (configurable) |
-   | Undo | `Z` (configurable) |
-
-3. **Review** — Inspect staged operations with stats and details
-4. **Run** — Confirm to apply all operations at once
+1. **Setup** — Pick a source (album on Android, directory on Windows), set target folders
+2. **Sort** — Decide per image: move to a folder, move to root, delete, or skip
+3. **Review** — Inspect staged operations with stats
+4. **Run** — Confirm to apply all at once
 
 ## Supported Formats
 
-JPG · PNG · GIF · BMP · WEBP · TIFF · SVG · ICO · HEIC · HEIF · AVIF · CR2 · NEF · ARW · DNG
+18 formats: JPG · PNG · GIF · BMP · WEBP · TIFF · TIF · SVG · ICO · HEIC · HEIF · RAW · CR2 · NEF · ARW · DNG · AVIF
 
 ## Tech Stack
 
 | Layer | Technology |
 |---|---|
-| Backend | Flask (Python 3.9+) |
-| Frontend | Vanilla JS SPA |
-| Packaging | PyInstaller |
-| Window | pywebview |
+| UI / logic | Flutter (Dart ≥ 3.12), Riverpod ^2.6.1 |
+| Android native | Kotlin + MediaStore (MethodChannel + EventChannel + ContentObserver) |
+| Windows native | CMake runner (C++17) |
+| Tests | `flutter_test`, 52 unit cases |
+| State | Staged in memory, no DB |
+
+## Legacy Archive
+
+The original implementation is a Python/Flask single-file app (`app.py` + `index.html`, packaged via PyInstaller). It is **frozen — no new features** — but still ships from [Releases](https://github.com/synxvi/sortr/releases) for v1.2.x.
+
+```bash
+pip install -r requirements.txt
+python app.py
+pyinstaller sortr.spec --noconfirm --clean   # → dist/sortr-windows.exe
+```
+
+## Documentation
+
+- [`AGENTS.md`](AGENTS.md) — authoritative architecture & development guide
+- [`docs/ANDROID_ROADMAP.md`](docs/ANDROID_ROADMAP.md) — Android port decisions (A0–A4, SAF→MediaStore, v2 album)
+- [`sortr_flutter/README.md`](sortr_flutter/README.md) — Flutter app quick-start
 
 ## License
 
