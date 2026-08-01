@@ -44,13 +44,26 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
   Future<ScanResult> scanImages(List<String> roots,
       {required bool recursive}) async {
     // roots = bucket id 列表（recursive 在 MediaStore 无意义）
+    // 分类流程需全量扫描：循环分页直到耗尽（limit 大以减少 round-trip）。
     try {
-      final infos = await _channel.scanImages(roots);
+      final all = <MsImageInfo>[];
+      String? cursor;
+      do {
+        final page = await _channel.scanImages(
+          roots,
+          afterCursor: cursor,
+          limit: 1000,
+        );
+        all.addAll(page.images);
+        cursor = page.nextCursor;
+      } while (cursor != null);
+      final infos = all;
       final images = infos
           .map((info) => ImageRef(
                 root: kImagesAuthority,
                 relativePath: info.id, // _ID 作为决策字典 key
                 extension: _extensionOf(info.name),
+                displayName: info.name, // 真实文件名（DISPLAY_NAME）
               ))
           .toList(growable: false);
       // 按 _ID 排序（与桌面端 relativePath 排序语义对齐）

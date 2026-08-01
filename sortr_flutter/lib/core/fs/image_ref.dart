@@ -10,6 +10,12 @@
 //   - 安卓 MediaStore: root = `content://media/external/images/media`（authority 常量），
 //     relativePath = MediaStore `_ID`（行 id，跨重启稳定的决策字典 key）
 // [id] = relativePath，作为 decisions 的 key（与 Python 版语义一致）。
+//
+// [displayName]：用户可见文件名（含扩展名）。
+//   - Windows = 恒为 null（调用方用 [name] 即可，name 取 relativePath 末段）
+//   - 安卓 MediaStore = 真实 DISPLAY_NAME（如 "IMG_20240101.jpg"）。
+//     不能用 [name]——安卓下 name 取 relativePath 末段 = _ID 数字，不可读。
+//     由 MediaStore scanImages 从 MsImageInfo.name 带入。UI 统一走 [label]。
 
 import 'package:path/path.dart' as p;
 
@@ -18,6 +24,7 @@ class ImageRef {
     required this.root,
     required this.relativePath,
     required this.extension,
+    this.displayName,
   });
 
   /// 根目录标识。Windows = 文件路径；安卓 = tree URI 字符串
@@ -30,11 +37,23 @@ class ImageRef {
   /// 小写扩展名（含点，如 '.jpg'）
   final String extension;
 
+  /// 用户可见文件名（安卓从 DISPLAY_NAME 带入；Windows 恒为 null）。
+  /// null 时调用方应回退到 [name]。UI 统一用 [label]。
+  final String? displayName;
+
   /// 唯一标识 = 相对路径
   String get id => relativePath;
 
-  /// 文件名（含扩展名）
+  /// 文件名（含扩展名）—— 桌面端 = relativePath 末段。
+  ///
+  /// 注意：安卓 MediaStore 下 relativePath 是 _ID 数字，故此 getter 返回数字，
+  /// 不是文件名。安卓 UI 应优先用 [displayName] / [label]。
   String get name => p.split(relativePath).last;
+
+  /// 用户可见文件名：优先 [displayName]，回退 [name]。两端通用。
+  String get label => (displayName != null && displayName!.isNotEmpty)
+      ? displayName!
+      : name;
 
   /// 供 Desktop 实现拼接完整路径用
   String absolutePathOn(String rootPath) => p.join(rootPath, relativePath);

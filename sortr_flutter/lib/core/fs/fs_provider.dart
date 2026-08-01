@@ -2,7 +2,7 @@
 // Windows/macOS/linux → DesktopFileSystem
 // Android            → AndroidMediaStoreFileSystem（platform channel → MediaStore）
 //
-// 注：A0-A3 的 AndroidSafFileSystem 已标 deprecated，保留备用（非媒体文件场景）
+// （SAF 方案的 AndroidSafFileSystem 已移除——MediaStore 是当前安卓相册/图片的唯一通路。）
 
 import 'dart:io' show Platform;
 
