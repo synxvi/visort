@@ -47,8 +47,8 @@ I18N_DIR = ROOT / "lib" / "core" / "i18n"
 SOURCE_DIR = ROOT / ".font-source"
 
 TARGETS = [
-    "HarmonyOS_Sans_SC_Regular.ttf",
-    "HarmonyOS_Sans_SC_Bold.ttf",
+    "NotoSansMonoCJKsc-Regular.otf",
+    "NotoSansMonoCJKsc-Bold.otf",
 ]
 
 
@@ -130,7 +130,7 @@ def subset_one(filename: str, charset: set) -> tuple:
             print(f"  [备份] {filename} -> .font-source/{backup.name}（原始全集）")
         else:
             sys.exit(
-                f"找不到 {filename} 的原始全集。请将完整 HarmonyOS 字体放入\n"
+                f"找不到 {filename} 的原始全集。请将完整字体放入\n"
                 f"  {SOURCE_DIR}/{filename}.full.ttf\n后重试。"
             )
 

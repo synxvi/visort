@@ -34,7 +34,14 @@ ThemeData buildAppTheme() {
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
-      systemOverlayStyle: SystemUiOverlayStyle.light,
+      // edge-to-edge：系统栏透明叠加在内容之上，图标用亮色适配深底。
+      // 仅在 AppBar 出现的页面生效（作为兜底；main() 已全局设置一次）。
+      systemOverlayStyle: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        systemNavigationBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        systemNavigationBarIconBrightness: Brightness.light,
+      ),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,

@@ -63,16 +63,11 @@ class AppFonts {
 
   /// CJK 回退字体链（保持 const，被 40+ 处 const TextStyle 引用）。
   ///
-  /// 第一位是打包的 HarmonyOS Sans SC 子集（已裁剪，只含常用字 + 应用 UI 文案），
-  /// 其后按平台接系统 CJK 字体兜底生僻字（安卓 Noto/Source Han，Windows 微软雅黑/苹方）。
-  ///
-  /// 背景：Flutter 桌面端 fontFamilyFallback 引用系统已安装字体不可靠
-  /// （flutter/flutter#103811），Windows 上 Microsoft YaHei 经常不生效，
-  /// 故打包 HarmonyOS 作为确定性首选。安卓系统自带 Noto CJK，排在兜底链即可，
-  /// 不必也不应全量打包（16MB 全集会严重拖慢冷启动）。
+  /// 首选思源等宽（Noto Sans Mono CJK SC），与 SpaceMono 等宽英文风格统一；
+  /// 其后按平台接系统 CJK 字体兜底（安卓 Noto/Source Han，Windows 微软雅黑/苹方）。
   static const cjkFallback = [
-    'HarmonyOS_Sans_SC',
-    // Android 系统兜底（子集缺生僻字 / 用户文件名罕用字时）
+    'Noto Sans Mono CJK SC',
+    // Android 系统兜底（设备无 Mono 版本时回退比例字体）
     'Noto Sans CJK SC',
     'Source Han Sans SC',
     'sans-serif',
