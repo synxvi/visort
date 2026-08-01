@@ -48,6 +48,12 @@ android {
         }
     }
 
+    // 跳过 release 的 vital lint 检查：该任务会联网卡住，且对打包/功能无影响。
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     // 按 ABI 拆分 APK：每个架构只含对应的 libflutter.so / libapp.so，
     // 避免单包内冗余多架构 native 库（fat APK 通常翻倍）。
     // 保留 universalApk 兜底手动安装场景；Play/分发用分包。
@@ -63,4 +69,12 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // EXIF/元数据读取（P0 详情抽屉）。
+    // exifinterface：AndroidX ExifInterface，读 JPEG/TIFF EXIF（朝向/GPS/时间）。
+    // metadata-extractor：兜底多格式元数据（IPTC/XMP/PNG/RAW），覆盖 ExifInterface 不支持的容器。
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+    implementation("com.drewnoakes:metadata-extractor:2.19.0")
 }

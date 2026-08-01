@@ -40,3 +40,9 @@
 -dontwarn com.google.android.play.core.tasks.OnFailureListener
 -dontwarn com.google.android.play.core.tasks.OnSuccessListener
 -dontwarn com.google.android.play.core.tasks.Task
+
+# ── metadata-extractor（P0 EXIF 提取）──
+# 该库遍历 com.drew.metadata.* 各 Directory 子类提取元数据，
+# R8 严格模式可能裁剪未被直接引用的 Directory 实现，保留整个包。
+-keep class com.drew.** { *; }
+-dontwarn com.drew.**

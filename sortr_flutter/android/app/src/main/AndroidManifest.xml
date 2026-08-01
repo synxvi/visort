@@ -10,10 +10,20 @@
     <!-- 配合 MANAGE_MEDIA，使 createWriteRequest 免弹窗 -->
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
 
+    <!-- 预测返回（predictive back）策略：
+         该 flag 必须为 true：Android 16 的 WindowOnBackInvokedDispatcher$Checker 会拒绝
+         flag=false 的应用注册 OnBackInvokedCallback（日志 “OnBackInvokedCallback is not
+         enabled for the application”）。
+         返回手势由 MainActivity 注册的 window 级 OnBackAnimationCallback（PRIORITY_OVERLAY）
+         完全接管：动画回调全部 no-op → ①系统不播默认动画（相册网格重页面不再缩放抖动）；
+         ②沉浸模式（隐藏系统栏）下右滑不再被系统消费用于“显示系统栏/再次滑动返回”，
+         一次滑动直接返回（对齐 ColorOS 系统相册行为）；③onBackInvoked 转发 popRoute，
+         PopScope/导航逻辑不受影响。 -->
     <application
         android:label="sortr_flutter"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:enableOnBackInvokedCallback="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -41,7 +51,9 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-        <!-- 允许 Flutter 跟随屏幕原生刷新率（90/120Hz），不锁定 60fps -->
+        <!-- 启用 Impeller 渲染后端（Android 默认即开）。注：这只控制渲染后端，
+             与屏幕刷新率无关——高刷（90/120Hz）由 MainActivity.setHighRefreshRateMode()
+             通过 preferredDisplayModeId 设置，不要在此处误改。 -->
         <meta-data
             android:name="io.flutter.embedding.android.EnableImpeller"
             android:value="true" />
