@@ -232,4 +232,15 @@ const Map<String, String> stringsZh = {
   'trash_item_title': '回收站选项',
   'trash_confirm_desc': '可从回收站恢复。',
   'delete_permanently': '彻底删除',
+
+  // ───────── 设置 ─────────
+  'settings_section_home': '首页',
+  'settings_section_album': '相册',
+  'settings_title': '设置',
+  'settings_home_layout': '首页布局',
+  'settings_home_grid_cols': '首页网格列数',
+  'settings_album_grid_cols': '相册网格列数',
+  'layout_list': '列表',
+  'layout_grid': '网格',
+  'cols_unit': '列',
 };

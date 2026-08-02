@@ -261,6 +261,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             "getMetadata" -> handleGetMetadata(call, result)
             "readBytes" -> handleReadBytes(call, result)
             "readThumbnail" -> handleReadThumbnail(call, result)
+            "readSampledImage" -> handleReadSampledImage(call, result)
             "exists" -> handleExists(call, result)
             "requestDelete" -> handleRequestDelete(call, result)
             "getBucketRelativePath" -> handleGetBucketRelativePath(call, result)
@@ -598,6 +599,30 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             } catch (e: Exception) {
                 mainHandler.post {
                     result.error(MsError.QueryFailed("readThumbnail 异常: ${e.message}").code, e.message, null)
+                }
+            }
+        }
+    }
+
+    private fun handleReadSampledImage(call: MethodCall, result: Result) {
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        val id = call.argument<String>("id")
+        if (id.isNullOrBlank()) {
+            result.error(MsError.InvalidArg("id 缺失").code, null, null); return
+        }
+        val targetWidth = call.argument<Int>("targetWidth") ?: 1920
+        // native 下采样解码放后台线程,避免卡 UI
+        ioExecutor.execute {
+            try {
+                val bytes = repo.readSampledImage(id, targetWidth)
+                mainHandler.post { result.success(bytes) }
+            } catch (e: MsError) {
+                mainHandler.post { result.error(e.code, e.message, null) }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("readSampledImage 异常: ${e.message}").code, e.message, null)
                 }
             }
         }

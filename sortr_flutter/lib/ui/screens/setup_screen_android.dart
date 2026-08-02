@@ -10,6 +10,7 @@
 //   Run 按 RELATIVE_PATH 分组批量 moveBatch（createWriteRequest）
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:sortr_flutter/core/config/models.dart';
@@ -20,6 +21,7 @@ import 'package:sortr_flutter/core/fs/mediastore_channel.dart';
 import 'package:sortr_flutter/core/i18n/i18n.dart';
 import 'package:sortr_flutter/core/theme/app_colors.dart';
 import 'package:sortr_flutter/features/scan/scan_controller.dart';
+import 'package:sortr_flutter/shared/widgets/non_modal_menu.dart';
 import 'package:sortr_flutter/shared/widgets/sort_toggle.dart';
 import 'package:sortr_flutter/shared/widgets/toast.dart';
 import 'package:sortr_flutter/ui/router.dart';
@@ -66,6 +68,11 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   bool _sourceExpanded = true;
   bool _targetExpanded = true;
 
+  /// 主界面滚动信号：非模态菜单监听它，滚动时自动收回。
+  final _isScrolling = ValueNotifier<bool>(false);
+  /// 当前非模态菜单控制器（收回用）
+  NonModalMenuController? _menuCtl;
+
   @override
   void initState() {
     super.initState();
@@ -81,6 +88,8 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     WidgetsBinding.instance.removeObserver(this);
     _parentCtrl.dispose();
     _parentFocus.dispose();
+    _menuCtl?.close();
+    _isScrolling.dispose();
     super.dispose();
   }
 
@@ -326,111 +335,80 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     } else if (value == 'trash') {
       Navigator.pushNamed(context, AppRoutes.album,
           arguments: const {'trashedOnly': true});
+    } else if (value == 'settings') {
+      Navigator.pushNamed(context, AppRoutes.settings);
     }
   }
 
-  /// 右上角 ⋮ 菜单：showGeneralDialog 实现——从按钮下方矩形选区线性缩放弹出，
-  /// 不遮挡按钮（top=按钮底部+4dp，右缘与按钮对齐）。
-  /// 生命周期由 Navigator 管理（pop 自动收起+清理），可反复打开。
+  /// 右上角 ⋮ 菜单：非模态浮层——从按钮右下角弹性展开，不阻塞主界面滚动。
+  /// 主界面开始滚动时菜单自动收回（通过 _isScrolling 信号驱动）。
   void _showOverflowMenu() {
-    final btnContext = _menuBtnKey.currentContext;
-    if (btnContext == null) return;
-    final btnBox = btnContext.findRenderObject() as RenderBox;
-    final btnPos = btnBox.localToGlobal(Offset.zero);
-    final size = MediaQuery.sizeOf(context);
+    // toggle：菜单已展开则收回（播放收回动画），否则新建展开。
+    // 避免重复点击时关旧+开新导致展开动画重播（不符合操作预期）。
+    if (_menuCtl != null && !_menuCtl!.isClosed) {
+      _menuCtl!.close();
+      return;
+    }
     const menuWidth = 184.0;
-    const itemHeight = 48.0;
-    final menuHeight = itemHeight * 2;
-    // 菜单右缘与按钮右缘对齐；top = 按钮底部 + 4dp（不遮挡按钮）
-    final left = (btnPos.dx + btnBox.size.width - menuWidth)
-        .clamp(0.0, size.width - menuWidth)
-        .toDouble();
-    final top = (btnPos.dy + btnBox.size.height + 4)
-        .clamp(0.0, size.height - menuHeight - 8)
-        .toDouble();
-
-    // 动画锚点 = 按钮右下角（相对菜单左上角的偏移）。
-    // 菜单右对齐按钮，其左上角在按钮左侧（屏幕中部），若以菜单左上角为锚点
-    // 会表现为「屏幕顶部中间向右下展开」；改为按钮位置后，菜单从点击处向左下展开
-    final anchorDx = btnPos.dx + btnBox.size.width - left;
-    final anchorDy = btnPos.dy + btnBox.size.height - top;
-
-    showGeneralDialog<void>(
+    _menuCtl = showNonModalMenu(
       context: context,
-      barrierColor: Colors.transparent,
-      barrierDismissible: true,
-      barrierLabel: 'menu',
-      transitionDuration: const Duration(milliseconds: 180),
-      pageBuilder: (ctx, anim, secAnim) {
-        return Stack(
+      anchorKey: _menuBtnKey,
+      menuWidth: menuWidth,
+      isScrolling: _isScrolling,
+      menuBuilder: (ctx) => Material(
+        color: AppColors.surfaceElevated,
+        elevation: 3,
+        borderRadius: BorderRadius.circular(12),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Positioned(
-              left: left,
-              top: top,
-              width: menuWidth,
-              // 锚点 = Positioned 左上角（即按钮下方）：只缩放菜单本体，
-              // 从点击位置向外线性扩张，不遮挡按钮
-              child: AnimatedBuilder(
-                animation: anim,
-                builder: (ctx, child) {
-                  final s = Curves.linear.transform(anim.value);
-                  return Transform(
-                    alignment: Alignment.topLeft,
-                    // 以锚点（按钮右下角）缩放：T(anchor)·S·T(-anchor)
-                    transform: Matrix4.identity()
-                      ..translateByDouble(anchorDx, anchorDy, 0, 1)
-                      ..scaleByDouble(s, s, 1, 1)
-                      ..translateByDouble(-anchorDx, -anchorDy, 0, 1),
-                    child: child,
-                  );
-                },
-                child: Material(
-                  color: AppColors.surface,
-                  elevation: 2,
-                  borderRadius: BorderRadius.circular(4),
-                  clipBehavior: Clip.antiAlias,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildMenuItem(
-                        ctx,
-                        'favorites',
-                        Icons.favorite,
-                        AppColors.danger,
-                        t(ref, 'favorites_title'),
-                      ),
-                      _buildMenuItem(
-                        ctx,
-                        'trash',
-                        Icons.delete_outline,
-                        AppColors.muted,
-                        t(ref, 'trash_title'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            _buildMenuItem(
+              ctx,
+              Icons.favorite,
+              AppColors.text,
+              t(ref, 'favorites_title'),
+              onTap: () {
+                _menuCtl?.close();
+                _onMenuSelected('favorites');
+              },
+            ),
+            _buildMenuItem(
+              ctx,
+              Icons.delete_outline,
+              AppColors.text,
+              t(ref, 'trash_title'),
+              onTap: () {
+                _menuCtl?.close();
+                _onMenuSelected('trash');
+              },
+            ),
+            _buildMenuItem(
+              ctx,
+              Icons.settings_outlined,
+              AppColors.text,
+              t(ref, 'settings_title'),
+              onTap: () {
+                _menuCtl?.close();
+                _onMenuSelected('settings');
+              },
             ),
           ],
-        );
-      },
-      transitionBuilder: (ctx, anim, secAnim, child) => child,
+        ),
+      ),
     );
   }
 
-  /// 菜单单项：图标 + 文本；点击后关闭菜单并回调 [_onMenuSelected]。
+  /// 菜单单项：图标 + 文本；点击后调用 [onTap]（由调用方负责关闭菜单 + 选中处理）。
   Widget _buildMenuItem(
     BuildContext ctx,
-    String value,
     IconData icon,
     Color iconColor,
-    String label,
-  ) {
+    String label, {
+    required VoidCallback onTap,
+  }) {
     return InkWell(
-      onTap: () {
-        Navigator.pop(ctx);
-        _onMenuSelected(value);
-      },
+      onTap: onTap,
       child: SizedBox(
         height: 48,
         child: Padding(
@@ -452,7 +430,16 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   Widget build(BuildContext context) {
     // 检测相册内排序是否变化（从相册返回时封面需更新）
     _maybeRefreshCovers();
-    return Scaffold(
+    // 首页（根路由）右滑/返回：等效 Home 键回桌面（task 保留后台，不 finish）。
+    // 需要 MainActivity 的 sortr/app channel 配合 moveTaskToBack。
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) {
+          const MethodChannel('sortr/app').invokeMethod('moveTaskToBack');
+        }
+      },
+      child: Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
@@ -485,6 +472,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
             _buildBottomBar(),
           ],
         ),
+      ),
       ),
     );
   }
@@ -533,11 +521,20 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
           child: Text(t(ref, 'no_albums'),
               style: const TextStyle(color: AppColors.muted)));
     }
-    return ListView(
-      padding: const EdgeInsets.only(top: 2),
-      children: [
-        // MANAGE_MEDIA 引导（未授权时显示）
-        if (!_manageMediaGranted) _buildManageMediaBanner(),
+    return NotificationListener<ScrollNotification>(
+      onNotification: (n) {
+        if (n is ScrollStartNotification) {
+          _isScrolling.value = true;
+        } else if (n is ScrollEndNotification) {
+          _isScrolling.value = false;
+        }
+        return false;
+      },
+      child: ListView(
+        padding: const EdgeInsets.only(top: 2),
+        children: [
+          // MANAGE_MEDIA 引导（未授权时显示）
+          if (!_manageMediaGranted) _buildManageMediaBanner(),
         // 源相册区（可折叠）
         _buildCollapsibleSection(
           title: t(ref, 'source_albums'),
@@ -619,7 +616,8 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
             ),
           ),
         ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -631,9 +629,9 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   /// - 展开态：上方衔接末位相册 tile（176px，比目标 header 矮）→ 上方多留补偿间距，
   ///   否则分隔线会紧贴 tile，而到目标标题的视觉距离偏大
   Widget _buildFlowDivider({required bool sourceExpanded}) {
-    // 展开态：上 29（补偿末位 tile 偏矮，tile.vertical=4 已收紧）下 8；
+    // 展开态：上 12（末位 tile 与分隔线的间距，网格 vertical padding 已为 0）下 8；
     // 折叠态：上下各 2（header↔header 等高，收紧一半贴近两侧）
-    final padTop = sourceExpanded ? 29.0 : 2.0;
+    final padTop = sourceExpanded ? 12.0 : 2.0;
     final padBottom = sourceExpanded ? 8.0 : 2.0;
     return Padding(
       padding: EdgeInsets.fromLTRB(16, padTop, 16, padBottom),
@@ -761,17 +759,31 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     required Set<String> selectedIds,
     required void Function(String id) onToggle,
   }) {
+    final config = ref.watch(configProvider);
     final sorted = _sortedBuckets();
-    return Column(
-      children: sorted
-          .map((b) => _SetupBucketTile(
-                key: ValueKey(b.id),
-                bucket: b,
-                selected: selectedIds.contains(b.id),
-                onCheckToggle: () => onToggle(b.id),
-              ))
-          .toList(),
-    );
+    final isGrid = config.homeLayout == HomeLayout.grid;
+    final tiles = sorted
+        .map((b) => _SetupBucketTile(
+              key: ValueKey(b.id),
+              bucket: b,
+              selected: selectedIds.contains(b.id),
+              onCheckToggle: () => onToggle(b.id),
+              grid: isGrid,
+            ))
+        .toList();
+    if (isGrid) {
+      return GridView.count(
+        crossAxisCount: config.homeGridColumns,
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        mainAxisSpacing: 4,
+        crossAxisSpacing: 4,
+        childAspectRatio: 0.72,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+        children: tiles,
+      );
+    }
+    return Column(children: tiles);
   }
 
   /// 按用户排序偏好返回 bucket 列表
@@ -1194,10 +1206,12 @@ class _SetupBucketTile extends StatefulWidget {
     required this.bucket,
     required this.selected,
     required this.onCheckToggle,
+    this.grid = false,
   });
   final MsBucket bucket;
   final bool selected;
   final VoidCallback onCheckToggle;
+  final bool grid;
 
   @override
   State<_SetupBucketTile> createState() => _SetupBucketTileState();
@@ -1227,6 +1241,7 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
 
   @override
   Widget build(BuildContext context) {
+    if (widget.grid) return _buildGrid();
     final selected = widget.selected;
     return Padding(
       // vertical:2：tile 上下间距（收紧，相邻 tile 间距 4px）
@@ -1361,6 +1376,149 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
       ),
     );
   }
+  // ── 网格态：竖向 tile（封面 + 名称 + 角标勾选），与列表态共用波动环。
+  void _openAlbum() {
+    Navigator.pushNamed(context, AppRoutes.album, arguments: {
+      'bucketId': widget.bucket.id,
+      'bucketName': widget.bucket.name,
+      'bucketCount': widget.bucket.count,
+    });
+  }
+
+  Widget _buildGrid() {
+    final selected = widget.selected;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AspectRatio(
+            aspectRatio: 1,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                GestureDetector(
+                  onTap: _openAlbum,
+                  child: LayoutBuilder(
+                    builder: (ctx, c) => _CoverThumb(
+                        coverId: widget.bucket.coverId, size: c.maxWidth),
+                  ),
+                ),
+                if (selected)
+                  IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color: AppColors.accent, width: 2.5),
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  left: 4,
+                  bottom: 4,
+                  // IgnorePointer：点击数量 badge 穿透到下方封面，同样进入相册
+                  child: IgnorePointer(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text('${widget.bucket.count}',
+                          style: const TextStyle(
+                              fontSize: 9,
+                              color: Colors.white,
+                              fontFamily: 'SpaceMono')),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: GestureDetector(
+                    onTap: widget.onCheckToggle,
+                    behavior: HitTestBehavior.opaque,
+                    child: _buildGridCheck(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 4),
+          GestureDetector(
+            onTap: _openAlbum,
+            behavior: HitTestBehavior.opaque,
+            child: Text(
+              widget.bucket.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontFamily: 'SpaceMono',
+                fontFamilyFallback: AppFonts.cjkFallback,
+                fontWeight: FontWeight.w700,
+                fontSize: 11,
+                color: AppColors.text,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 网格态勾选角标：未选半透明圆，选中 accent 实心 + 勾 + 波动环。
+  Widget _buildGridCheck() {
+    final selected = widget.selected;
+    return SizedBox(
+      width: 24,
+      height: 24,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          AnimatedBuilder(
+            animation: _ripple,
+            builder: (ctx, _) {
+              final t = _ripple.value;
+              if (t == 0.0 || t == 1.0) return const SizedBox.shrink();
+              return Container(
+                width: 18 + t * 40,
+                height: 18 + t * 40,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                      color: AppColors.accent
+                          .withValues(alpha: (1 - t) * 0.7),
+                      width: 2),
+                ),
+              );
+            },
+          ),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            width: selected ? 18 : 16,
+            height: selected ? 18 : 16,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: selected
+                  ? AppColors.accent
+                  : Colors.black.withValues(alpha: 0.4),
+              border: Border.all(
+                  color: selected ? AppColors.accent : Colors.white54,
+                  width: 2),
+            ),
+            child: selected
+                ? const Center(
+                    child: Icon(Icons.check, size: 12, color: AppColors.bg),
+                  )
+                : null,
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// 封面缩略图（正方形，圆角）。无封面时显示占位图标。
@@ -1388,7 +1546,7 @@ class _CoverThumb extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(6),
       child: Image(
-        image: buildThumbnailProvider(ref, size: 160),
+        image: buildThumbnailProvider(ref, size: 300),
         width: size,
         height: size,
         fit: BoxFit.cover,

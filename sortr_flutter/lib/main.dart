@@ -16,6 +16,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'app.dart';
 import 'core/i18n/i18n.dart';
 import 'core/window/window_state.dart';
@@ -53,6 +55,22 @@ Future<void> main() async {
     container: container,
     child: const SortrApp(),
   ));
+
+  // 临时 FPS 统计（排查 30 帧问题用，定位后移除）：用真实时间窗统计
+  // 实际提交帧率（之前用 totalSpan 算法不含帧间隔，会高估）。
+  final sw = Stopwatch()..start();
+  int count = 0;
+  SchedulerBinding.instance.addTimingsCallback((timings) {
+    count += timings.length;
+    final elapsed = sw.elapsed;
+    if (elapsed >= const Duration(milliseconds: 500)) {
+      final fps = count * 1000 / elapsed.inMilliseconds;
+      debugPrint(
+          '[FPS] ${fps.toStringAsFixed(0)} (frames=$count / ${elapsed.inMilliseconds}ms)');
+      count = 0;
+      sw.reset();
+    }
+  });
 }
 
 // ───────────────────────── Windows 初始化 ─────────────────────────

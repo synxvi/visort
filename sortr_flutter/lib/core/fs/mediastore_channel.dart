@@ -313,6 +313,19 @@ class MediaStoreChannel {
     }
   }
 
+  /// 下采样解码全图(native BitmapFactory + inSampleSize,只解 targetWidth 像素,
+  /// JPEG 95 高质量)。比 readBytes + Dart 全图解码快 2-3 倍(viewer 全图用)。
+  Future<Uint8List> readSampledImage(String id, {required int targetWidth}) async {
+    try {
+      final raw = await _channel.invokeMethod<Uint8List>(
+          'readSampledImage', {'id': id, 'targetWidth': targetWidth});
+      if (raw == null) throw Exception('readSampledImage 返回 null');
+      return raw;
+    } on PlatformException catch (e) {
+      throw _convertError(e);
+    }
+  }
+
   /// 存在性检查
   Future<bool> exists(String id) async {
     try {

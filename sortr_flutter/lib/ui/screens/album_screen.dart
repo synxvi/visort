@@ -17,6 +17,7 @@ import 'package:sortr_flutter/core/fs/image_loader.dart';
 import 'package:sortr_flutter/core/fs/mediastore_channel.dart';
 import 'package:sortr_flutter/core/i18n/i18n.dart';
 import 'package:sortr_flutter/core/theme/app_colors.dart';
+import 'package:sortr_flutter/core/theme/app_animations.dart';
 import 'package:sortr_flutter/features/gallery/gallery_controller.dart';
 import 'package:sortr_flutter/ui/router.dart';
 import 'package:sortr_flutter/shared/widgets/scroll_drag_handle.dart';
@@ -53,6 +54,7 @@ class AlbumScreen extends ConsumerStatefulWidget {
 class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   late final ScrollController _scrollCtrl = ScrollController();
   static const _threshold = 0.7; // 滚动到 70% 触发加载更多
+
 
   @override
   void initState() {
@@ -158,13 +160,14 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           child: Text(t(ref, 'album_empty'),
               style: const TextStyle(color: AppColors.muted, fontSize: 13)));
     }
+    final cols = ref.watch(configProvider).photoGridColumns;
     return Stack(
       children: [
         GridView.builder(
           controller: _scrollCtrl,
           padding: const EdgeInsets.all(4),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: cols,
             crossAxisSpacing: 3,
             mainAxisSpacing: 3,
           ),
@@ -175,9 +178,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
               return const LoadingCell();
             }
             final info = photos[i];
+            // ⚠️ 不要用 RepaintBoundary 包 cell：滚动时每个新 cell 创建独立
+            // layer、旧 cell 销毁，频繁 layer 分配会拖慢滚动（实测滚动变卡）。
+            // cell 保持纯 InkWell + Image（与无动画版本一致，滚动流畅）。
             return _PhotoCell(
               info: info,
-              onTap: () => _openViewer(context, gallery, photos, i),
+              onTap: (cellRect) =>
+                  _openViewer(context, gallery, photos, i, cellRect),
             );
           },
         ),
@@ -187,25 +194,115 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         ScrollDragHandle(
           controller: _scrollCtrl,
           totalItems: widget.bucketCount ?? photos.length,
-          rowExtent: (MediaQuery.sizeOf(context).width - 4 * 2 - 3 * 2) / 3 + 3,
+          rowExtent:
+              (MediaQuery.sizeOf(context).width - 4 * 2 - (cols - 1) * 3) /
+                  cols +
+              3,
+          columns: cols,
           viewportRows: 5,
         ),
       ],
     );
   }
 
-  /// 打开大图浏览器，传入分页联动回调（viewer 接近末尾时触发 loadMore）。
+  /// 打开大图浏览器：用 PageRouteBuilder 的 transitionsBuilder 实现
+  /// "图从 cell 位置线性放大到全屏"的缩放动画。
+  /// ⚠️ 必须用 route transition，不能用 Overlay AnimationController：
+  /// ColorOS DynamicFramerate 对 Overlay 上的自定义动画在 Choreographer 层
+  /// 降帧到 30 且粘滞不恢复（实测）；route 过渡动画是系统 push/pop 驱动，
+  /// ColorOS 不降帧（fade 版实测全程 120）。
+  /// [cellRect] 为点击 cell 的屏幕坐标；null 时无缩放动画。
   void _openViewer(
     BuildContext context,
     GalleryState gallery,
     List<MsImageInfo> photos,
     int index,
+    Rect? cellRect,
   ) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => PhotoViewer(
+    final info = photos[index];
+    final imgRef =
+        imageRefFromMediaStoreId(info.id, extension: extOf(info.name));
+    // 预解码中间缩略图（768，系统级快）+ 全图（1920），与 push 250ms 并发加载。
+    // 进 viewer 时 768 通常已就绪（较清晰过渡），1920 紧随（最终清晰），
+    // 消除"垫底 300 模糊 → 等全图几百 ms 才清晰"的模糊尾巴。不 await，不阻塞 push。
+    precacheImage(buildThumbnailProvider(imgRef, size: 768), context);
+    precacheImage(
+        buildImageProvider(imgRef, targetWidth: kViewerTargetWidth), context);
+    // 飞行层图片：闭包捕获，transitionsBuilder 每帧复用（不重建 provider）。
+    // ⚠️ 必须用 size:300（网格同 key，ImageCache 已缓存）——用 1024 时动画
+    // 250ms 内 loadThumbnail 加载不完 → 飞行层空白 → 灰屏且无缩放效果。
+    // errorBuilder 用灰块兜底：即使加载失败也有可见内容在放大（诊断+兜底）。
+    final flightImage = Image(
+      image: buildThumbnailProvider(imgRef, size: 300),
+      fit: BoxFit.contain,
+      gaplessPlayback: true,
+      loadingBuilder: (ctx, child, progress) {
+        debugPrint('[FlightImg] loading progress=$progress');
+        return child;
+      },
+      errorBuilder: (_, _, _) {
+        debugPrint('[FlightImg] ERROR');
+        return const ColoredBox(color: Color(0xFF2A2A2A));
+      },
+    );
+    Navigator.of(context).push(PageRouteBuilder(
+      transitionDuration: const Duration(milliseconds: 250),
+      reverseTransitionDuration: const Duration(milliseconds: 180),
+      // route animation 驱动 rect 缩放：
+      // push（anim 0→1）：图从 cellRect 线性放大到全屏 contain；
+      // pop（anim 1→0）：图从全屏缩回 cellRect。
+      // child = PhotoViewer 页面（在飞行层下方）。
+      transitionsBuilder: (ctx, anim, _, child) {
+        debugPrint(
+            '[Flight] t=${anim.value.toStringAsFixed(2)} status=${anim.status} cellRect=$cellRect');
+        final size = MediaQuery.sizeOf(ctx);
+        // 终点与 viewer 图区域一致（PageView 页 Padding(horizontal:4)）。
+        final fullRect = Rect.fromLTWH(4, 0, size.width - 8, size.height);
+        // COUIMoveEase 替代原 linear：强 ease-out，图"冲"到全屏而非匀速滑入。
+        // 原 linear 已验证可用但略机械；couiMoveEase 更贴近一加手感。
+        final t = AppCurves.couiMoveEase.transform(anim.value);
+        final rect = Rect.lerp(cellRect ?? fullRect, fullRect, t)!;
+        // ⚠️ showFlight 必须用 status 判断（不能用 anim.value < 1）：
+        // completed 后 transitionsBuilder 不再 rebuild，若黑底留在树里会
+        // 永远盖住 viewer。pop 触发时 status 变 reverse → 飞行层重新出现。
+        final showFlight =
+            cellRect != null && anim.status != AnimationStatus.completed;
+        // 黑垫底：盖住导航器灰色背景（viewer 半透明时不露灰屏）。
+        // 起点/终点 15% 渐显渐隐（避免 push 突兀变黑 / pop 黑→网格跳变）。
+        final baseBlack = (t / 0.15).clamp(0.0, 1.0);
+        // 黑垫底：反向跟随 viewer 透明度——viewer 半透明（t<1）时盖住底层灰，
+        // viewer 完全可见（t=1）时 black=0。这样 showFlight 移除瞬间（completed,
+        // t=1）black 已为 0，chrome 顶/底栏不会从"被黑盖住"突变到可见。
+        // （旧逻辑末段加深到 0.95，再随 showFlight 整层移除 → chrome 闪烁一下）
+        final black = (1.0 - t).clamp(0.0, 1.0) * 0.95;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            // ⚠️ 垫底：深灰（≈网格背景 #0F0F0F），**恒不透明**——
+            // viewer 半透明（Opacity）时不露导航器灰色背景（之前 baseBlack
+            // 起点为 0 导致 push 瞬间全屏灰）；同时 push 起点无突兀变黑、
+            // pop 终点深灰→网格无缝衔接。
+            const ColoredBox(color: Color(0xFF0F0F0F)),
+            // viewer 页面：push 淡入 / pop 淡出（无叠影闪烁）。
+            Opacity(opacity: t, child: child),
+            if (showFlight) ...[
+              ColoredBox(color: Colors.black.withValues(alpha: black)),
+              // ⚠️ Positioned 必须直接作为 Stack 的 child！之前在 Opacity 里
+              // （Opacity→Positioned），release 下不报错但定位不生效、图尺寸
+              // 为 0 → 飞行层不可见 → “无缩放”（多版灰屏的根因）。
+              // 渐隐用 Positioned 内部的 Opacity 实现。
+              Positioned.fromRect(
+                rect: rect,
+                child: Opacity(opacity: baseBlack, child: flightImage),
+              ),
+            ],
+          ],
+        );
+      },
+      pageBuilder: (_, _, _) => PhotoViewer(
         photos: photos,
         initialIndex: index,
-        hasMore: gallery.hasMore,
+        hasMore: ref.read(galleryControllerProvider).hasMore,
         totalCount: widget.bucketCount,
         onLoadMore: () =>
             ref.read(galleryControllerProvider.notifier).loadMore(),
@@ -216,17 +313,28 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   }
 }
 
-/// 单个缩略图 cell
+/// 单个缩略图 cell：InkWell + cover 缩略图。
+/// 无额外动画状态（滚动性能与普通网格一致）；点击时在自身 context 里记录
+/// cell 屏幕坐标（注意：itemBuilder 的 ctx.findRenderObject() 返回的是
+/// RenderSliverGrid，强转 RenderBox 会崩——必须在 cell 自己的 context 取），
+/// 坐标传给 [_AlbumScreenState] 打开 viewer（飞行层动画在 viewer 侧播放）。
 class _PhotoCell extends StatelessWidget {
   const _PhotoCell({required this.info, required this.onTap});
   final MsImageInfo info;
-  final VoidCallback onTap;
+  final ValueChanged<Rect?> onTap;
 
   @override
   Widget build(BuildContext context) {
     final ref = imageRefFromMediaStoreId(info.id, extension: extOf(info.name));
     return InkWell(
-      onTap: onTap,
+      onTap: () {
+        final box = context.findRenderObject();
+        final rect = (box is RenderBox && box.attached)
+            ? box.localToGlobal(Offset.zero) & box.size
+            : null;
+        debugPrint('[Flight] onTap box=$box rect=$rect');
+        onTap(rect);
+      },
       child: Image(
         image: buildThumbnailProvider(ref, size: 300),
         fit: BoxFit.cover,

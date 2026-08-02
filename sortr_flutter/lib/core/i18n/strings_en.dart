@@ -235,4 +235,15 @@ const Map<String, String> stringsEn = {
   'trash_item_title': 'Trash options',
   'trash_confirm_desc': 'It can be restored from Trash.',
   'delete_permanently': 'Delete permanently',
+
+  // ───────── 设置 ─────────
+  'settings_section_home': 'Home',
+  'settings_section_album': 'Album',
+  'settings_title': 'Settings',
+  'settings_home_layout': 'Home Layout',
+  'settings_home_grid_cols': 'Home Grid Columns',
+  'settings_album_grid_cols': 'Album Grid Columns',
+  'layout_list': 'List',
+  'layout_grid': 'Grid',
+  'cols_unit': 'columns',
 };

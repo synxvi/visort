@@ -11,10 +11,12 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'route_transitions.dart';
 import 'screens/album_screen.dart';
 import 'screens/gallery_screen.dart';
 import 'screens/results_screen.dart';
 import 'screens/review_screen.dart';
+import 'screens/settings_screen.dart';
 import 'screens/setup_screen.dart';
 import 'screens/setup_screen_android.dart';
 import 'screens/sort_screen.dart';
@@ -27,6 +29,7 @@ class AppRoutes {
   static const gallery = '/gallery';
   static const album = '/album';
   static const photoViewer = '/photo-viewer';
+  static const settings = '/settings';
 }
 
 /// 当前活动路由名（由 [RouteNameObserver] 维护）。
@@ -60,37 +63,39 @@ class RouteNameObserver extends NavigatorObserver {
 Route<dynamic>? onGenerateRoute(RouteSettings settings) {
   switch (settings.name) {
     case AppRoutes.setup:
-      return MaterialPageRoute(
+      // 根路由：实际无转场（首屏），但保持 couiSlide 以备 pushAndRemoveUntil 场景。
+      return couiSlideRoute(
         builder: (_) => Platform.isAndroid
             ? const SetupScreenAndroid()
             : const SetupScreen(),
         settings: settings,
       );
     case AppRoutes.sort:
-      return MaterialPageRoute(
+      return couiSlideRoute(
         builder: (_) => const SortScreen(),
         settings: settings,
       );
     case AppRoutes.review:
-      return MaterialPageRoute(
+      return couiSlideRoute(
         builder: (_) => const ReviewScreen(),
         settings: settings,
       );
     case AppRoutes.results:
-      return MaterialPageRoute(
+      return couiSlideRoute(
         builder: (_) => const ResultsScreen(),
         settings: settings,
       );
     case AppRoutes.gallery:
-      return MaterialPageRoute(
+      return couiSlideRoute(
         builder: (_) => const GalleryScreen(),
         settings: settings,
       );
     case AppRoutes.album:
-      // 参数通过 settings.arguments（Map）传入 bucketId / bucketName / bucketCount
+      // 参数通过 settings.arguments（Map）传入 bucketId / bucketName / bucketCount。
+      // 用快速浮现（fade + 轻缩放）：比 slide 更轻盈，适合内容浏览切换。
       final args = settings.arguments;
       if (args is Map) {
-        return MaterialPageRoute(
+        return couiFadeRoute(
           builder: (_) => AlbumScreen(
             bucketId: args['bucketId']?.toString() ?? '',
             bucketName: args['bucketName']?.toString(),
@@ -102,6 +107,11 @@ Route<dynamic>? onGenerateRoute(RouteSettings settings) {
         );
       }
       return null;
+    case AppRoutes.settings:
+      return couiSlideRoute(
+        builder: (_) => const SettingsScreen(),
+        settings: settings,
+      );
     default:
       return null;
   }

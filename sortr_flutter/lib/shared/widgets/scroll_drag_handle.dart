@@ -46,6 +46,8 @@ class ScrollDragHandle extends StatefulWidget {
 class _ScrollDragHandleState extends State<ScrollDragHandle> {
   bool _dragging = false;
   static const _handleH = 34.0;
+  /// 底部安全边距：圆角屏幕会裁掉贴底手柄，行程底部留出圆角高度。
+  static const _bottomSafe = 24.0;
   // 由 LayoutBuilder 记录的 track 实际高度，供拖拽 1:1 跟手换算用
   double _trackH = 0.0;
 
@@ -64,7 +66,10 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
     final total = widget.totalItems;
     if (h <= 0 || total <= 0) return 0.0;
     final totalRows = (total / widget.columns).ceil();
-    final scrollableRows = (totalRows - widget.viewportRows).clamp(1, totalRows);
+    final viewportRows =
+        _trackH > 0 ? _trackH / h : widget.viewportRows.toDouble();
+    final scrollableRows =
+        (totalRows - viewportRows).clamp(1.0, totalRows.toDouble());
     final scrolledRows = (pos.pixels / h).clamp(0.0, scrollableRows.toDouble());
     return (scrolledRows / scrollableRows).clamp(0.0, 1.0);
   }
@@ -97,11 +102,15 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
     if (!c.hasClients) return;
     final pos = c.position;
     // 手柄在 track 上的可移动区间（与 build 定位严格一致）
-    final handleMovable = (_trackH - _handleH).clamp(1.0, double.infinity);
+    final handleMovable =
+        (_trackH - _handleH - _bottomSafe).clamp(1.0, double.infinity);
     // 列表的总可滚动像素（纯几何）
     final h = widget.rowExtent;
     final totalRows = (widget.totalItems / widget.columns).ceil();
-    final scrollableRows = (totalRows - widget.viewportRows).clamp(1, totalRows);
+    final viewportRows =
+        _trackH > 0 ? _trackH / h : widget.viewportRows.toDouble();
+    final scrollableRows =
+        (totalRows - viewportRows).clamp(1.0, totalRows.toDouble());
     final maxPixels = scrollableRows * h;
     // 1:1 跟手：手指 Δy → 手柄移动 Δy → 对应列表滚动 Δy/maxPixels 比例
     final deltaRatio = details.delta.dy / handleMovable;
@@ -127,7 +136,7 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
               builder: (context, constraints) {
                 final trackH = constraints.maxHeight;
                 if (trackH != _trackH) _trackH = trackH;
-                final top = progress * (trackH - _handleH);
+                final top = progress * (trackH - _handleH - _bottomSafe);
                 return Stack(
                   children: [
                     Positioned(

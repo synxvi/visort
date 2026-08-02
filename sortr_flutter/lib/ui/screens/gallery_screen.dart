@@ -17,6 +17,7 @@ import 'package:sortr_flutter/core/fs/mediastore_channel.dart';
 import 'package:sortr_flutter/core/i18n/i18n.dart';
 import 'package:sortr_flutter/core/theme/app_colors.dart';
 import 'package:sortr_flutter/features/gallery/gallery_controller.dart';
+import 'package:sortr_flutter/shared/widgets/press_scale.dart';
 import 'package:sortr_flutter/shared/widgets/sort_toggle.dart';
 import 'package:sortr_flutter/ui/router.dart';
 
@@ -123,7 +124,7 @@ class _FavoritesTile extends ConsumerWidget {
           color: AppColors.danger.withValues(alpha: 0.15),
           borderRadius: BorderRadius.circular(8),
         ),
-        child: const Icon(Icons.favorite, color: AppColors.danger, size: 24),
+        child: const Icon(Icons.favorite, color: AppColors.text, size: 24),
       ),
       title: Text(
         t(ref, 'favorites_title'),
@@ -157,7 +158,7 @@ class _TrashTile extends ConsumerWidget {
           color: AppColors.muted.withValues(alpha: 0.15),
           borderRadius: BorderRadius.circular(8),
         ),
-        child: const Icon(Icons.delete_outline, color: AppColors.muted, size: 24),
+        child: const Icon(Icons.delete_outline, color: AppColors.text, size: 24),
       ),
       title: Text(
         t(ref, 'trash_title'),
@@ -183,7 +184,7 @@ class _AlbumTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return InkWell(
+    return PressScale(
       onTap: () => Navigator.pushNamed(context, AppRoutes.album,
           arguments: {
             'bucketId': bucket.id,
@@ -258,7 +259,7 @@ class _CoverThumb extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
       child: Image(
-        image: buildThumbnailProvider(ref, size: 200),
+        image: buildThumbnailProvider(ref, size: 300),
         width: size,
         height: size,
         fit: BoxFit.cover,

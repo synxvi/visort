@@ -4,6 +4,7 @@
 //   - Windows: Image.file(File(join(root, relativePath)))
 //   - 安卓 MediaStore: 经 FileSystemRepository.readBytes 读字节 + 下采样
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -48,6 +49,28 @@ void evictImageCache(String mediaStoreId) {
   }
 }
 
+/// 清理 viewer 浏览用的图片缓存（1024 垫底缩略图 + 全图），**不动网格 300
+/// 缩略图**。PhotoViewer 关闭时对本次浏览过的照片逐个调用：原图/1024 缩略图
+/// 体积大（12MP ≈ 48MB/张），若留在全局 ImageCache 会把缓存占满、迫使网格
+/// 缩略图反复 evict + GC —— 表现为“打开关闭几次后滚动变卡”。
+void evictViewerImageCache(String mediaStoreId) {
+  if (!Platform.isAndroid) return;
+  final cache = PaintingBinding.instance.imageCache;
+  final ref = imageRefFromMediaStoreId(mediaStoreId);
+  // 中间态 768（viewer 渐进层）+ 兼容旧 1024
+  cache.evict(_AndroidThumbnailProvider(ref: ref, size: 768));
+  cache.evict(_AndroidThumbnailProvider(ref: ref, size: 1024));
+  // 全图：无 targetWidth（旧条目）与带 targetWidth（下采样）都清。
+  cache.evict(_AndroidBytesImageProvider(ref: ref));
+  cache.evict(_AndroidBytesImageProvider(
+      ref: ref, targetWidth: kViewerTargetWidth));
+}
+
+/// viewer 原图下采样宽度（物理像素）：1440 屏 × 2 裕量，兼顾双击 2x 放大；
+/// 必须与 PhotoViewer/_BigImage/飞行层的 buildImageProvider(targetWidth:)
+/// 使用同一常量，否则 evict 命中不了缓存条目。
+const int kViewerTargetWidth = 2880;
+
 /// 安卓端从 MediaStore 读字节的 ImageProvider。
 class _AndroidBytesImageProvider
     extends ImageProvider<_AndroidBytesImageProvider> {
@@ -80,9 +103,26 @@ class _AndroidBytesImageProvider
     _AndroidBytesImageProvider key,
     ImageDecoderCallback decode,
   ) async {
-    final bytes = await _fs.readBytes(key.ref);
-    final buffer = await ui.ImmutableBuffer.fromUint8List(bytes is Uint8List ? bytes : Uint8List.fromList(bytes));
     final tw = key.targetWidth;
+    // targetWidth 指定(viewer 全图):优先走 native readSampledImage(下采样解码,快)。
+    // 失败(超时/channel/解码异常)→ 回退 readBytes 全图,保证可用(诊断期)。
+    if (tw != null && tw > 0) {
+      try {
+        final sBytes = await _msChannel
+            .readSampledImage(key.ref.relativePath, targetWidth: tw)
+            .timeout(const Duration(seconds: 5));
+        final sBuffer = await ui.ImmutableBuffer.fromUint8List(sBytes);
+        return decode(sBuffer,
+            getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
+          return ui.TargetImageSize(width: tw);
+        });
+      } catch (_) {
+        // readSampledImage 失败(超时/channel/解码)→ 落到下面 readBytes 兜底
+      }
+    }
+    final bytes = await _fs.readBytes(key.ref);
+    final buffer = await ui.ImmutableBuffer.fromUint8List(
+        bytes is Uint8List ? bytes : Uint8List.fromList(bytes));
     if (tw != null && tw > 0) {
       return decode(buffer,
           getTargetSize: (int intrinsicWidth, int intrinsicHeight) {

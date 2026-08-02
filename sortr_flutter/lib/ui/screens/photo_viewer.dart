@@ -18,6 +18,7 @@ import 'package:sortr_flutter/core/fs/mediastore_channel.dart';
 import 'package:sortr_flutter/core/i18n/i18n.dart';
 import 'package:sortr_flutter/core/theme/app_colors.dart';
 import 'package:sortr_flutter/features/gallery/gallery_controller.dart';
+import 'package:sortr_flutter/shared/widgets/spring_popup.dart';
 import 'package:sortr_flutter/shared/widgets/toast.dart';
 
 import 'album_common.dart';
@@ -54,8 +55,14 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
   late final PageController _pageCtrl;
   late List<MsImageInfo> _photos;
   late int _index;
-  bool _chromeVisible = true; // 顶/底栏遮罩可见性（点击图片切换）
+  // 顶/底栏遮罩可见性（点击图片切换；初始 false → 打开后 200ms 快速淡入，
+  // 避免飞行层移除瞬间 chrome 突兀闪现）。
+  bool _chromeVisible = false;
   bool _loadingMore = false;
+  /// 本次浏览中**已加载完成全图**的照片 id 集合。
+  /// dispose 时逐个 evict（2880px 大图 ≈ 数十 MB/张，残留会撑爆 ImageCache →
+  /// 滚动时缩略图反复驱逐 + GC，帧率单调下降）。只记实际加载的，避免全量 evict。
+  final Set<String> _viewedIds = {};
   // 活跃触摸指针数：≥2（双指捏合）时禁用 PageView 滚动，让 InteractiveViewer
   // 的缩放独占手势竞技场。否则双指捏合时第一指的轻微横移就会让 PageView 的
   // drag 先胜出（翻页/抢手势），表现为“捏合很难触发”。
@@ -70,6 +77,10 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
     _photos = List.of(widget.photos);
     _index = widget.initialIndex.clamp(0, widget.photos.length - 1);
     _pageCtrl = PageController(initialPage: _index);
+    // 首帧后触发顶/底栏淡入（AnimatedOpacity 0 → 1，200ms 快速浮现）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _chromeVisible = true);
+    });
   }
 
   @override
@@ -77,6 +88,14 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
     _pageCtrl.dispose();
     // 离开页面恢复 edge-to-edge，避免影响其他页的系统栏
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    // Evict 本次浏览过的大图（2880px，数十 MB/张）。
+    // 不清网格用的 300 缩略图（evictViewerImageCache 只清 1024 + 全图）。
+    // 之前"临时去掉 evict"导致大图残留 → ImageCache 占满 → 滚动掉帧单调恶化
+    // （实测多次进出后 30→10fps）。只 evict 实际加载过的（_viewedIds），
+    // 而非全量遍历 _photos（可能几百张），避免 dispose 时 GC 峰值。
+    for (final id in _viewedIds) {
+      evictViewerImageCache(id);
+    }
     super.dispose();
   }
 
@@ -129,7 +148,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
     String? toastKey;
     if (current.isTrashed) {
       // 回收站视图：恢复 / 彻底删除 / 取消（全宽竖排按钮，避免窄屏横向溢出）
-      final action = await showDialog<String>(
+      final action = await showCenterDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: AppColors.surface,
@@ -182,7 +201,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
       }
     } else {
       // 普通视图：删除 = 移入回收站（与系统相册一致；回收站内可恢复/彻底删除）
-      final confirmed = await showDialog<bool>(
+      final confirmed = await showCenterDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: AppColors.surface,
@@ -225,6 +244,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
     setState(() {
       _photos.removeAt(_index);
       if (_photos.isEmpty) {
+        // 最后一张已删除：直接强制退出（Navigator.pop 不走 PopScope 拦截）。
         Navigator.pop(context);
         return;
       }
@@ -271,15 +291,10 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      // canPop=true 明确告诉系统「可以立即返回」，不触发 ColorOS 的预测手势
-      // 二次确认（"再次滑动返回"）。
-      canPop: true,
-      child: Scaffold(
-        backgroundColor: Colors.black,
-        // 图片直接铺满物理屏幕；顶/底栏作为渐变遮罩叠在上层。
-        body: _photos.isEmpty
-            ? const SizedBox.shrink()
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: _photos.isEmpty
+          ? const SizedBox.shrink()
             : Listener(
                 behavior: HitTestBehavior.translucent,
                 onPointerDown: (_) => setState(() => _activePointers++),
@@ -322,6 +337,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
                               setState(() => _scrollEnabled = true);
                             }
                           },
+                          onFullLoaded: (id) => _viewedIds.add(id),
                         ),
                       );
                     },
@@ -334,7 +350,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
                     right: 0,
                     child: AnimatedOpacity(
                       opacity: _chromeVisible ? 1.0 : 0.0,
-                      duration: const Duration(milliseconds: 200),
+                      duration: const Duration(milliseconds: 120),
                       child: IgnorePointer(
                         ignoring: !_chromeVisible,
                         child: _TopChromeBar(
@@ -354,7 +370,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
                     right: 0,
                     child: AnimatedOpacity(
                       opacity: _chromeVisible ? 1.0 : 0.0,
-                      duration: const Duration(milliseconds: 200),
+                      duration: const Duration(milliseconds: 120),
                       child: IgnorePointer(
                         ignoring: !_chromeVisible,
                         child: _BottomChromeBar(
@@ -366,14 +382,17 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
                       ),
                     ),
                   ),
+
                 ],
               ),
             ),
-      ),
     );
   }
 
-  /// 显示当前照片的详情信息抽屉
+  /// 显示当前照片的详情信息抽屉。
+  ///
+  /// showModalBottomSheet 默认从底部滑入 + fade，时长接近一加 coui_bottom_dialog（250ms）。
+  /// （默认曲线已足够接近，不强行注入 controller 以免引入类型/生命周期复杂度。）
   void _showDetails(MsImageInfo info) {
     showModalBottomSheet(
       context: context,
@@ -422,6 +441,7 @@ class _TopChromeBar extends ConsumerWidget {
                     color: AppColors.text,
                     fontSize: 15,
                     fontWeight: FontWeight.w500,
+                    fontFamily: 'SpaceMono',
                     fontFamilyFallback: AppFonts.cjkFallback,
                   ),
                   maxLines: 1,
@@ -522,6 +542,7 @@ class _BigImage extends StatefulWidget {
     required this.onTapChrome,
     this.onInteractionStart,
     this.onInteractionEnd,
+    this.onFullLoaded,
   });
   final MsImageInfo info;
   final bool active;
@@ -530,6 +551,8 @@ class _BigImage extends StatefulWidget {
   // 结束时回传当前 scale，外层据此决定是否恢复翻页（scale 归 1 才恢复）。
   final VoidCallback? onInteractionStart;
   final void Function(double scale)? onInteractionEnd;
+  /// 原图（kViewerTargetWidth）加载完成时回调，外层记录 id 用于退出时 evict。
+  final void Function(String mediaStoreId)? onFullLoaded;
 
   @override
   State<_BigImage> createState() => _BigImageState();
@@ -557,9 +580,32 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
   Offset _doubleTapPos = Offset.zero;
   // 单击延迟判定（与双击区分）
   Timer? _singleTapTimer;
+  // 原图是否已加载完成：完成前显示垫底缩略图，完成后直接替换为原图
+  // （同一照片同一 contain 布局，仅清晰度变化——**不要**用淡入淡出过渡，
+  // 交叉淡化会产生叠影“闪一下”，实测观感差）。
+  bool _fullLoaded = false;
+  // 中间缩略图（768）是否就绪：作 300→1920 之间的清晰过渡，缩短模糊尾巴。
+  bool _midLoaded = false;
+  // 是否已触发高清原图加载。双击/双指缩放放大到 scale>1.3 时按需加载原片全像素
+  // (readBytes 全图,~250ms)——日常浏览用上层下采样图(快),只有放大看细节才 load 原图。
+  bool _hdTriggered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // 监听缩放:放大超过 1.3x 触发高清原图加载(放大看细节清晰)。
+    _tc.addListener(_onScaleChanged);
+  }
+
+  void _onScaleChanged() {
+    if (!_hdTriggered && _tc.value.getMaxScaleOnAxis() > 1.3) {
+      setState(() => _hdTriggered = true);
+    }
+  }
 
   @override
   void dispose() {
+    _tc.removeListener(_onScaleChanged);
     _singleTapTimer?.cancel();
     _anim.dispose();
     _tc.dispose();
@@ -618,30 +664,88 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
         onInteractionStart: (_) => widget.onInteractionStart?.call(),
         onInteractionEnd: (_) =>
             widget.onInteractionEnd?.call(_tc.value.getMaxScaleOnAxis()),
-        child: Image(
-          image: buildImageProvider(ref),
-          fit: BoxFit.contain,
-          gaplessPlayback: true,
-          loadingBuilder: (ctx, child, progress) {
-            if (progress == null) return child;
-            return Center(
-              child: CircularProgressIndicator(
-                value: progress.cumulativeBytesLoaded /
-                    (progress.expectedTotalBytes ?? 1),
-                color: AppColors.accent,
+        // 展开转场由飞行层负责（图从 cell 位置线性放大到全屏 contain）；
+        // 这里用两层叠图保证飞行层移除瞬间无跳变：
+        //   原图未加载完成时：垫底 contain 缩略图（与飞行层终点同内容同布局）；
+        //   加载完成后：直接替换为 contain 原图（同一照片同一位置，
+        //   仅清晰度变化，无过渡无叠影——淡入淡出会“闪一下”）。
+        // ⚠️ 绝不能把垫底改成 cover：那会让图铺满全屏，与原图 contain 跳变。
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (!_midLoaded && !_fullLoaded)
+              // ① 垫底 300：网格同 key 已缓存，飞行层移除瞬间立即衔接可见。
+              //    仅在 768 未就绪时显示（兜底）。
+              Image(
+                image: buildThumbnailProvider(ref, size: 300),
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+                errorBuilder: (ctx, error, stack) => const Center(
+                  child: Icon(Icons.broken_image_outlined,
+                      color: AppColors.muted, size: 48),
+                ),
               ),
-            );
-          },
-          errorBuilder: (ctx, error, stack) => const Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.broken_image_outlined,
-                  color: AppColors.muted, size: 48),
-              SizedBox(height: 8),
-              Text('Preview unavailable',
-                  style: TextStyle(color: AppColors.muted, fontSize: 12)),
-            ],
-          ),
+            // ② 中层 768：MediaStore 系统缩略图，解码快（~30-50ms），作 300→1920
+            //    之间的清晰过渡。就绪替换 300，显著缩短“模糊尾巴”。加载中
+            //    SizedBox.shrink 透明，透出底层 300。
+            if (!_fullLoaded)
+              Image(
+                image: buildThumbnailProvider(ref, size: 768),
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+                loadingBuilder: (ctx, child, progress) {
+                  if (progress == null) {
+                    if (!_midLoaded) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) setState(() => _midLoaded = true);
+                      });
+                    }
+                    return child;
+                  }
+                  return const SizedBox.shrink();
+                },
+                errorBuilder: (ctx, error, stack) => const SizedBox.shrink(),
+              ),
+            // 原图层：contain 完整显示。加载完成前透明（不挡垫底层）；
+            // 完成后直接上屏（垫底同帧移除，无叠影）。加载失败保持透明，
+            // 垫底缩略图继续可见。targetWidth 下采样（kViewerTargetWidth）：
+            // 屏幕只需要 ~1440 逻辑像素，全尺寸解码 48MB/张会撑爆 ImageCache。
+            Image(
+              image: buildImageProvider(ref, targetWidth: kViewerTargetWidth),
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
+              loadingBuilder: (ctx, child, progress) {
+                if (progress == null) {
+                  if (!_fullLoaded) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) {
+                        setState(() => _fullLoaded = true);
+                        // 通知外层记录 id：退出 viewer 时 evict 这些大图，
+                        // 否则 ImageCache 残留导致多次进出后滚动掉帧（实测 30→10fps）。
+                        widget.onFullLoaded?.call(widget.info.id);
+                      }
+                    });
+                  }
+                  return child;
+                }
+                return const SizedBox.shrink();
+              },
+              errorBuilder: (ctx, error, stack) =>
+                  const SizedBox.shrink(),
+            ),
+            // 高清原图层:放大(scale>1.3)时按需加载原片全像素(readBytes 全图)。
+            // 日常浏览用上层下采样图(快),只有放大看细节才 load 原图;高清就绪后
+            // 覆盖 1536,放大清晰;加载中透明(透出下层 1536,放大虽糊但可见)。
+            if (_hdTriggered)
+              Image(
+                image: buildImageProvider(ref, targetWidth: null),
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+                loadingBuilder: (ctx, child, progress) =>
+                    progress == null ? child : const SizedBox.shrink(),
+                errorBuilder: (ctx, error, stack) => const SizedBox.shrink(),
+              ),
+          ],
         ),
       ),
     );

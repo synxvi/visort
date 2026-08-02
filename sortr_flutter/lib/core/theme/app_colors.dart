@@ -17,6 +17,7 @@ class AppColors {
   static const bg = Color(0xFF0D0D0D);
   static const surface = Color(0xFF161616);
   static const border = Color(0xFF2A2A2A);
+  static const surfaceElevated = Color(0xFF1E1E1E); // 弹窗/浮层（比 surface 提亮，与卡片区分）
   static const accent = Color(0xFFE8FF47); // 主强调，亮黄绿
   static const accent2 = Color(0xFFFF6B35); // 次强调，橙红（用于 undecided）
   static const text = Color(0xFFF0F0F0);

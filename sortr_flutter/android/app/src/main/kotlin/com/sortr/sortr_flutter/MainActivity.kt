@@ -12,6 +12,7 @@ import android.window.OnBackAnimationCallback
 import android.window.OnBackInvokedDispatcher
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
 import com.sortr.sortr_flutter.mediastore.MediaStorePlugin
 
 class MainActivity : FlutterActivity() {
@@ -20,6 +21,17 @@ class MainActivity : FlutterActivity() {
         // 注册 MediaStore MethodChannel + EventChannel plugin（sortr/mediastore）
         flutterEngine.plugins.add(MediaStorePlugin())
         // SAF plugin 已移除（MediaStore 取代）。非媒体文件场景如需恢复，需重新引入 saf 包。
+        // 「回桌面」通道：首页（根路由）右滑返回时 Dart 调 moveTaskToBack，
+        // 等效 Home 键（task 保留后台，不 finish——finish 会从最近任务移除应用）。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "sortr/app")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "moveTaskToBack") {
+                    runOnUiThread { moveTaskToBack(true) }
+                    result.success(null)
+                } else {
+                    result.notImplemented()
+                }
+            }
     }
 
     // 在窗口属性创建阶段注入高刷设置。onAttachedToWindow 是窗口已 attach 但
@@ -48,15 +60,7 @@ class MainActivity : FlutterActivity() {
         val surfaceView = findSurfaceView(window.decorView) ?: return
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
-                try {
-                    holder.surface.setFrameRate(
-                        rate,
-                        Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
-                        Surface.CHANGE_FRAME_RATE_ALWAYS,
-                    )
-                } catch (_: Throwable) {
-                    // 个别 OEM 实现差异——忽略，回退系统默认策略
-                }
+                declareFrameRate(holder)
             }
 
             override fun surfaceChanged(
@@ -64,10 +68,34 @@ class MainActivity : FlutterActivity() {
                 format: Int,
                 width: Int,
                 height: Int,
-            ) {}
+            ) {
+                // surface 尺寸/格式变化后 SF 可能重置 layer 帧率声明，重新声明一次。
+                declareFrameRate(holder)
+            }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {}
         })
+    }
+
+    private fun declareFrameRate(holder: SurfaceHolder) {
+        val rate = pickHighestRefreshRate() ?: return
+        try {
+            // ⚠️ FRAME_RATE_COMPATIBILITY_AT_LEAST 关键（2026-08 实测，ColorOS 16）：
+            // 之前用 FIXED_SOURCE（SF dump 显示 ExactOrMultiple）——其语义允许
+            // “声明帧率的约数”（120 的约数含 60/30/24），ColorOS 智能帧率在 app
+            // 提交节奏波动时合法降档到 30 且不回升（引擎 120fps 提交、display 120Hz，
+            // 但 SF 合成 30，开发者选项“显示屏幕刷新率”显示 30）。
+            // AT_LEAST = display 帧率至少为声明值（120 为设备上限 → 锁死 120 不降档）。
+            // 设备 ROM 无 4 参 setFrameRate（无 FrameRateCategory），3 参即可。
+            holder.surface.setFrameRate(
+                rate,
+                Surface.FRAME_RATE_COMPATIBILITY_AT_LEAST,
+                Surface.CHANGE_FRAME_RATE_ALWAYS,
+            )
+        } catch (e: Throwable) {
+            // 个别 OEM 实现差异——忽略，回退系统默认策略
+            android.util.Log.w("SortrFPS", "setFrameRate failed: $e")
+        }
     }
 
     /** 设备支持的最高刷新率（同分辨率下最高的那个 mode 的刷新率）。 */

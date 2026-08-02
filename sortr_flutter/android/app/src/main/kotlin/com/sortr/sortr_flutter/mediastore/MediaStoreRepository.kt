@@ -6,11 +6,13 @@ import android.content.ContentUris
 import android.content.Context
 import android.content.IntentSender
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
+import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
@@ -458,6 +460,67 @@ class MediaStoreRepository(private val context: Context) {
                 if (read <= 0) ByteArray(0) else buf.copyOf(read)
             }
         }
+    }
+
+    // ──────────── 下采样解码（viewer 全图用,对标系统相册 native 解码速度） ────────────
+
+    /// 从原图 BitmapFactory + inSampleSize 解码到 ≤ [targetWidth],再 compress JPEG 95。
+    ///
+    /// 对比 [readBytes]（读全图字节交 Dart decode 全 12MP,JPEG 全解码慢）:
+    /// 本方法 native 端只解码 targetWidth 附近像素(inSampleSize 下采样,
+    /// 不解全 1200 万像素),JPEG 95 高质量压缩后交 Dart decode 小图——
+    /// 解码量 12MP → ~3MP,相机大图全图解码 ~250ms → ~80-100ms,质量从原图解码保证清晰。
+    /// (系统相册走私有 native libcodec 区域解码;sortr 用标准 BitmapFactory
+    ///  + inSampleSize 下采样,同样只解目标尺寸像素,够用。)
+    fun readSampledImage(id: String, targetWidth: Int): ByteArray {
+        val longId = id.toLongOrNull() ?: throw MsError.InvalidArg("非法图片 id: $id")
+        val uri = ContentUris.withAppendedId(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
+        )
+        // ① 读原图尺寸(不解码像素,inJustDecodeBounds)。用 openInputStream + BufferedInputStream:
+        //    decodeStream 解 JPEG 需要 markable stream(openInputStream 的 FileInputStream 不可 mark,
+        //    直接 decodeStream 会空/黑);BufferedInputStream 提供缓冲 mark。
+        //    (openFileDescriptor 对部分 MediaStore uri 返回 null,故不用 fd 路径。)
+        val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        // ⚠️ openInputStream 判 null 必须独立:use 块返回 decodeStream 结果,
+        // inJustDecodeBounds 时 decodeStream 正常返回 null,若写 `?.use{} ?: throw`
+        // 会把这个 null 误判成失败而 throw(之前一直 FAIL 的根因)。
+        val bStream = contentResolver.openInputStream(uri)
+            ?: throw MsError.QueryFailed("无法打开 InputStream: $id")
+        bStream.use {
+            BitmapFactory.decodeStream(BufferedInputStream(it, 65536), null, boundsOpts)
+        }
+        val origW = boundsOpts.outWidth
+        if (origW <= 0) {
+            // 尺寸读不出(非图片/损坏)→ 回退 readBytes 全图兜底
+            Log.w(TAG, "readSampledImage: 无法读尺寸,回退 readBytes id=$id")
+            return readBytes(id)
+        }
+        // ② 算 inSampleSize(2 的幂,使解码宽度 ≤ targetWidth)。
+        //    ⚠️ 用 origW/sampleSize > targetWidth(非 origW/(sample*2) >= target):
+        //    后者要求 origW >= 2*target 才下采样,对 origW≈target 的相机原图(3072 vs 2880)
+        //    会得 sample=1 → 解全图 12MP + compress 大 JPEG + dart 再解一遍,比 readBytes 还慢。
+        //    改成 > targetWidth:只要 origW > target 就 sample≥2,解码宽度落到 (target/2, target]。
+        //    例:origW=3072, target=2880 → sample=2(解码 1536);origW=4096 → sample=2(解码 2048)。
+        var sampleSize = 1
+        while (origW / sampleSize > targetWidth) {
+            sampleSize *= 2
+        }
+        // ③ 按 inSampleSize 解码(只解 origW/sampleSize 像素,native libjpeg-turbo 快)
+        val opts = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val dStream = contentResolver.openInputStream(uri)
+            ?: throw MsError.QueryFailed("无法打开 InputStream: $id")
+        val bitmap = dStream.use {
+            BitmapFactory.decodeStream(BufferedInputStream(it, 65536), null, opts)
+        } ?: throw MsError.QueryFailed("无法解码 id=$id")
+        // ④ compress JPEG 95 高质量
+        val baos = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, baos)
+        bitmap.recycle()
+        return baos.toByteArray()
     }
 
     // ──────────── 读取缩略图（相册网格用） ────────────
