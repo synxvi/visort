@@ -418,7 +418,11 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
               Icon(icon, color: iconColor, size: 20),
               const SizedBox(width: 12),
               Text(label,
-                  style: const TextStyle(color: AppColors.text, fontSize: 14)),
+                  style: const TextStyle(
+                      fontFamily: 'Space Mono',
+                      fontFamilyFallback: AppFonts.cjkFallback,
+                      color: AppColors.text,
+                      fontSize: 14)),
             ],
           ),
         ),
@@ -493,13 +497,21 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
           ButtonSegment(
             value: ClassifyMode.toAlbum,
             label: Text(t(ref, 'mode_to_album'),
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                style: const TextStyle(
+                    fontFamily: 'Space Mono',
+                    fontFamilyFallback: AppFonts.cjkFallback,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700)),
             icon: const Icon(Icons.swap_horiz, size: 18),
           ),
           ButtonSegment(
             value: ClassifyMode.toNewDir,
             label: Text(t(ref, 'mode_to_newdir'),
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                style: const TextStyle(
+                    fontFamily: 'Space Mono',
+                    fontFamilyFallback: AppFonts.cjkFallback,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700)),
             icon: const Icon(Icons.create_new_folder_outlined, size: 18),
           ),
         ],
@@ -519,7 +531,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     if (_buckets.isEmpty) {
       return Center(
           child: Text(t(ref, 'no_albums'),
-              style: const TextStyle(color: AppColors.muted)));
+              style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)));
     }
     return NotificationListener<ScrollNotification>(
       onNotification: (n) {
@@ -704,6 +716,8 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
               children: [
                 Text(title,
                     style: const TextStyle(
+                        fontFamily: 'Space Mono',
+                        fontFamilyFallback: AppFonts.cjkFallback,
                         color: AppColors.accent,
                         fontWeight: FontWeight.w800,
                         fontSize: 13, height: 1.1)),
@@ -716,7 +730,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text('$totalCount',
-                      style: const TextStyle(
+                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
                           color: AppColors.accent,
                           fontSize: 11,
                           fontWeight: FontWeight.w700)),
@@ -802,6 +816,10 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
         case SortBy.dateModified:
           cmp = a.dateModifiedMs.compareTo(b.dateModifiedMs);
           break;
+        case SortBy.dateTrashed:
+          // 相册（bucket）无删除日期概念；回退创建时间。
+          cmp = a.dateCreatedMs.compareTo(b.dateCreatedMs);
+          break;
       }
       return config.albumSortAsc ? cmp : -cmp;
     });
@@ -839,13 +857,13 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(t(ref, 'manage_media_title'),
-                    style: const TextStyle(
+                    style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
                         color: AppColors.accent2,
                         fontWeight: FontWeight.w700,
                         fontSize: 12)),
                 const SizedBox(height: 2),
                 Text(t(ref, 'manage_media_hint'),
-                    style: TextStyle(
+                    style: TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
                         color: AppColors.text.withValues(alpha: 0.7),
                         fontSize: 11)),
               ],
@@ -861,7 +879,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
             ),
             onPressed: _requestManageMedia,
             child: Text(t(ref, 'enable'),
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+                style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], fontSize: 11, fontWeight: FontWeight.w700)),
           ),
         ],
       ),
@@ -921,7 +939,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
             child: Text(
               _buildNewDirFolders().map((f) => f.path).join('\n'),
               style: const TextStyle(
-                  color: AppColors.muted, fontFamily: 'SpaceMono', fontSize: 11),
+                  color: AppColors.muted, fontFamily: 'Space Mono', height: 1.2, fontSize: 11),
             ),
           ),
           const SizedBox(height: 16),
@@ -973,7 +991,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
                     ),
                     child: Text(
                       idx < _keyOrder.length ? _keyOrder[idx] : '?',
-                      style: const TextStyle(
+                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
                           color: AppColors.accent,
                           fontWeight: FontWeight.w800,
                           fontSize: 13),
@@ -1002,7 +1020,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   /// 区块标题文字（统一样式）
   Widget _sectionTitle(String text) {
     return Text(text,
-        style: const TextStyle(
+        style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
             color: AppColors.accent,
             fontWeight: FontWeight.w800,
             fontSize: 13));
@@ -1048,7 +1066,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     return TextField(
       controller: controller,
       focusNode: focusNode,
-      style: const TextStyle(color: AppColors.text, fontSize: 14),
+      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 14),
       decoration: InputDecoration(
         isDense: true,
         contentPadding:
@@ -1103,7 +1121,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
               child: Text(
                 _statusText(),
                 style: TextStyle(
-                  fontFamily: 'SpaceMono',
+                  fontFamily: 'Space Mono', height: 1.2,
                   fontFamilyFallback: AppFonts.cjkFallback,
                   fontSize: 12,
                   color: canStart ? AppColors.accent : AppColors.muted,
@@ -1129,7 +1147,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
                           strokeWidth: 2, color: AppColors.bg),
                     )
                   : Text(t(ref, 'start'),
-                      style: const TextStyle(
+                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
                           fontWeight: FontWeight.w800, fontSize: 14)),
             ),
           ],
@@ -1160,7 +1178,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
             const SizedBox(height: 16),
             Text(t(ref, 'permission_needed'),
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: AppColors.text, fontSize: 14)),
+                style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 14)),
             const SizedBox(height: 20),
             FilledButton(
               onPressed: _initAndLoad,
@@ -1183,7 +1201,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
             const SizedBox(height: 12),
             SelectableText(_error!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: AppColors.danger, fontSize: 12)),
+                style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.danger, fontSize: 12)),
             const SizedBox(height: 16),
             OutlinedButton(onPressed: _loadBuckets, child: Text(t(ref, 'retry'))),
           ],
@@ -1278,7 +1296,7 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
                           Text(
                             widget.bucket.name,
                             style: TextStyle(
-                              fontFamily: 'SpaceMono',
+                              fontFamily: 'Space Mono', height: 1.2,
                               fontFamilyFallback: AppFonts.cjkFallback,
                               fontWeight: FontWeight.w700,
                               fontSize: 13,
@@ -1290,7 +1308,7 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
                           const SizedBox(height: 2),
                           Text('${widget.bucket.count}',
                               style: const TextStyle(
-                                  fontFamily: 'SpaceMono',
+                                  fontFamily: 'Space Mono', height: 1.2,
                                   fontSize: 10,
                                   color: AppColors.muted)),
                         ],
@@ -1430,7 +1448,7 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
                           style: const TextStyle(
                               fontSize: 9,
                               color: Colors.white,
-                              fontFamily: 'SpaceMono')),
+                              fontFamily: 'Space Mono', height: 1.2)),
                     ),
                   ),
                 ),
@@ -1455,7 +1473,7 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontFamily: 'SpaceMono',
+                fontFamily: 'Space Mono', height: 1.2,
                 fontFamilyFallback: AppFonts.cjkFallback,
                 fontWeight: FontWeight.w700,
                 fontSize: 11,

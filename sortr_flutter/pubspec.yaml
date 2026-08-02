@@ -33,7 +33,7 @@ flutter:
     - assets/images/
 
   fonts:
-    - family: SpaceMono
+    - family: "Space Mono"
       fonts:
         - asset: assets/fonts/SpaceMono-Regular.ttf
         - asset: assets/fonts/SpaceMono-Bold.ttf

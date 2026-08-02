@@ -46,7 +46,7 @@ class ReviewScreen extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(t(ref, 'review_desc'),
-                    style: const TextStyle(color: AppColors.muted, fontSize: 13)),
+                    style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)),
                 const SizedBox(height: 24),
                 // 4 张统计卡片
                 Row(
@@ -84,7 +84,7 @@ class ReviewScreen extends ConsumerWidget {
                   const SizedBox(height: 24),
                   Text(t(ref, 'undecided_label'),
                       style: const TextStyle(
-                          fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                          fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                           fontSize: 11,
                           color: AppColors.muted)),
                   const SizedBox(height: 8),
@@ -110,7 +110,7 @@ class ReviewScreen extends ConsumerWidget {
                                 ),
                                 child: Text(id,
                                     style: const TextStyle(
-                                        fontFamily: 'SpaceMono',
+                                        fontFamily: 'Space Mono', height: 1.2,
                                         fontFamilyFallback: AppFonts.cjkFallback,
                                         fontSize: 11,
                                         color: AppColors.muted)),
@@ -176,14 +176,14 @@ class _StatCard extends StatelessWidget {
         children: [
           Text('$value',
               style: TextStyle(
-                  fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                  fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                   fontSize: 28,
                   fontWeight: FontWeight.w800,
                   color: color)),
           const SizedBox(height: 4),
           Text(label,
               style: const TextStyle(
-                  fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                  fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                   fontSize: 11,
                   color: AppColors.muted)),
         ],
@@ -249,7 +249,7 @@ class _ChangesTable extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.all(24),
               child: Text('—',
-                  style: const TextStyle(color: AppColors.muted),
+                  style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted),
                   textAlign: TextAlign.center),
             ),
         ],
@@ -265,7 +265,7 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(text,
         style: const TextStyle(
-            fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+            fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
             fontSize: 11,
             fontWeight: FontWeight.w700,
             color: AppColors.muted,
@@ -293,7 +293,7 @@ class _Row extends StatelessWidget {
               child: Text(file,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                      fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback, fontSize: 12))),
+                      fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback, fontSize: 12))),
           // 固定宽度容器，与表头对齐；badge 左对齐，不撑满
           SizedBox(
             width: 72,
@@ -307,7 +307,7 @@ class _Row extends StatelessWidget {
               child: Text(dest,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                      fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback, fontSize: 12))),
+                      fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback, fontSize: 12))),
         ],
       ),
     );

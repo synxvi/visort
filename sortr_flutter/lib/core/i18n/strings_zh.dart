@@ -125,7 +125,8 @@ const Map<String, String> stringsZh = {
   'album_sort': '排序',
   'sort_by_name': '按名称',
   'sort_by_date_created': '按创建日期',
-  'sort_by_date_modified': '按修改日期',
+  'sort_by_date_modified': '按修改时间',
+  'sort_by_date_trashed': '按删除日期',
   'sort_asc': '升序',
   'sort_desc': '降序',
   'photo_count': '{0} 张',
@@ -232,6 +233,7 @@ const Map<String, String> stringsZh = {
   'trash_item_title': '回收站选项',
   'trash_confirm_desc': '可从回收站恢复。',
   'delete_permanently': '彻底删除',
+  'trash_deleted_label': '删除于',
 
   // ───────── 设置 ─────────
   'settings_section_home': '首页',

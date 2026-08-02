@@ -51,12 +51,11 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-        <!-- 启用 Impeller 渲染后端（Android 默认即开）。注：这只控制渲染后端，
-             与屏幕刷新率无关——高刷（90/120Hz）由 MainActivity.setHighRefreshRateMode()
-             通过 preferredDisplayModeId 设置，不要在此处误改。 -->
+        <!-- Impeller 渲染后端：临时禁用切回 Skia,排查自定义字体(SpaceMono)在 Impeller
+             下加载失败 fallback 成 sans 的问题(实测字母不等宽)。验证后决定恢复或修 ttf。 -->
         <meta-data
             android:name="io.flutter.embedding.android.EnableImpeller"
-            android:value="true" />
+            android:value="false" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

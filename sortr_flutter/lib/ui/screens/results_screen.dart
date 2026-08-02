@@ -81,14 +81,14 @@ class _ExecutingView extends ConsumerWidget {
             const SizedBox(height: 20),
             Text(t(ref, 'applying'),
                 style: const TextStyle(
-                    fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                    fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                     fontSize: 13,
                     color: AppColors.text)),
             if (current != null && total != null) ...[
               const SizedBox(height: 8),
               Text('$current / $total',
                   style: const TextStyle(
-                      fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                      fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                       fontSize: 11,
                       color: AppColors.muted)),
             ],
@@ -96,7 +96,7 @@ class _ExecutingView extends ConsumerWidget {
               const SizedBox(height: 4),
               Text('${t(ref, 'processing_of')}$currentFile',
                   style: const TextStyle(
-                      fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                      fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                       fontSize: 11,
                       color: AppColors.muted)),
             ],
@@ -124,17 +124,17 @@ class _DoneView extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text('✦',
-                    style: TextStyle(
+                    style: TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
                         fontSize: 48, color: AppColors.success)),
                 const SizedBox(height: 16),
                 Text(t(ref, 'done'),
                     style: const TextStyle(
-                        fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                        fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                         fontWeight: FontWeight.w800,
                         fontSize: 32)),
                 const SizedBox(height: 8),
                 Text(t(ref, 'all_applied'),
-                    style: const TextStyle(color: AppColors.muted)),
+                    style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)),
                 const SizedBox(height: 32),
                 _ResultRow(
                     icon: '✔',
@@ -175,7 +175,7 @@ class _DoneView extends ConsumerWidget {
                                 child: Text(
                                     '${e.file}: ${t(ref, e.reason)}',
                                     style: const TextStyle(
-                                        fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                                        fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                                         fontSize: 11,
                                         color: AppColors.danger)),
                               ))
@@ -223,16 +223,16 @@ class _ResultRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
-          Text(icon, style: TextStyle(color: color, fontSize: 16)),
+          Text(icon, style: TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: color, fontSize: 16)),
           const SizedBox(width: 12),
           Expanded(
             child: Text(label,
                 style: const TextStyle(
-                    fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback, fontSize: 13)),
+                    fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback, fontSize: 13)),
           ),
           Text('$count',
               style: TextStyle(
-                  fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                  fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                   fontSize: 18,
                   fontWeight: FontWeight.w800,
                   color: color)),

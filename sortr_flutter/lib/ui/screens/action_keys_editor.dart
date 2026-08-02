@@ -94,7 +94,7 @@ class _ActionKeysEditorState extends ConsumerState<ActionKeysEditor> {
       children: [
         Text(label,
             style: const TextStyle(
-                fontFamily: 'SpaceMono',
+                fontFamily: 'Space Mono', height: 1.2,
                 fontFamilyFallback: AppFonts.cjkFallback,
                 fontSize: 11,
                 color: AppColors.muted)),
@@ -106,7 +106,7 @@ class _ActionKeysEditorState extends ConsumerState<ActionKeysEditor> {
             textAlign: TextAlign.center,
             maxLength: 1,
             style: const TextStyle(
-                fontFamily: 'SpaceMono',
+                fontFamily: 'Space Mono', height: 1.2,
                 fontFamilyFallback: AppFonts.cjkFallback),
             decoration: const InputDecoration(
               counterText: '',

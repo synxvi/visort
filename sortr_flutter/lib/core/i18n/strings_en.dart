@@ -128,6 +128,7 @@ const Map<String, String> stringsEn = {
   'sort_by_name': 'By Name',
   'sort_by_date_created': 'By Created Date',
   'sort_by_date_modified': 'By Modified Date',
+  'sort_by_date_trashed': 'By Deleted Date',
   'sort_asc': 'Ascending',
   'sort_desc': 'Descending',
   'photo_count': '{0} photos',
@@ -235,6 +236,7 @@ const Map<String, String> stringsEn = {
   'trash_item_title': 'Trash options',
   'trash_confirm_desc': 'It can be restored from Trash.',
   'delete_permanently': 'Delete permanently',
+  'trash_deleted_label': 'Deleted',
 
   // ───────── 设置 ─────────
   'settings_section_home': 'Home',

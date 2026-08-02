@@ -119,25 +119,26 @@ Future<T?> showSpringPopupFromAnchor<T>({
   final dx = anchorGlobalDx - menuLeft;
   final dy = anchorGlobalDy - menuTop;
 
-  return showGeneralDialog<T>(
-    context: context,
-    barrierDismissible: dismissible,
-    barrierLabel: barrierLabel,
-    barrierColor: barrierColor,
-    transitionDuration: const Duration(milliseconds: 1250),
-    // pageBuilder 返回全屏 Stack，菜单用 Positioned 精确定位。
-    // ⚠️ 弹簧缩放必须作用在 Positioned.child（菜单本体）上，不能作用在整个 Stack
-    // （Stack 左上角是屏幕 0,0，会导致锚点错位——早期 bug：从挖孔弹出）。
-    pageBuilder: (ctx, _, _) {
-      return Stack(
+  // 用自定义 _SpringPopupRoute：override reverseTransitionDuration = 500ms，
+  // 让“展开 1250ms(弹簧) / 收回 500ms”分开（showGeneralDialog 正反共用时长，做不到）。
+  return Navigator.of(context, rootNavigator: true).push<T>(
+    _SpringPopupRoute<T>(
+      barrierDismissible: dismissible,
+      barrierLabel: barrierLabel,
+      barrierColor: barrierColor,
+      transitionDuration: const Duration(milliseconds: 1250),
+      // pageBuilder 返回全屏 Stack，菜单用 Positioned 精确定位。
+      // ⚠️ 弹簧缩放必须作用在 Positioned.child（菜单本体）上，不能作用在整个 Stack
+      // （Stack 左上角是屏幕 0,0，会导致锚点错位——早期 bug：从挖孔弹出）。
+      pageBuilder: (ctx, anim, _) => Stack(
         children: [
           Positioned(
             left: menuLeft,
             top: menuTop,
             width: menuWidth,
-            // 缩放锚点 = 按钮右下角（菜单内坐标 dx,dy）。
+            // 缩放锚点 = 按钮右下角（菜单内坐标 dx,dy）；anim 即路由主动画。
             child: _SpringAnchorScale(
-              animation: ModalRoute.of(ctx)!.animation!,
+              animation: anim,
               dx: dx,
               dy: dy,
               spring: spring,
@@ -145,14 +146,14 @@ Future<T?> showSpringPopupFromAnchor<T>({
             ),
           ),
         ],
-      );
-    },
-    // transitionBuilder 只负责整体 fade（Stack 层），缩放已内联到 Positioned.child。
-    transitionBuilder: (ctx, anim, _, child) {
-      final fadeT = (anim.value / 0.12).clamp(0.0, 1.0);
-      final opacity = AppCurves.couiEase.transform(fadeT);
-      return Opacity(opacity: opacity, child: child);
-    },
+      ),
+      // transitionBuilder 只负责整体 fade（Stack 层），缩放已内联到 Positioned.child。
+      transitionBuilder: (ctx, anim, _, child) {
+        final fadeT = (anim.value / 0.12).clamp(0.0, 1.0);
+        final opacity = AppCurves.couiEase.transform(fadeT);
+        return Opacity(opacity: opacity, child: child);
+      },
+    ),
   );
 }
 
@@ -193,4 +194,21 @@ class _SpringAnchorScale extends StatelessWidget {
       },
     );
   }
+}
+
+/// 弹簧弹窗路由：展开用 transitionDuration（1250ms 弹簧），收回独立 500ms。
+/// showGeneralDialog / RawDialogRoute 的 reverseTransitionDuration 默认 = transitionDuration，
+/// 无法分别设；此处 override getter 让收回独立缩短。
+class _SpringPopupRoute<T> extends RawDialogRoute<T> {
+  _SpringPopupRoute({
+    required super.pageBuilder,
+    super.barrierDismissible,
+    super.barrierColor,
+    super.barrierLabel,
+    super.transitionDuration,
+    super.transitionBuilder,
+  });
+
+  @override
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 500);
 }

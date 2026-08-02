@@ -46,6 +46,11 @@ NonModalMenuController showNonModalMenu({
   final closeSignal = ValueNotifier<bool>(false);
   controller._closeSignal = closeSignal;
 
+  // 当前路由的次级动画：新页面 push 覆盖本页时播放（value 0→1）。
+  // 菜单监听它——非模态菜单不拦截手势，导航发生时若不主动收回，
+  // 菜单会滞留在 rootOverlay 最上层（盖到相册/sort/settings 等新页面之上）。
+  final routeSecondary = ModalRoute.of(context)?.secondaryAnimation;
+
   late OverlayEntry entry;
   entry = OverlayEntry(
     builder: (ctx) => _NonModalMenuBody(
@@ -55,6 +60,7 @@ NonModalMenuController showNonModalMenu({
       offsetY: offsetY,
       isScrolling: isScrolling,
       closeSignal: closeSignal,
+      routeSecondary: routeSecondary,
       onClose: () {
         controller._dismiss(entry, onDismiss);
       },
@@ -100,6 +106,7 @@ class _NonModalMenuBody extends StatefulWidget {
     required this.offsetY,
     required this.isScrolling,
     required this.closeSignal,
+    this.routeSecondary,
     required this.onClose,
     required this.menuBuilder,
   });
@@ -111,6 +118,8 @@ class _NonModalMenuBody extends StatefulWidget {
   final ValueNotifier<bool> isScrolling;
   /// controller.close() 触发的收回信号。
   final ValueNotifier<bool> closeSignal;
+  /// 所属路由的次级动画：新页面覆盖本页时播放，用于导航时自动收回。
+  final Animation<double>? routeSecondary;
   final VoidCallback onClose;
   final WidgetBuilder menuBuilder;
 
@@ -125,6 +134,10 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
   late final Animation<double> _opacity;
   // 是否处于收回流程（防止 reverse 完成回调与滚动收回重复触发 onClose）
   bool _closing = false;
+  // 收回起点：记录触发收回瞬间的 scale 与 controller value，
+  // 让收回从当前显示尺寸线性缩到 0（绕开 forward 弹簧 → reverse 线性的曲线跳变）。
+  double _reverseStartScale = 1.0;
+  double _reverseStartValue = 1.0;
 
   @override
   void initState() {
@@ -132,9 +145,8 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
     _ctrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1250),
-      // 收回用 150ms（比展开弹簧快、利落），curve 由 _scale/_opacity 的
-      // reverseCurve 决定（couiOutEase 快速收，不反向播弹簧）。
-      reverseDuration: const Duration(milliseconds: 150),
+      // 收回 500ms（linear 曲线下匀速、看得清又利落；与设置弹窗收回统一）。
+      reverseDuration: const Duration(milliseconds: 500),
     );
     // 展开：弹簧曲线（一加浮动手环：stiffness 158, dampingRatio 0.6）。
     // 收回：couiOutEase（快速起步、极慢收尾 → "嗖"地收回）。
@@ -142,7 +154,8 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
       CurvedAnimation(
         parent: _ctrl,
         curve: _SpringCurve(),
-        reverseCurve: AppCurves.couiOutEase,
+        // 收回用线性：展开弹簧过冲有性格，收回则匀速、干脆、不拖尾。
+        reverseCurve: Curves.linear,
       ),
     );
     _opacity = Tween(begin: 0.0, end: 1.0).animate(
@@ -163,6 +176,35 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
     widget.isScrolling.addListener(_onScrollChanged);
     // 监听 controller.close()：播收回动画。
     widget.closeSignal.addListener(_onCloseSignal);
+    // 监听路由覆盖：新页面 push 时瞬间收回（与滚动收回同模式，避免菜单滞留新页面之上）。
+    widget.routeSecondary?.addListener(_onRoutePushed);
+  }
+
+  /// 路由被新页面覆盖时（secondaryAnimation value > 0）瞬间收回。
+  void _onRoutePushed() {
+    final anim = widget.routeSecondary;
+    if (anim != null && anim.value > 0 && mounted && !_closing) {
+      _closing = true;
+      widget.onClose();
+    }
+  }
+
+  /// 点外部屏障：播收回动画（与 controller.close() 同路径），dismissed 后移除。
+  /// 屏障 opaque 吞噬第一次点击 → 不触发底层，再点一次才进对应页面。
+  void _dismissOnOutsideTap() {
+    if (!_closing && mounted) {
+      _closing = true;
+      _beginReverse();
+    }
+  }
+
+  /// 记录当前 scale / controller 值后开始收回。收回按 controller 归一化进度，
+  /// 从 [_reverseStartScale] 线性缩到 0 —— 无论在展开哪个阶段收回，都从当前
+  /// 显示尺寸连续缩小，彻底绕开 CurvedAnimation 的 curve→reverseCurve 切换跳变。
+  void _beginReverse() {
+    _reverseStartScale = _scale.value.clamp(0.0, 1.2);
+    _reverseStartValue = _ctrl.value;
+    _ctrl.reverse();
   }
 
   void _onScrollChanged() {
@@ -176,7 +218,7 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
   void _onCloseSignal() {
     if (widget.closeSignal.value && !_closing && mounted) {
       _closing = true;
-      _ctrl.reverse(); // 收回动画；dismissed 后 statusListener 调 onClose 移除
+      _beginReverse(); // 收回动画；dismissed 后 statusListener 调 onClose 移除
     }
   }
 
@@ -184,6 +226,7 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
   void dispose() {
     widget.isScrolling.removeListener(_onScrollChanged);
     widget.closeSignal.removeListener(_onCloseSignal);
+    widget.routeSecondary?.removeListener(_onRoutePushed);
     _ctrl.dispose();
     super.dispose();
   }
@@ -208,29 +251,51 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
     final anchorDx = widget.menuWidth + 8; // 菜单右缘到按钮右缘
     final anchorDy = -4.0; // 菜单顶在按钮底+4，故按钮底相对菜单顶是 -4
 
-    return Positioned(
-      left: left,
-      top: top,
-      width: widget.menuWidth,
-      child: AnimatedBuilder(
-        animation: _ctrl,
-        builder: (ctx, _) {
-          final s = (_scale.value).clamp(0.0, 1.2);
-          final o = (_opacity.value * 8).clamp(0.0, 1.0); // fade 快速完成（前 1/8）
-          return Opacity(
-            opacity: o,
-            child: Transform(
-              alignment: Alignment.topRight,
-              // 以按钮右下角为支点缩放（菜单从按钮处向左下展开 / 收回）
-              transform: Matrix4.identity()
-                ..translateByDouble(anchorDx, anchorDy, 0, 1)
-                ..scaleByDouble(s, s, 1, 1)
-                ..translateByDouble(-anchorDx, -anchorDy, 0, 1),
-              child: widget.menuBuilder(ctx),
-            ),
-          );
-        },
-      ),
+    return Stack(
+      children: [
+        // 全屏屏障：展开期间吞噬第一次点击 → 仅收回菜单，不触发底层导航。
+        // （标准 popover 行为：菜单在时点外部只关菜单，再点才进对应页面。）
+        // 代价：展开期间主界面不可滚动（modal 化）；可接受的短时交互代价。
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _dismissOnOutsideTap,
+          ),
+        ),
+        Positioned(
+          left: left,
+          top: top,
+          width: widget.menuWidth,
+          child: AnimatedBuilder(
+            animation: _ctrl,
+            builder: (ctx, _) {
+              // 展开：弹簧 scale（_scale.value 过冲）；收回：从触发瞬间的 scale
+              // 线性缩到 0（rawScale）—— 不再读 _scale.value，绕开 curve 切换跳变。
+              final double rawScale = (_closing && _reverseStartValue > 0)
+                  ? _reverseStartScale * (_ctrl.value / _reverseStartValue)
+                  : _scale.value;
+              final s = rawScale.clamp(0.0, 1.2);
+              // 展开：前 1/8 快速淡入；收回：跟随 scale 同步淡出。
+              final o = (_closing ? rawScale : _opacity.value * 8)
+                  .clamp(0.0, 1.0);
+              return Opacity(
+                opacity: o,
+                child: Transform(
+                  // 支点由下方 translate·scale·translate 矩阵精确给出（按钮右下角）。
+                  // ⚠️ 不能再传 alignment：RenderTransform 会再叠一层 alignment 平移，
+                  //    把有效支点推到 (2·menuWidth+8, -4)（菜单右外），看起来像从
+                  //    屏幕右上角弹出。默认 center 分支会原样使用此矩阵。
+                  transform: Matrix4.identity()
+                    ..translateByDouble(anchorDx, anchorDy, 0, 1)
+                    ..scaleByDouble(s, s, 1, 1)
+                    ..translateByDouble(-anchorDx, -anchorDy, 0, 1),
+                  child: widget.menuBuilder(ctx),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }

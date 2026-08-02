@@ -192,7 +192,7 @@ class _FolderEditorState extends ConsumerState<FolderEditor> {
                       textAlign: TextAlign.center,
                       maxLength: 1,
                       style: const TextStyle(
-                          fontFamily: 'SpaceMono',
+                          fontFamily: 'Space Mono', height: 1.2,
                           fontFamilyFallback: AppFonts.cjkFallback),
                       decoration: const InputDecoration(
                         counterText: '',
@@ -206,7 +206,7 @@ class _FolderEditorState extends ConsumerState<FolderEditor> {
                     child: TextField(
                       controller: _labelCtrl(idx, f),
                       style: const TextStyle(
-                          fontFamily: 'SpaceMono',
+                          fontFamily: 'Space Mono', height: 1.2,
                           fontFamilyFallback: AppFonts.cjkFallback),
                       decoration: const InputDecoration(
                         contentPadding: EdgeInsets.symmetric(horizontal: 8),
@@ -257,7 +257,7 @@ class _FieldLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(text,
         style: const TextStyle(
-            fontFamily: 'SpaceMono',
+            fontFamily: 'Space Mono', height: 1.2,
             fontFamilyFallback: AppFonts.cjkFallback,
             fontSize: 11,
             fontWeight: FontWeight.w700,

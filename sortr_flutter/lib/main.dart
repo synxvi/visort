@@ -51,6 +51,14 @@ Future<void> main() async {
     // 加载失败用默认配置
   }
 
+  // 手动注册 SpaceMono 字体:FontManifest 注册在本机 release 下不生效(字体 asset
+  // 能加载、文件等宽、FontManifest 正确,但 Flutter 渲染时 fallback 成系统 sans)。
+  // 用 FontLoader 直接把 ttf 字节注册为 family 'Space Mono' 绕过。
+  final smLoader = FontLoader('Space Mono');
+  smLoader.addFont(rootBundle.load('assets/fonts/SpaceMono-Regular.ttf'));
+  smLoader.addFont(rootBundle.load('assets/fonts/SpaceMono-Bold.ttf'));
+  await smLoader.load();
+
   runApp(UncontrolledProviderScope(
     container: container,
     child: const SortrApp(),
@@ -70,6 +78,13 @@ Future<void> main() async {
       count = 0;
       sw.reset();
     }
+  });
+
+  // 诊断:SpaceMono 字体 asset 能否加载(排查字体不生效)
+  rootBundle.load('assets/fonts/SpaceMono-Regular.ttf').then((data) {
+    debugPrint('[FONT] SpaceMono asset OK: ${data.lengthInBytes} bytes');
+  }).catchError((e) {
+    debugPrint('[FONT] SpaceMono asset FAIL: $e');
   });
 }
 

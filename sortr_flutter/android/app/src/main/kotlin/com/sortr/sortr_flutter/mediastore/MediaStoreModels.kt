@@ -44,6 +44,7 @@ data class MsImageInfo(
     val dateModifiedMs: Long,   // DATE_MODIFIED * 1000（修改时间，秒→毫秒）
     val isFavorite: Boolean = false,   // IS_FAVORITE（Android R+）；低版本始终 false
     val isTrashed: Boolean = false,   // IS_TRASHED（Android R+）；低版本始终 false
+    val dateTrashedMs: Long = 0,   // DATE_EXPIRES * 1000（回收站删除日期；非回收站项为 0）
 ) {
     fun toMap(): Map<String, Any> = mapOf(
         "id" to id,
@@ -55,6 +56,7 @@ data class MsImageInfo(
         "dateModifiedMs" to dateModifiedMs,
         "isFavorite" to isFavorite,
         "isTrashed" to isTrashed,
+        "dateTrashedMs" to dateTrashedMs,
     )
 }
 

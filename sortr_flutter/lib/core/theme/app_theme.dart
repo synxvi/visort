@@ -46,7 +46,7 @@ ThemeData buildAppTheme() {
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: AppColors.surface,
-      hintStyle: const TextStyle(color: AppColors.muted),
+      hintStyle: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(6),
         borderSide: const BorderSide(color: AppColors.border),
@@ -140,6 +140,8 @@ TextTheme _buildTextTheme(TextTheme base) {
         fontWeight: s?.fontWeight,
         color: c ?? s?.color,
         fontSize: s?.fontSize,
+        // SpaceMono 默认行高偏大(字符盒高),显式压到 1.2 避免纵向拉长感。
+        height: 1.2,
         fontFamilyFallback: cjkFallback,
       );
   TextStyle sansStyle(TextStyle? s, {Color? c, FontWeight? w}) => TextStyle(

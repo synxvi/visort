@@ -191,7 +191,7 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(t(ref, 'review_title'),
-                style: const TextStyle(fontSize: 18)),
+                style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], fontSize: 18)),
             const SizedBox(height: 16),
             FilledButton(
               onPressed: () => Navigator.pushNamed(context, AppRoutes.review),
@@ -213,14 +213,14 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
               Expanded(
                 child: Text(img.label,
                     style: const TextStyle(
-                        fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                        fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                         fontSize: 13,
                         color: AppColors.text)),
               ),
               Text(
                 '${session.currentIndex + 1} / ${session.totalCount}',
                 style: const TextStyle(
-                    fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                    fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                     fontSize: 13,
                     color: AppColors.muted),
               ),
@@ -238,7 +238,7 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
             child: _loadError
                 ? Center(
                     child: Text(t(ref, 'preview_na'),
-                        style: const TextStyle(color: AppColors.muted)))
+                        style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)))
                 : Image(
                     image: buildImageProvider(img),
                     fit: BoxFit.contain,
@@ -333,7 +333,7 @@ class _FullscreenImageState extends ConsumerState<_FullscreenImage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(t(ref, 'review_title'), style: const TextStyle(fontSize: 18)),
+            Text(t(ref, 'review_title'), style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], fontSize: 18)),
             const SizedBox(height: 16),
             FilledButton(
               onPressed: () => Navigator.pushNamed(context, AppRoutes.review),
@@ -356,7 +356,7 @@ class _FullscreenImageState extends ConsumerState<_FullscreenImage> {
         _loadError
             ? Center(
                 child: Text(t(ref, 'preview_na'),
-                    style: const TextStyle(color: AppColors.muted)))
+                    style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)))
             : Image(
                 image: buildImageProvider(img),
                 fit: BoxFit.contain,
@@ -422,7 +422,7 @@ class _TopInfoOverlay extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                            fontFamily: 'SpaceMono',
+                            fontFamily: 'Space Mono', height: 1.2,
                             fontFamilyFallback: AppFonts.cjkFallback,
                             fontSize: 12,
                             color: AppColors.text)),
@@ -430,7 +430,7 @@ class _TopInfoOverlay extends StatelessWidget {
                   const SizedBox(width: 10),
                   Text(progress,
                       style: const TextStyle(
-                          fontFamily: 'SpaceMono',
+                          fontFamily: 'Space Mono', height: 1.2,
                           fontFamilyFallback: AppFonts.cjkFallback,
                           fontSize: 12,
                           color: AppColors.muted)),
@@ -444,7 +444,7 @@ class _TopInfoOverlay extends StatelessWidget {
                   children: meta!
                       .map((m) => Text(m,
                           style: const TextStyle(
-                              fontFamily: 'SpaceMono',
+                              fontFamily: 'Space Mono', height: 1.2,
                               fontFamilyFallback: AppFonts.cjkFallback,
                               fontSize: 10,
                               color: AppColors.muted)))
@@ -466,7 +466,7 @@ class _MetaChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(label,
         style: const TextStyle(
-            fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback, fontSize: 11, color: AppColors.muted));
+            fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback, fontSize: 11, color: AppColors.muted));
   }
 }
 
@@ -490,7 +490,7 @@ class _SortPanel extends ConsumerWidget {
             padding: const EdgeInsets.only(bottom: 12),
             child: Text(t(ref, 'move_to'),
                 style: const TextStyle(
-                    fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                    fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
                     color: AppColors.muted,
@@ -590,7 +590,7 @@ class _FolderButton extends StatelessWidget {
             Expanded(
               child: Text(label,
                   style: const TextStyle(
-                      fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                      fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                       fontWeight: FontWeight.w700,
                       fontSize: 13)),
             ),
@@ -625,7 +625,7 @@ class _RootButton extends StatelessWidget {
             Expanded(
               child: Text(label,
                   style: TextStyle(
-                      fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                      fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                       fontWeight: FontWeight.w700,
                       fontSize: 13,
                       color: AppColors.text.withValues(alpha: 0.7))),
@@ -666,14 +666,14 @@ class _ActionButton extends StatelessWidget {
           children: [
             Text(label,
                 style: TextStyle(
-                    fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                    fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                     fontWeight: FontWeight.w700,
                     fontSize: 12,
                     color: danger ? AppColors.danger : AppColors.text)),
             const SizedBox(height: 2),
             Text(kbd,
                 style: const TextStyle(
-                    fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback, fontSize: 10, color: AppColors.muted)),
+                    fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback, fontSize: 10, color: AppColors.muted)),
           ],
         ),
       ),
@@ -799,7 +799,7 @@ class _AndroidFolderChip extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                fontFamily: 'SpaceMono',
+                fontFamily: 'Space Mono', height: 1.2,
                 fontFamilyFallback: AppFonts.cjkFallback,
                 fontWeight: FontWeight.w700,
                 fontSize: 13,
@@ -851,7 +851,7 @@ class _AndroidActionChip extends StatelessWidget {
               const SizedBox(height: 2),
               Text(label,
                   style: TextStyle(
-                      fontFamily: 'SpaceMono',
+                      fontFamily: 'Space Mono', height: 1.2,
                       fontFamilyFallback: AppFonts.cjkFallback,
                       fontWeight: FontWeight.w700,
                       fontSize: 11,

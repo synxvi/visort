@@ -73,7 +73,7 @@ class _ToastViewState extends State<_ToastView>
             child: Text(
               widget.message,
               style: const TextStyle(
-                fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                 fontSize: 13,
                 color: AppColors.text,
               ),

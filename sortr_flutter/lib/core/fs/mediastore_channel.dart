@@ -91,6 +91,7 @@ class MsImageInfo {
     required this.dateModifiedMs,
     this.isFavorite = false,
     this.isTrashed = false,
+    this.dateTrashedMs = 0,
   });
   final String id; // MediaStore _ID（ImageRef.relativePath 编码此值）
   final String name;
@@ -101,6 +102,7 @@ class MsImageInfo {
   final int dateModifiedMs;  // 修改时间（DATE_MODIFIED * 1000）
   final bool isFavorite;  // IS_FAVORITE（Android R+）；低版本始终 false
   final bool isTrashed;  // IS_TRASHED（Android R+）；低版本始终 false
+  final int dateTrashedMs;  // DATE_EXPIRES * 1000（回收站删除日期；非回收站项为 0）
 }
 
 /// 单图元信息
@@ -410,6 +412,7 @@ class MediaStoreChannel {
             (m['dateAddedMs'] as num).toInt(),
         isFavorite: m['isFavorite'] == true,
         isTrashed: m['isTrashed'] == true,
+        dateTrashedMs: (m['dateTrashedMs'] as num?)?.toInt() ?? 0,
       );
 
   MsException _convertError(PlatformException e) => MsException(

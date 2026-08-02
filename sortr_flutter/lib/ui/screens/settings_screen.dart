@@ -30,7 +30,7 @@ class SettingsScreen extends ConsumerWidget {
         foregroundColor: AppColors.text,
         title: Text(t(ref, 'settings_title'),
             style: const TextStyle(
-              fontFamily: 'SpaceMono',
+              fontFamily: 'Space Mono', height: 1.2,
               fontFamilyFallback: AppFonts.cjkFallback,
               fontSize: 16,
             )),
@@ -115,7 +115,7 @@ class _SectionHeader extends StatelessWidget {
         text,
         style: const TextStyle(
           color: AppColors.muted,
-          fontFamily: 'SpaceMono',
+          fontFamily: 'Space Mono', height: 1.2,
           fontFamilyFallback: AppFonts.cjkFallback,
           fontSize: 12,
           fontWeight: FontWeight.w700,
@@ -184,14 +184,14 @@ class _PickerRow<T> extends StatelessWidget {
             Text(label,
                 style: const TextStyle(
                   color: AppColors.text,
-                  fontFamily: 'SpaceMono',
+                  fontFamily: 'Space Mono', height: 1.2,
                   fontFamilyFallback: AppFonts.cjkFallback,
                   fontSize: 14,
                 )),
             const Spacer(),
             Text(valueLabel,
                 style:
-                    const TextStyle(color: AppColors.muted, fontSize: 13)),
+                    const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)),
             const Icon(Icons.keyboard_arrow_down,
                 color: AppColors.muted, size: 20),
           ],
@@ -204,65 +204,84 @@ class _PickerRow<T> extends StatelessWidget {
     final box = context.findRenderObject() as RenderBox?;
     if (box == null) return;
     final pos = box.localToGlobal(Offset.zero);
-    final screen = MediaQuery.sizeOf(context);
     // 菜单右缘 = 卡片右 − 16（对齐 ▾ 箭头）
     final rightEdge = pos.dx + box.size.width - 16;
-    // 自定义菜单（Material + Column.min）：宽度纯按内容，无 PopupMenu 默认最小宽；
-    // Padding 左右对称（14）→ ✓ 离左 = 文字离右。
-    final selected = await showSpringPopup<T>(
+    // 菜单宽度按内容测量，供 showSpringPopupFromAnchor 精确定位弹簧支点。
+    final menuWidth = _measureMenuWidth(context);
+    // 用 showSpringPopupFromAnchor：弹簧缩放作用在菜单本体（非全屏 Stack），
+    // 以触发行右下角为支点 —— 菜单"从按下位置长出"，而非从屏幕角落滑入。
+    final selected = await showSpringPopupFromAnchor<T>(
       context: context,
-      anchor: Alignment.topRight,
       barrierLabel: 'picker',
-      builder: (ctx) {
-        return Stack(
+      anchorGlobalDx: pos.dx + box.size.width, // 触发行右下角 = 弹簧支点
+      anchorGlobalDy: pos.dy + box.size.height,
+      menuLeft: rightEdge - menuWidth, // 右缘对齐 rightEdge
+      menuTop: pos.dy + box.size.height + 4,
+      menuWidth: menuWidth,
+      // 自定义菜单（Material + Column.min）：宽度纯按内容，无 PopupMenu 默认最小宽；
+      // Padding 左右对称（14）→ ✓ 离左 = 文字离右。
+      menuBuilder: (ctx) => Material(
+        color: AppColors.surfaceElevated,
+        elevation: 4,
+        borderRadius: BorderRadius.circular(8),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Positioned(
-              right: screen.width - rightEdge, // 右缘对齐 rightEdge
-              top: pos.dy + box.size.height + 4,
-              child: Material(
-                color: AppColors.surfaceElevated,
-                elevation: 4,
-                borderRadius: BorderRadius.circular(8),
-                clipBehavior: Clip.antiAlias,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    for (final o in options)
-                      InkWell(
-                        onTap: () => Navigator.of(ctx).pop(o.$1),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 11),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              SizedBox(
-                                width: 16,
-                                child: o.$1 == value
-                                    ? const Icon(Icons.check,
-                                        size: 16, color: AppColors.accent)
-                                    : null,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(o.$2,
-                                  style: const TextStyle(
-                                    color: AppColors.text,
-                                    fontFamily: 'SpaceMono',
-                                    fontFamilyFallback: AppFonts.cjkFallback,
-                                    fontSize: 14,
-                                  )),
-                            ],
-                          ),
-                        ),
+            for (final o in options)
+              InkWell(
+                onTap: () => Navigator.of(ctx).pop(o.$1),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 11),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 16,
+                        child: o.$1 == value
+                            ? const Icon(Icons.check,
+                                size: 16, color: AppColors.accent)
+                            : null,
                       ),
-                  ],
+                      const SizedBox(width: 8),
+                      Text(o.$2,
+                          style: const TextStyle(
+                            color: AppColors.text,
+                            fontFamily: 'Space Mono', height: 1.2,
+                            fontFamilyFallback: AppFonts.cjkFallback,
+                            fontSize: 14,
+                          )),
+                    ],
+                  ),
                 ),
               ),
-            ),
           ],
-        );
-      },
+        ),
+      ),
     );
     if (selected != null) onSelected(selected);
+  }
+
+  /// 测量选项菜单的内容宽度，供 showSpringPopupFromAnchor 定位弹簧支点。
+  /// 单行 = 左右内边距(14×2) + 勾选位(16) + 间距(8) + 文字宽度；取最宽行。
+  double _measureMenuWidth(BuildContext context) {
+    const style = TextStyle(
+      fontFamily: 'Space Mono',
+      height: 1.2,
+      fontFamilyFallback: AppFonts.cjkFallback,
+      fontSize: 14,
+    );
+    final scaler = MediaQuery.textScalerOf(context);
+    double maxText = 0;
+    for (final o in options) {
+      final tp = TextPainter(
+        text: TextSpan(text: o.$2, style: style),
+        textScaler: scaler,
+        textDirection: TextDirection.ltr,
+      )..layout();
+      if (tp.width > maxText) maxText = tp.width;
+    }
+    return 14 * 2 + 16 + 8 + maxText;
   }
 }

@@ -257,7 +257,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
             Expanded(
               child: TextField(
                 controller: _sourceCtrl,
-                style: const TextStyle(fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback, fontSize: 13),
+                style: const TextStyle(fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback, fontSize: 13),
                 decoration: InputDecoration(
                   hintText: t(ref, 'dir_ph'),
                 ),
@@ -280,7 +280,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
         const SizedBox(height: 4),
         Text(_recursive ? t(ref, 'recursive') : t(ref, 'flat'),
             style: const TextStyle(
-                fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback, fontSize: 11, color: AppColors.muted)),
+                fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback, fontSize: 11, color: AppColors.muted)),
         const SizedBox(height: 20),
         _FieldLabel(text: t(ref, 'dest_parent')),
         const SizedBox(height: 8),
@@ -292,7 +292,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 onChanged: (v) => ref
                     .read(sessionControllerProvider.notifier)
                     .recomputeFolders(destinationParent: v),
-                style: const TextStyle(fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback, fontSize: 13),
+                style: const TextStyle(fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback, fontSize: 13),
                 decoration: InputDecoration(hintText: t(ref, 'dest_ph')),
               ),
             ),
@@ -370,7 +370,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
         return AlertDialog(
           backgroundColor: AppColors.surface,
           title: Text(t(ref, 'enter_profile_name'),
-              style: const TextStyle(fontSize: 14)),
+              style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], fontSize: 14)),
           content: TextField(
             controller: ctrl,
             autofocus: true,
@@ -409,7 +409,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
         title: Text(t(ref, 'confirm_delete', [name]),
-            style: const TextStyle(fontSize: 14)),
+            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], fontSize: 14)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -445,7 +445,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
         const SizedBox(height: 12),
         if (descriptors.isEmpty)
           Text(t(ref, 'enter_dest_parent'),
-              style: const TextStyle(color: AppColors.muted, fontSize: 12))
+              style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 12))
         else
           Wrap(
             spacing: 12,
@@ -470,7 +470,7 @@ class _FieldLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(text,
         style: const TextStyle(
-            fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+            fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
             fontSize: 11,
             fontWeight: FontWeight.w700,
             color: AppColors.muted,
@@ -509,7 +509,7 @@ class _FolderChip extends StatelessWidget {
                 ),
                 child: Text(keyLabel,
                     style: const TextStyle(
-                        fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                        fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                         fontWeight: FontWeight.w700,
                         fontSize: 13,
                         color: AppColors.bg)),
@@ -518,7 +518,7 @@ class _FolderChip extends StatelessWidget {
               Expanded(
                 child: Text(label,
                     style: const TextStyle(
-                        fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                        fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                         fontWeight: FontWeight.w700,
                         fontSize: 13)),
               ),
@@ -529,7 +529,7 @@ class _FolderChip extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                  fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback, fontSize: 10, color: AppColors.muted)),
+                  fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback, fontSize: 10, color: AppColors.muted)),
         ],
       ),
     );
@@ -574,7 +574,7 @@ class LoadingOverlayBuilder extends StatelessWidget {
               const SizedBox(height: 16),
               Text(message,
                   style: const TextStyle(
-                      fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+                      fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                       fontSize: 13,
                       color: AppColors.text)),
             ],

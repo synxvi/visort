@@ -99,7 +99,7 @@ class _ProfileDropdownState extends State<ProfileDropdown> {
                 child: Text(
                   widget.value,
                   style: const TextStyle(
-                    fontFamily: 'SpaceMono',
+                    fontFamily: 'Space Mono', height: 1.2,
                     fontFamilyFallback: AppFonts.cjkFallback,
                     fontSize: 13,
                     color: AppColors.text,
@@ -248,7 +248,7 @@ class _ItemState extends State<_Item> {
           child: Text(
             widget.label,
             style: TextStyle(
-              fontFamily: 'SpaceMono',
+              fontFamily: 'Space Mono', height: 1.2,
               fontFamilyFallback: AppFonts.cjkFallback,
               fontSize: 13,
               color: widget.isSelected ? AppColors.accent : AppColors.text,

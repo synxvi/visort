@@ -94,6 +94,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.text,
+        // 标题紧贴返回箭头（默认 titleSpacing 16 会显得相册名离箭头太远）
+        titleSpacing: 0,
         title: Text(
           widget.trashedOnly
               ? t(ref, 'trash_title')
@@ -101,7 +103,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                   ? t(ref, 'favorites_title')
                   : (widget.bucketName ?? t(ref, 'gallery_title'))),
           style: TextStyle(
-            fontFamily: 'SpaceMono',
+            fontFamily: 'Space Mono', height: 1.2,
             fontFamilyFallback: AppFonts.cjkFallback,
             fontWeight: FontWeight.w700,
             fontSize: 16,
@@ -111,8 +113,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         ),
         actions: [
           SortToggle(
-            sortBy: gallery.photoSortBy,
+            sortBy: gallery.effectivePhotoSortBy,
             asc: gallery.photoSortAsc,
+            // 回收站视图额外提供「按删除日期」
+            showDateTrashed: widget.trashedOnly,
             onChanged: (by, asc) =>
                 ref.read(galleryControllerProvider.notifier).setPhotoSort(by, asc),
           ),
@@ -138,7 +142,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
               const SizedBox(height: 12),
               SelectableText(gallery.error!,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppColors.danger, fontSize: 12)),
+                  style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.danger, fontSize: 12)),
               const SizedBox(height: 16),
               OutlinedButton(
                 onPressed: () => ref
@@ -158,7 +162,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     if (photos.isEmpty) {
       return Center(
           child: Text(t(ref, 'album_empty'),
-              style: const TextStyle(color: AppColors.muted, fontSize: 13)));
+              style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)));
     }
     final cols = ref.watch(configProvider).photoGridColumns;
     return Stack(
@@ -222,12 +226,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     final info = photos[index];
     final imgRef =
         imageRefFromMediaStoreId(info.id, extension: extOf(info.name));
-    // 预解码中间缩略图（768，系统级快）+ 全图（1920），与 push 250ms 并发加载。
-    // 进 viewer 时 768 通常已就绪（较清晰过渡），1920 紧随（最终清晰），
-    // 消除"垫底 300 模糊 → 等全图几百 ms 才清晰"的模糊尾巴。不 await，不阻塞 push。
+    // 预解码中间缩略图（768，系统级快）：进 viewer 时通常已就绪（较清晰过渡），
+    // 消除"垫底 300 模糊 → 等 768 几百 ms 才清晰"的模糊尾巴。不 await，不阻塞 push。
+    // ⚠️ 不预载 2880 原图：动画期间 viewer 仍在树中（Opacity 0），预载会让原图在
+    // 动画期间就加载完 → 缩放结束瞬间 viewer 直接是原图，没有"缩放结束才完整加载"
+    // 的渐进感；且 push 时 viewer 被隐藏，原图加载白白占 IO。原图改为动画完成后
+    // （route status completed，PhotoViewer.transition）再开始加载。
     precacheImage(buildThumbnailProvider(imgRef, size: 768), context);
-    precacheImage(
-        buildImageProvider(imgRef, targetWidth: kViewerTargetWidth), context);
     // 飞行层图片：闭包捕获，transitionsBuilder 每帧复用（不重建 provider）。
     // ⚠️ 必须用 size:300（网格同 key，ImageCache 已缓存）——用 1024 时动画
     // 250ms 内 loadThumbnail 加载不完 → 飞行层空白 → 灰屏且无缩放效果。
@@ -267,6 +272,14 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         // 永远盖住 viewer。pop 触发时 status 变 reverse → 飞行层重新出现。
         final showFlight =
             cellRect != null && anim.status != AnimationStatus.completed;
+        // push 时 viewer 完全隐藏,让飞行层独占缩放动画——否则 viewer 的满屏
+        // 清晰图(_openViewer 里 precache 预加载的 768/2880)会随 t 淡入,与飞行
+        // 缩略图重叠成"底下垫满屏图 + 缩放动画"的双图观感。pop 时仍随 t 淡出
+        // (与返回手势衔接)。t=1 飞行层移除瞬间 viewer 显现,其 300 垫底与飞行
+        // 末帧(300 满屏 contain)同布局,无跳变。
+        final viewerOpacity = anim.status == AnimationStatus.reverse
+            ? t
+            : (showFlight ? 0.0 : 1.0);
         // 黑垫底：盖住导航器灰色背景（viewer 半透明时不露灰屏）。
         // 起点/终点 15% 渐显渐隐（避免 push 突兀变黑 / pop 黑→网格跳变）。
         final baseBlack = (t / 0.15).clamp(0.0, 1.0);
@@ -283,8 +296,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             // 起点为 0 导致 push 瞬间全屏灰）；同时 push 起点无突兀变黑、
             // pop 终点深灰→网格无缝衔接。
             const ColoredBox(color: Color(0xFF0F0F0F)),
-            // viewer 页面：push 淡入 / pop 淡出（无叠影闪烁）。
-            Opacity(opacity: t, child: child),
+            // viewer 页面：push 隐藏飞行层独占缩放;pop 走 viewerOpacity(t)淡出。
+            Opacity(opacity: viewerOpacity, child: child),
             if (showFlight) ...[
               ColoredBox(color: Colors.black.withValues(alpha: black)),
               // ⚠️ Positioned 必须直接作为 Stack 的 child！之前在 Opacity 里
@@ -299,13 +312,16 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           ],
         );
       },
-      pageBuilder: (_, _, _) => PhotoViewer(
+      // pageBuilder 的 anim 与 transitionsBuilder 的 anim 是同一个 route 动画：
+      // 传给 viewer 用于门控 2880 原图加载时机（completed 前不加载，见 PhotoViewer）。
+      pageBuilder: (_, anim, _) => PhotoViewer(
         photos: photos,
         initialIndex: index,
         hasMore: ref.read(galleryControllerProvider).hasMore,
         totalCount: widget.bucketCount,
         onLoadMore: () =>
             ref.read(galleryControllerProvider.notifier).loadMore(),
+        transition: anim,
       ),
       settings: const RouteSettings(name: AppRoutes.photoViewer),
       fullscreenDialog: true,

@@ -53,7 +53,7 @@ class AppColors {
 class AppFonts {
   AppFonts._();
   static const syne = 'Syne';
-  static const spaceMono = 'SpaceMono';
+  static const spaceMono = 'Space Mono';
 
   /// 系统正文字体（源 --sans）。按平台返回，避免在不存在的字体上浪费查找：
   /// 安卓用 Roboto（系统原生、零加载成本），Windows 用 Segoe UI。

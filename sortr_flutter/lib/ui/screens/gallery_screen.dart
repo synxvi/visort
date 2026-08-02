@@ -47,7 +47,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
         foregroundColor: AppColors.text,
         title: Text(t(ref, 'gallery_title'),
             style: const TextStyle(
-                fontFamily: 'SpaceMono',
+                fontFamily: 'Space Mono', height: 1.2,
                 fontWeight: FontWeight.w800,
                 fontSize: 18)),
         actions: [
@@ -79,7 +79,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
               const SizedBox(height: 12),
               SelectableText(gallery.error!,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppColors.danger, fontSize: 12)),
+                  style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.danger, fontSize: 12)),
               const SizedBox(height: 16),
               OutlinedButton(
                 onPressed: () =>
@@ -128,11 +128,11 @@ class _FavoritesTile extends ConsumerWidget {
       ),
       title: Text(
         t(ref, 'favorites_title'),
-        style: const TextStyle(
+        style: const TextStyle(fontFamily: 'Space Mono', 
           color: AppColors.text,
           fontSize: 14,
           fontWeight: FontWeight.w600,
-          fontFamilyFallback: ['SpaceMono'],
+          fontFamilyFallback: ['Space Mono'],
         ),
       ),
       trailing:
@@ -162,11 +162,11 @@ class _TrashTile extends ConsumerWidget {
       ),
       title: Text(
         t(ref, 'trash_title'),
-        style: const TextStyle(
+        style: const TextStyle(fontFamily: 'Space Mono', 
           color: AppColors.text,
           fontSize: 14,
           fontWeight: FontWeight.w600,
-          fontFamilyFallback: ['SpaceMono'],
+          fontFamilyFallback: ['Space Mono'],
         ),
       ),
       trailing:
@@ -206,7 +206,7 @@ class _AlbumTile extends ConsumerWidget {
                   Text(
                     bucket.name,
                     style: TextStyle(
-                      fontFamily: 'SpaceMono',
+                      fontFamily: 'Space Mono', height: 1.2,
                       fontFamilyFallback: AppFonts.cjkFallback,
                       fontWeight: FontWeight.w700,
                       fontSize: 14,
@@ -218,7 +218,7 @@ class _AlbumTile extends ConsumerWidget {
                   const SizedBox(height: 2),
                   Text(
                     t(ref, 'photo_count', [bucket.count]),
-                    style: const TextStyle(
+                    style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
                         color: AppColors.muted, fontSize: 11),
                   ),
                 ],

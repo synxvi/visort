@@ -23,7 +23,7 @@ class Kbd extends StatelessWidget {
       child: Text(
         label,
         style: TextStyle(
-          fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+          fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
           fontSize: 12,
           fontWeight: FontWeight.w700,
           color: highlight ? AppColors.bg : AppColors.text,
@@ -55,7 +55,7 @@ class DecisionBadge extends StatelessWidget {
       child: Text(
         label,
         style: TextStyle(
-          fontFamily: 'SpaceMono', fontFamilyFallback: AppFonts.cjkFallback,
+          fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
           fontSize: 11,
           fontWeight: FontWeight.w700,
           color: fg,

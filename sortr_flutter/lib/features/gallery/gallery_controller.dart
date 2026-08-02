@@ -83,6 +83,13 @@ class GalleryState {
   /// 当前是否在「回收站」视图（跨相册的回收站图集合，P1a）
   final bool isTrashView;
 
+  /// 当前视图实际生效的图片排序。
+  /// 回收站视图允许 dateTrashed（DATE_EXPIRES）；其他视图遇到 dateTrashed 时
+  /// 回退 dateCreated——DATE_EXPIRES 仅回收站项有值，普通查询会全 NULL 导致乱序。
+  SortBy get effectivePhotoSortBy => isTrashView
+      ? photoSortBy
+      : (photoSortBy == SortBy.dateTrashed ? SortBy.dateCreated : photoSortBy);
+
   /// 是否还有更多图片可加载（游标非 null）
   bool get hasMore => nextCursor != null;
 
@@ -100,6 +107,10 @@ class GalleryState {
           break;
         case SortBy.dateModified:
           cmp = a.dateModifiedMs.compareTo(b.dateModifiedMs);
+          break;
+        case SortBy.dateTrashed:
+          // 相册（bucket）无删除日期概念；回退创建时间。
+          cmp = a.dateCreatedMs.compareTo(b.dateCreatedMs);
           break;
       }
       return albumSortAsc ? cmp : -cmp;
@@ -190,7 +201,7 @@ class GalleryController extends Notifier<GalleryState> {
     }
     try {
       final buckets = await _channel.listBuckets(
-        sortBy: state.photoSortBy,
+        sortBy: state.effectivePhotoSortBy,
         asc: state.photoSortAsc,
       );
       if (buckets.isEmpty) {
@@ -211,17 +222,24 @@ class GalleryController extends Notifier<GalleryState> {
   /// - 相册内（currentBucketId != null）：用新排序重新加载该相册第一页，
   ///   保证分页顺序与新排序一致（不能只靠内存重排已加载页，
   ///   否则排序维度变化后已加载页不是新排序下的前 N 张）。
+  /// - 回收站/收藏视图：用新排序重新加载该视图第一页。
   /// - 首页：重查相册封面（封面跟随此排序）。
   Future<void> setPhotoSort(SortBy sortBy, bool asc) async {
     final inBucket = state.currentBucketId;
+    final favView = state.isFavoritesView;
+    final trashView = state.isTrashView;
     state = state.copyWith(photoSortBy: sortBy, photoSortAsc: asc);
     await _persistSortPrefs();
     if (inBucket != null) {
       // 相册内：重新加载当前相册（顺序已跟随新排序）
       await enterBucket(inBucket, silent: true);
+    } else if (favView || trashView) {
+      // 收藏/回收站视图：重查当前视图第一页（顺序跟随新排序）
+      // currentBucketId 为 null，必须单独处理，否则会落到 loadBuckets 分支。
+      await (favView ? enterFavorites() : enterTrash());
     }
     // 重查封面（首页用，相册内静默不闪烁）
-    await loadBuckets(silent: inBucket != null);
+    await loadBuckets(silent: inBucket != null || favView || trashView);
   }
 
   /// 切换相册列表排序并持久化（仅影响列表顺序，不影响封面）
@@ -253,7 +271,7 @@ class GalleryController extends Notifier<GalleryState> {
         [bucketId],
         afterCursor: null,
         limit: _pageSize,
-        sortBy: state.photoSortBy,
+        sortBy: state.effectivePhotoSortBy,
         asc: state.photoSortAsc,
       );
       state = state.copyWith(
@@ -297,7 +315,7 @@ class GalleryController extends Notifier<GalleryState> {
         const [], // 不限 bucket
         afterCursor: null,
         limit: _pageSize,
-        sortBy: state.photoSortBy,
+        sortBy: state.effectivePhotoSortBy,
         asc: state.photoSortAsc,
         favoritesOnly: true,
       );
@@ -331,7 +349,7 @@ class GalleryController extends Notifier<GalleryState> {
         const [],
         afterCursor: null,
         limit: _pageSize,
-        sortBy: state.photoSortBy,
+        sortBy: state.effectivePhotoSortBy,
         asc: state.photoSortAsc,
         trashedOnly: true,
       );
@@ -405,6 +423,7 @@ class GalleryController extends Notifier<GalleryState> {
         dateModifiedMs: p.dateModifiedMs,
         isFavorite: fav,
         isTrashed: p.isTrashed,
+        dateTrashedMs: p.dateTrashedMs,
       );
 
   /// 加载下一页（滚动到底触发）。keyset 游标法：用上一页返回的游标取下一页。
@@ -422,7 +441,7 @@ class GalleryController extends Notifier<GalleryState> {
         (favView || trashView) ? const [] : [bucketId!],
         afterCursor: cursor,
         limit: _pageSize,
-        sortBy: state.photoSortBy,
+        sortBy: state.effectivePhotoSortBy,
         asc: state.photoSortAsc,
         favoritesOnly: favView,
         trashedOnly: trashView,

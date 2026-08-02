@@ -155,11 +155,15 @@ class MediaStoreRepository(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 add(MediaStore.Images.Media.IS_FAVORITE)
                 add(MediaStore.Images.Media.IS_TRASHED)
+                // DATE_EXPIRES：回收站项的过期时间（移入回收站时刻 + 30 天），
+                // 作「删除日期」排序键。仅 R+ 且仅回收站视图使用（dateTrashed 排序）。
+                add(MediaStore.Images.Media.DATE_EXPIRES)
             }
         }.toTypedArray()
         val sortColumn = when (sortBy) {
             "name" -> MediaStore.Images.Media.DISPLAY_NAME
             "dateModified" -> MediaStore.Images.Media.DATE_MODIFIED
+            "dateTrashed" -> MediaStore.Images.Media.DATE_EXPIRES
             else -> MediaStore.Images.Media.DATE_ADDED   // dateCreated 及未知值
         }
 
@@ -238,6 +242,9 @@ class MediaStoreRepository(private val context: Context) {
                     cursor.getColumnIndex(MediaStore.Images.Media.IS_FAVORITE) else -1
                 val idxTrash = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
                     cursor.getColumnIndex(MediaStore.Images.Media.IS_TRASHED) else -1
+                // DATE_EXPIRES（回收站删除日期）；非 R+ 或未查该列时 -1
+                val idxDateExpires = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                    cursor.getColumnIndex(MediaStore.Images.Media.DATE_EXPIRES) else -1
 
                 var lastSortRaw = ""
                 var lastId = ""
@@ -255,7 +262,9 @@ class MediaStoreRepository(private val context: Context) {
                     else cursor.getLong(idxDateModified) * 1000
                     val isFavorite = idxFav >= 0 && !cursor.isNull(idxFav) && cursor.getInt(idxFav) == 1
                     val isTrashed = idxTrash >= 0 && !cursor.isNull(idxTrash) && cursor.getInt(idxTrash) == 1
-                    results.add(MsImageInfo(id, name, size, mime, bucketId, dateAdded, dateModified, isFavorite, isTrashed))
+                    val dateTrashed = if (idxDateExpires >= 0 && !cursor.isNull(idxDateExpires))
+                        cursor.getLong(idxDateExpires) * 1000 else 0L
+                    results.add(MsImageInfo(id, name, size, mime, bucketId, dateAdded, dateModified, isFavorite, isTrashed, dateTrashed))
                     lastSortRaw = cursor.getString(idxSort) ?: ""
                     lastId = id
                 }

@@ -65,7 +65,7 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
             padding: const EdgeInsets.only(bottom: 12),
             child: Text(
               t(ref, 'photo_details'),
-              style: const TextStyle(
+              style: const TextStyle(fontFamily: 'Space Mono', 
                 color: AppColors.text,
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
@@ -135,20 +135,20 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 80,
+            width: 96,
             child: Text(
               label,
               style: const TextStyle(
                 color: AppColors.muted,
                 fontSize: 12,
-                fontFamily: 'SpaceMono',
+                fontFamily: 'Space Mono', height: 1.2,
               ),
             ),
           ),
           Expanded(
             child: SelectableText(
               value,
-              style: const TextStyle(
+              style: const TextStyle(fontFamily: 'Space Mono', 
                 color: AppColors.text,
                 fontSize: 13,
                 fontFamilyFallback: AppFonts.cjkFallback,
@@ -185,7 +185,7 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
       padding: const EdgeInsets.only(top: 10, bottom: 2),
       child: Text(
         group,
-        style: const TextStyle(
+        style: const TextStyle(fontFamily: 'Space Mono', 
           color: AppColors.text,
           fontSize: 13,
           fontWeight: FontWeight.w600,
