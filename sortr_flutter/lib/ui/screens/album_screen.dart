@@ -55,6 +55,21 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   late final ScrollController _scrollCtrl = ScrollController();
   static const _threshold = 0.7; // 滚动到 70% 触发加载更多
 
+  /// 网格 GridView key：计算 cell 屏幕位置（返回飞行层终点）用。
+  final GlobalKey _gridKey = GlobalKey();
+
+  /// viewer 内当前浏览的照片索引（翻页后更新）。
+  int _viewerIndex = 0;
+  /// 打开 viewer 时的照片索引与网格滚动位置：
+  /// 返回定位规则（对标系统相册）——向后滑→目标行贴视口底部；
+  /// 向前滑→贴顶部；翻回原位→恢复打开时的网格视口。
+  int _openViewerIndex = 0;
+  double _openScrollOffset = 0;
+  /// 飞行层图：跟随当前照片（翻页后返回动画缩回的是当前照片，不是初始那张）。
+  late Image _flightImage;
+  /// 飞行层终点：当前照片所在 cell 的屏幕位置（翻页时滚动网格到该行后计算）。
+  Rect? _flightEndRect;
+
   @override
   void initState() {
     super.initState();
@@ -178,6 +193,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     return Stack(
       children: [
         GridView.builder(
+          key: _gridKey,
           controller: _scrollCtrl,
           padding: const EdgeInsets.all(4),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
@@ -225,6 +241,90 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// 降帧到 30 且粘滞不恢复（实测）；route 过渡动画是系统 push/pop 驱动，
   /// ColorOS 不降帧（fade 版实测全程 120）。
   /// [cellRect] 为点击 cell 的屏幕坐标；null 时无缩放动画。
+  /// 飞行层图片：跟随当前照片。
+  /// ⚠️ 必须用 size:300（网格同 key，ImageCache 已缓存）——用 1024 时动画
+  /// 250ms 内 loadThumbnail 加载不完 → 飞行层空白 → 灰屏且无缩放效果。
+  /// errorBuilder 用灰块兜底：即使加载失败也有可见内容在放大（诊断+兜底）。
+  Image _buildFlightImage(MsImageInfo info) {
+    final imgRef =
+        imageRefFromMediaStoreId(info.id, extension: extOf(info.name));
+    return Image(
+      image: buildThumbnailProvider(imgRef, size: 300),
+      fit: BoxFit.contain,
+      gaplessPlayback: true,
+      loadingBuilder: (ctx, child, progress) {
+        debugPrint('[FlightImg] loading progress=$progress');
+        return child;
+      },
+      errorBuilder: (_, _, _) {
+        debugPrint('[FlightImg] ERROR');
+        return const ColoredBox(color: Color(0xFF2A2A2A));
+      },
+    );
+  }
+
+  /// viewer 翻页：飞行层返回动画跟随当前照片——更新飞行层图 + 滚动网格到
+  /// 目标行 + 计算终点 cell 位置。滚动在 viewer 打开期间后台执行（用户无感），
+  /// 返回时目标行已在正确位置（缩略图也随滚动预加载）。
+  void _onViewerIndexChanged(int index) {
+    final photos = ref.read(galleryControllerProvider).photos;
+    if (index < 0 || index >= photos.length) return;
+    _viewerIndex = index;
+    _flightImage = _buildFlightImage(photos[index]);
+    _scrollToCellRow(index);
+    final r = _cellRectFor(index);
+    if (r != null) _flightEndRect = r;
+  }
+
+  /// 滚动网格让目标行可见。返回定位规则（对标系统相册）：
+  /// - 向后滑（index > 打开时）→ 目标行贴视口**底部**（成为最后可见行）
+  /// - 向前滑（index < 打开时）→ 目标行贴视口**顶部**（成为第一行）
+  /// - 翻回原位 → 恢复打开时的网格视口
+  /// 滚动在 viewer 打开期间后台执行（用户无感），返回时目标行已在正确位置
+  ///（缩略图也随滚动预加载）。
+  void _scrollToCellRow(int index) {
+    if (!_scrollCtrl.hasClients) return;
+    final cols = ref.read(configProvider).photoGridColumns;
+    final gridBox = _gridKey.currentContext?.findRenderObject();
+    if (gridBox is! RenderBox) return;
+    final cellW = (gridBox.size.width - 8 - (cols - 1) * 3) / cols;
+    final rowExtent = cellW + 3;
+    final row = index ~/ cols;
+    final viewportRows = (gridBox.size.height / rowExtent).floor();
+    double target;
+    if (index == _openViewerIndex) {
+      target = _openScrollOffset;
+    } else if (index > _openViewerIndex) {
+      // 贴底：目标行成为视口最后一行（最小滚动）
+      target = (row - viewportRows + 1) * rowExtent;
+    } else {
+      // 贴顶：目标行成为视口第一行
+      target = row * rowExtent;
+    }
+    _scrollCtrl
+        .jumpTo(target.clamp(0.0, _scrollCtrl.position.maxScrollExtent));
+  }
+
+  /// 计算网格中某 index cell 的屏幕位置。
+  /// 布局规则固定（padding 4、spacing 3、正方形 cell），与 ScrollDragHandle
+  /// 的 rowExtent 公式一致——无需 RenderObject 即可精确定位。
+  Rect? _cellRectFor(int index) {
+    final gridBox = _gridKey.currentContext?.findRenderObject();
+    if (gridBox is! RenderBox || !gridBox.attached || !_scrollCtrl.hasClients) {
+      return null;
+    }
+    final cols = ref.read(configProvider).photoGridColumns;
+    final cellW = (gridBox.size.width - 8 - (cols - 1) * 3) / cols;
+    final rowExtent = cellW + 3;
+    final row = index ~/ cols;
+    final col = index % cols;
+    final topLeft = gridBox.localToGlobal(Offset(
+      4 + col * (cellW + 3),
+      4 + row * rowExtent - _scrollCtrl.offset,
+    ));
+    return topLeft & Size(cellW, cellW);
+  }
+
   void _openViewer(
     BuildContext context,
     GalleryState gallery,
@@ -247,23 +347,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                 MediaQuery.sizeOf(context).width *
                     MediaQuery.devicePixelRatioOf(context))),
         context);
-    // 飞行层图片：闭包捕获，transitionsBuilder 每帧复用（不重建 provider）。
-    // ⚠️ 必须用 size:300（网格同 key，ImageCache 已缓存）——用 1024 时动画
-    // 250ms 内 loadThumbnail 加载不完 → 飞行层空白 → 灰屏且无缩放效果。
-    // errorBuilder 用灰块兜底：即使加载失败也有可见内容在放大（诊断+兜底）。
-    final flightImage = Image(
-      image: buildThumbnailProvider(imgRef, size: 300),
-      fit: BoxFit.contain,
-      gaplessPlayback: true,
-      loadingBuilder: (ctx, child, progress) {
-        debugPrint('[FlightImg] loading progress=$progress');
-        return child;
-      },
-      errorBuilder: (_, _, _) {
-        debugPrint('[FlightImg] ERROR');
-        return const ColoredBox(color: Color(0xFF2A2A2A));
-      },
-    );
+    // 飞行层初始状态：当前照片 + 点击 cell 位置。
+    // 翻页后由 [_onViewerIndexChanged] 更新——返回动画跟随当前照片。
+    _viewerIndex = index;
+    _openViewerIndex = index;
+    _openScrollOffset = _scrollCtrl.hasClients ? _scrollCtrl.offset : 0;
+    _flightImage = _buildFlightImage(info);
+    _flightEndRect = cellRect;
     Navigator.of(context).push(PageRouteBuilder(
       transitionDuration: const Duration(milliseconds: 250),
       reverseTransitionDuration: const Duration(milliseconds: 180),
@@ -274,23 +364,24 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       opaque: false,
       // route animation 驱动 rect 缩放：
       // push（anim 0→1）：图从 cellRect 线性放大到全屏 contain；
-      // pop（anim 1→0）：图从全屏缩回 cellRect。
+      // pop（anim 1→0）：图从全屏缩回**当前照片**的 cell 位置（翻页后更新）。
       // child = PhotoViewer 页面（在飞行层下方）。
       transitionsBuilder: (ctx, anim, _, child) {
         debugPrint(
-            '[Flight] t=${anim.value.toStringAsFixed(2)} status=${anim.status} cellRect=$cellRect');
+            '[Flight] t=${anim.value.toStringAsFixed(2)} status=${anim.status} endRect=$_flightEndRect');
         final size = MediaQuery.sizeOf(ctx);
         // 终点与 viewer 图区域一致（PageView 页 Padding(horizontal:4)）。
         final fullRect = Rect.fromLTWH(4, 0, size.width - 8, size.height);
         // COUIMoveEase 替代原 linear：强 ease-out，图"冲"到全屏而非匀速滑入。
         // 原 linear 已验证可用但略机械；couiMoveEase 更贴近一加手感。
         final t = AppCurves.couiMoveEase.transform(anim.value);
-        final rect = Rect.lerp(cellRect ?? fullRect, fullRect, t)!;
+        final endRect = _flightEndRect;
+        final rect = Rect.lerp(endRect ?? fullRect, fullRect, t)!;
         // ⚠️ showFlight 必须用 status 判断（不能用 anim.value < 1）：
         // completed 后 transitionsBuilder 不再 rebuild，若黑底留在树里会
         // 永远盖住 viewer。pop 触发时 status 变 reverse → 飞行层重新出现。
         final showFlight =
-            cellRect != null && anim.status != AnimationStatus.completed;
+            endRect != null && anim.status != AnimationStatus.completed;
         // push 时 viewer 完全隐藏,让飞行层独占缩放动画——否则 viewer 的满屏
         // 清晰图(_openViewer 里 precache 预加载的 2880)会随 t 淡入,与飞行
         // 缩略图重叠成"底下垫满屏图 + 缩放动画"的双图观感。pop 时仍随 t 淡出
@@ -329,7 +420,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
               // 渐隐用 Positioned 内部的 Opacity 实现。
               Positioned.fromRect(
                 rect: rect,
-                child: Opacity(opacity: baseBlack, child: flightImage),
+                child: Opacity(opacity: baseBlack, child: _flightImage),
               ),
             ],
           ],
@@ -344,6 +435,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         totalCount: widget.bucketCount,
         onLoadMore: () =>
             ref.read(galleryControllerProvider.notifier).loadMore(),
+        onIndexChanged: _onViewerIndexChanged,
         transition: anim,
       ),
       settings: const RouteSettings(name: AppRoutes.photoViewer),

@@ -36,6 +36,7 @@ class PhotoViewer extends ConsumerStatefulWidget {
     this.hasMore = false,
     this.totalCount,
     this.onLoadMore,
+    this.onIndexChanged,
     this.transition,
   });
 
@@ -47,6 +48,9 @@ class PhotoViewer extends ConsumerStatefulWidget {
   final int? totalCount;
   /// 滚动接近末尾时的回调，外部触发分页加载。
   final Future<void> Function()? onLoadMore;
+  /// 翻页回调（当前照片索引变化时）。相册网格据此更新飞行层返回动画的
+  /// 终点——缩略图与缩放位置跟随当前照片，而不是初始打开的那张。
+  final ValueChanged<int>? onIndexChanged;
   /// 打开本页的 route 过渡动画（album 飞行层 push 用）。非 null 时，2880 原图
   /// 延迟到动画完成（status == completed）后才开始加载——否则动画期间
   /// viewer 被 Opacity 隐藏仍会 resolve 原图（precache/自身加载），缩放结束
@@ -416,6 +420,8 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
     });
     // Overlay 顶/底栏显示当前照片信息，移除后刷新
     _barEntry?.markNeedsBuild();
+    // 列表已变短：飞行层返回动画的终点跟随调整后的当前照片
+    widget.onIndexChanged?.call(_index);
     if (_pageCtrl.hasClients) {
       Future.microtask(() {
         if (mounted && _pageCtrl.hasClients) {
@@ -491,6 +497,8 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
                     itemCount: _photos.length,
                     onPageChanged: (i) {
                       setState(() => _index = i);
+                      // 通知相册网格:飞行层返回动画跟随当前照片
+                      widget.onIndexChanged?.call(i);
                       // Overlay 顶/底栏显示当前照片信息，翻页后刷新
                       _barEntry?.markNeedsBuild();
                       _maybeLoadMore();
