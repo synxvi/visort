@@ -3,7 +3,7 @@
 // 交互：先选排序维度（名称 / 拍摄日期 / 入库日期），再选方向（升序 / 降序）。
 // 菜单分两段（中间分隔线）：上段 = 维度（3 项），下段 = 方向（2 项），当前选中项打勾。
 //
-// 弹出方式：showSpringPopupFromAnchor —— 从按钮右下角（点击位置）弹簧展开，
+// 弹出方式：showSpringPopupFromAnchor —— 从按钮中心 × 菜单顶边弹簧展开，
 // 与首页三点菜单 / 设置选择器动画完全统一（展开 1250ms 弹簧 / 收回 500ms）。
 // 不用 PopupMenuButton：它的 showMenu 起点在屏幕边缘、转场是系统默认 fade。
 
@@ -71,11 +71,11 @@ class SortToggle extends ConsumerWidget {
     final selected = await showSpringPopupFromAnchor<String>(
       context: context,
       barrierLabel: 'sort',
-      // 弹簧起点 = 按钮右下角（点击位置），非屏幕边缘
-      anchorGlobalDx: pos.dx + box.size.width,
-      anchorGlobalDy: pos.dy + box.size.height,
-      // 菜单右缘对齐按钮右缘
-      menuLeft: (pos.dx + box.size.width - menuWidth)
+      // 弹簧起点 = 按钮中心 × 菜单顶边（与首页 ⋮ / 设置 ▾ 弹窗同款"从触发处长出"）
+      anchorGlobalDx: pos.dx + box.size.width / 2,
+      anchorGlobalDy: pos.dy + box.size.height + 4,
+      // 菜单右缘离按钮右缘 8dp（与首页 ⋮ 弹窗右缘间距一致，不贴屏幕右边）
+      menuLeft: (pos.dx + box.size.width - menuWidth - 8)
           .clamp(0.0, screen.width - menuWidth),
       menuTop: pos.dy + box.size.height + 4,
       menuWidth: menuWidth,

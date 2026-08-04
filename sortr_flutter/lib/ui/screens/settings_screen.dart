@@ -4,7 +4,7 @@
 // 设计原则：网格列数属「首页」组的第二项（与布局同卡、分隔线关联），
 //           而非缩进子项——避免「缩进错位」的视觉歧义，层级靠卡片聚合表达。
 // 相册网格列数独属「相册」组。
-// 选择器：showMenu，宽度自适应内容、右缘对齐箭头（卡片右−16，不超卡片右边缘）；
+// 选择器：弹簧菜单 showSpringPopupFromAnchor，宽度自适应、右缘对齐箭头、从 ▾ 弹出；
 //         弹窗底色 surfaceElevated（比卡片 surface 提亮，层级区分）。
 // 改动即时写回 configProvider 并持久化（shared_preferences）。
 
@@ -157,8 +157,8 @@ class _SettingsCard extends StatelessWidget {
   }
 }
 
-/// 设置行：标题 + 当前值 + ▾。点击弹 showMenu。
-/// 菜单宽度自适应内容、右缘对齐箭头（卡片右−16），不超出卡片右边缘。
+/// 设置行：标题 + 当前值 + ▾。点击弹弹簧菜单（showSpringPopupFromAnchor）。
+/// 菜单宽度自适应内容、右缘对齐箭头（卡片右−16），从 ▾ 正下方弹簧展开。
 class _PickerRow<T> extends StatelessWidget {
   const _PickerRow({
     required this.label,
@@ -209,12 +209,13 @@ class _PickerRow<T> extends StatelessWidget {
     // 菜单宽度按内容测量，供 showSpringPopupFromAnchor 精确定位弹簧支点。
     final menuWidth = _measureMenuWidth(context);
     // 用 showSpringPopupFromAnchor：弹簧缩放作用在菜单本体（非全屏 Stack），
-    // 以触发行右下角为支点 —— 菜单"从按下位置长出"，而非从屏幕角落滑入。
+    // 以「▾ 正下方 × 菜单顶边」为支点 —— 与首页 ⋮ 弹窗同款"从触发处长出"。
     final selected = await showSpringPopupFromAnchor<T>(
       context: context,
       barrierLabel: 'picker',
-      anchorGlobalDx: pos.dx + box.size.width, // 触发行右下角 = 弹簧支点
-      anchorGlobalDy: pos.dy + box.size.height,
+      // 支点 x = ▾ 中心（行右缘 - padding16 - ▾半宽10）；y = 菜单顶边（= menuTop）。
+      anchorGlobalDx: pos.dx + box.size.width - 26,
+      anchorGlobalDy: pos.dy + box.size.height + 4,
       menuLeft: rightEdge - menuWidth, // 右缘对齐 rightEdge
       menuTop: pos.dy + box.size.height + 4,
       menuWidth: menuWidth,

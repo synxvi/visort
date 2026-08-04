@@ -236,6 +236,9 @@ const Map<String, String> stringsEn = {
   'trash_item_title': 'Trash options',
   'trash_confirm_desc': 'It can be restored from Trash.',
   'delete_permanently': 'Delete permanently',
+  'delete_permanently_desc': 'This cannot be undone.',
+  'restore_desc': 'Restore to its original album.',
+  'confirm': 'Confirm',
   'trash_deleted_label': 'Deleted',
 
   // ───────── 设置 ─────────

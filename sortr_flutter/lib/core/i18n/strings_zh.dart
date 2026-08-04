@@ -233,6 +233,9 @@ const Map<String, String> stringsZh = {
   'trash_item_title': '回收站选项',
   'trash_confirm_desc': '可从回收站恢复。',
   'delete_permanently': '彻底删除',
+  'delete_permanently_desc': '删除后无法恢复。',
+  'restore_desc': '恢复到原相册。',
+  'confirm': '确认',
   'trash_deleted_label': '删除于',
 
   // ───────── 设置 ─────────

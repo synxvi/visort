@@ -226,13 +226,18 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     final info = photos[index];
     final imgRef =
         imageRefFromMediaStoreId(info.id, extension: extOf(info.name));
-    // 预解码中间缩略图（768，系统级快）：进 viewer 时通常已就绪（较清晰过渡），
-    // 消除"垫底 300 模糊 → 等 768 几百 ms 才清晰"的模糊尾巴。不 await，不阻塞 push。
-    // ⚠️ 不预载 2880 原图：动画期间 viewer 仍在树中（Opacity 0），预载会让原图在
-    // 动画期间就加载完 → 缩放结束瞬间 viewer 直接是原图，没有"缩放结束才完整加载"
-    // 的渐进感；且 push 时 viewer 被隐藏，原图加载白白占 IO。原图改为动画完成后
-    // （route status completed，PhotoViewer.transition）再开始加载。
-    precacheImage(buildThumbnailProvider(imgRef, size: 768), context);
+    // 预解码 2880 原图（native readSampledImage，~92ms）：点击瞬间发起，与 push
+    // 飞行动画并发——动画期间 viewer 被 Opacity 0 隐藏，2880 在后台解码。250ms 动画
+    // 期内解完则缩放结束瞬间即高清（t=1 仍垫 300 与飞行末帧衔接无跳变，1~2 帧后
+    // 2880 命中缓存覆盖 300）。不 await，不阻塞 push。
+    // 不预载 768：768 层已移除——loadThumbnail(~50ms) 比 readSampledImage(~92ms) 快，
+    // 保留它会抢先生成造成多一次闪现；直接 300→2880 更干脆。
+    precacheImage(
+        buildImageProvider(imgRef,
+            targetWidth: computeViewerTargetWidth(
+                MediaQuery.sizeOf(context).width *
+                    MediaQuery.devicePixelRatioOf(context))),
+        context);
     // 飞行层图片：闭包捕获，transitionsBuilder 每帧复用（不重建 provider）。
     // ⚠️ 必须用 size:300（网格同 key，ImageCache 已缓存）——用 1024 时动画
     // 250ms 内 loadThumbnail 加载不完 → 飞行层空白 → 灰屏且无缩放效果。
@@ -253,6 +258,11 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     Navigator.of(context).push(PageRouteBuilder(
       transitionDuration: const Duration(milliseconds: 250),
       reverseTransitionDuration: const Duration(milliseconds: 180),
+      // ⚠️ opaque: false —— pop 返回动画期间底下 album 网格参与合成并可见
+      // （COUI 式返回：viewer 淡出 + 飞行层缩回时网格全程在底下，动画结束
+      // 无"黑→网格瞬现"）。push 期网格被下方恒黑垫底层盖住，观感不变；
+      // 代价是动画期间多一层网格合成（180~250ms，Impeller 下可接受）。
+      opaque: false,
       // route animation 驱动 rect 缩放：
       // push（anim 0→1）：图从 cellRect 线性放大到全屏 contain；
       // pop（anim 1→0）：图从全屏缩回 cellRect。
@@ -273,33 +283,37 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         final showFlight =
             cellRect != null && anim.status != AnimationStatus.completed;
         // push 时 viewer 完全隐藏,让飞行层独占缩放动画——否则 viewer 的满屏
-        // 清晰图(_openViewer 里 precache 预加载的 768/2880)会随 t 淡入,与飞行
+        // 清晰图(_openViewer 里 precache 预加载的 2880)会随 t 淡入,与飞行
         // 缩略图重叠成"底下垫满屏图 + 缩放动画"的双图观感。pop 时仍随 t 淡出
         // (与返回手势衔接)。t=1 飞行层移除瞬间 viewer 显现,其 300 垫底与飞行
         // 末帧(300 满屏 contain)同布局,无跳变。
-        final viewerOpacity = anim.status == AnimationStatus.reverse
-            ? t
-            : (showFlight ? 0.0 : 1.0);
-        // 黑垫底：盖住导航器灰色背景（viewer 半透明时不露灰屏）。
-        // 起点/终点 15% 渐显渐隐（避免 push 突兀变黑 / pop 黑→网格跳变）。
+        final isReverse = anim.status == AnimationStatus.reverse;
+        final viewerOpacity = isReverse ? t : (showFlight ? 0.0 : 1.0);
+        // 飞行层渐显渐隐：起点/终点 15% 内淡入淡出（避免 push 突兀出现 /
+        // pop 缩回瞬间消失）。
         final baseBlack = (t / 0.15).clamp(0.0, 1.0);
-        // 黑垫底：反向跟随 viewer 透明度——viewer 半透明（t<1）时盖住底层灰，
-        // viewer 完全可见（t=1）时 black=0。这样 showFlight 移除瞬间（completed,
-        // t=1）black 已为 0，chrome 顶/底栏不会从"被黑盖住"突变到可见。
-        // （旧逻辑末段加深到 0.95，再随 showFlight 整层移除 → chrome 闪烁一下）
-        final black = (1.0 - t).clamp(0.0, 1.0) * 0.95;
+        // 黑遮罩仅 push 期使用：viewer 半透明（t<1）时盖住底层，viewer 完全
+        // 可见（t=1）时 black=0，showFlight 移除瞬间（completed）chrome 顶/底栏
+        // 不会从"被黑盖住"突变到可见。（旧逻辑末段加深到 0.95 再整层移除 → 闪烁）
+        // ⚠️ pop 返回时 black=0：配合 opaque:false 让底下相册网格全程可见
+        // （COUI 式返回），viewer 淡出 + 飞行层缩回时网格透出，动画结束
+        // 无"黑→网格瞬现"。
+        final black = isReverse ? 0.0 : (1.0 - t).clamp(0.0, 1.0) * 0.95;
         return Stack(
           fit: StackFit.expand,
           children: [
-            // ⚠️ 垫底：深灰（≈网格背景 #0F0F0F），**恒不透明**——
-            // viewer 半透明（Opacity）时不露导航器灰色背景（之前 baseBlack
-            // 起点为 0 导致 push 瞬间全屏灰）；同时 push 起点无突兀变黑、
-            // pop 终点深灰→网格无缝衔接。
-            const ColoredBox(color: Color(0xFF0F0F0F)),
+            // ⚠️ 垫底（仅 push 期）：纯黑（= viewer Scaffold 背景），**恒不透明**——
+            // push 期 viewer 隐藏、飞行层 contain 留白透出本层；t=1 飞行层移除、
+            // viewer 显现，留白从「垫底」交接到「viewer 背景」，二者同色避免
+            // 灰→黑跳变闪烁（原 #0F0F0F 与 viewer 纯黑差 15 → 图片上下留白闪灰）。
+            // pop 返回时移除本层——opaque:false 下底层网格参与合成，viewer 淡出
+            // 即露出网格；保留本层会把网格重新盖死（又变回"瞬现"）。
+            if (!isReverse) const ColoredBox(color: Colors.black),
             // viewer 页面：push 隐藏飞行层独占缩放;pop 走 viewerOpacity(t)淡出。
             Opacity(opacity: viewerOpacity, child: child),
             if (showFlight) ...[
-              ColoredBox(color: Colors.black.withValues(alpha: black)),
+              if (black > 0)
+                ColoredBox(color: Colors.black.withValues(alpha: black)),
               // ⚠️ Positioned 必须直接作为 Stack 的 child！之前在 Opacity 里
               // （Opacity→Positioned），release 下不报错但定位不生效、图尺寸
               // 为 0 → 飞行层不可见 → “无缩放”（多版灰屏的根因）。

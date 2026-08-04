@@ -9,6 +9,8 @@
 //   Sort 底部按钮 = folders（两种模式统一）
 //   Run 按 RELATIVE_PATH 分组批量 moveBatch（createWriteRequest）
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -52,11 +54,13 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   ClassifyMode _mode = ClassifyMode.toAlbum;
 
   // 模式一（toNewDir）配置
-  final _parentCtrl = TextEditingController(text: '整理结果');
+  final _parentCtrl = TextEditingController(text: '');
   final _parentFocus = FocusNode();
-  List<String> _subDirs = ['保留', '待删'];
+  List<String> _subDirs = ['', ''];
   // 子目录列表的 AnimatedList key（驱动增删入场/退场动画）
   final _subDirsKey = GlobalKey<AnimatedListState>();
+  // toNewDir 编辑持久化防抖 timer（避免每个按键都写盘）
+  Timer? _persistTimer;
 
   bool _loading = false;
   bool _scanning = false;
@@ -86,6 +90,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _persistTimer?.cancel();
     _parentCtrl.dispose();
     _parentFocus.dispose();
     _menuCtl?.close();
@@ -231,13 +236,14 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   /// 模式一新建分类 → FolderDescriptor（path = Pictures/父目录/子目录）
   List<FolderDescriptor> _buildNewDirFolders() {
     final parent = _parentCtrl.text.trim().isEmpty
-        ? '整理结果'
+        ? 'Sortr'
         : _parentCtrl.text.trim();
-    return _subDirs.where((s) => s.trim().isNotEmpty).toList().asMap().entries.map((e) {
+    return _subDirs.asMap().entries.map((e) {
+      final label = e.value.trim().isEmpty ? 'folder${e.key + 1}' : e.value.trim();
       return FolderDescriptor(
         key: e.key < _keyOrder.length ? _keyOrder[e.key] : '?',
-        label: e.value,
-        path: 'Pictures/$parent/${e.value}',
+        label: label,
+        path: 'Pictures/$parent/$label',
       );
     }).toList();
   }
@@ -272,7 +278,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     final oldProfile = config.activeProfileData;
     // 模式一的子目录列表存入 folders（label = 子目录名）
     final newFolders = _mode == ClassifyMode.toNewDir
-        ? _subDirs.where((s) => s.trim().isNotEmpty).toList()
+        ? _subDirs
             .asMap()
             .entries
             .map((e) => FolderTemplate(
@@ -297,7 +303,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     // - toAlbum：根目录按钮已隐藏（无父目录根概念），destinationParent 不会被消费，
     //   保留 kImagesAuthority 仅作占位。
     final newDirParent = _parentCtrl.text.trim().isEmpty
-        ? '整理结果'
+        ? 'Sortr'
         : _parentCtrl.text.trim();
     final destParent = _mode == ClassifyMode.toNewDir
         ? 'Pictures/$newDirParent'
@@ -432,6 +438,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
 
   @override
   Widget build(BuildContext context) {
+    final config = ref.watch(configProvider);
     // 检测相册内排序是否变化（从相册返回时封面需更新）
     _maybeRefreshCovers();
     // 首页（根路由）右滑/返回：等效 Home 键回桌面（task 保留后台，不 finish）。
@@ -455,6 +462,19 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
           child: const _Logo(),
         ),
         actions: [
+          // 相册排序（源/目标 section 共用同一排序状态 albumSortBy/Asc）：
+          // 从 section 标题整合到 AppBar，置于 ⋮ 左侧。section 内重复的 SortToggle 已移除。
+          // Transform.translate 右移 10dp：SortToggle 内部 Padding(right:5) 让 icon 偏左，
+          // 多 action 场景下视觉离 ⋮ 偏远，translate 抵消使其靠近 ⋮（gallery/album 里
+          // SortToggle 是唯一 action，不受影响，故只在这里包）。
+          Transform.translate(
+            offset: const Offset(10, 0),
+            child: SortToggle(
+              sortBy: config.albumSortBy,
+              asc: config.albumSortAsc,
+              onChanged: _setAlbumSort,
+            ),
+          ),
           IconButton(
             key: _menuBtnKey,
             icon: const Icon(Icons.more_vert, color: AppColors.text),
@@ -463,18 +483,23 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
           ),
         ],
       ),
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // 模式切换 segmented control
-            _buildModeSelector(),
-            const Divider(color: AppColors.border, height: 1),
-            // 主体
-            Expanded(child: _buildBody()),
-            // 底部 Start
-            _buildBottomBar(),
-          ],
+      body: GestureDetector(
+        // 点击空白（非输入框）：收起键盘并立即落盘 toNewDir 待保存编辑。
+        onTap: _dismissAndFlush,
+        behavior: HitTestBehavior.opaque,
+        child: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 模式切换 segmented control
+              _buildModeSelector(),
+              const Divider(color: AppColors.border, height: 1),
+              // 主体
+              Expanded(child: _buildBody()),
+              // 底部 Start
+              _buildBottomBar(),
+            ],
+          ),
         ),
       ),
       ),
@@ -702,7 +727,6 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     required VoidCallback onToggle,
     required Widget child,
   }) {
-    final config = ref.read(configProvider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -736,12 +760,6 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
                           fontWeight: FontWeight.w700)),
                 ),
                 const Spacer(),
-                SortToggle(
-                  sortBy: config.albumSortBy,
-                  asc: config.albumSortAsc,
-                  onChanged: _setAlbumSort,
-                ),
-                const SizedBox(width: 4),
                 // 展开/折叠指示箭头，随下方内容同步旋转（180°）。
                 AnimatedRotation(
                   turns: expanded ? 0.5 : 0.0,
@@ -782,6 +800,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
               bucket: b,
               selected: selectedIds.contains(b.id),
               onCheckToggle: () => onToggle(b.id),
+              onInterceptWhileEditing: _dismissAndFlush,
               grid: isGrid,
             ))
         .toList();
@@ -836,6 +855,52 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     ref.read(configProvider.notifier).state = updated;
     await ref.read(profilesServiceProvider).save(updated);
     setState(() {});
+  }
+
+  /// 实时持久化 toNewDir 编辑（父目录 + 子目录）到 config：内存即时更新，
+  /// 磁盘 save 防抖 400ms（避免每个按键都写 SharedPreferences）。
+  /// 空父目录存 null、子目录存原始 label（含空串）→ 重启恢复后输入框为空、
+  /// 显示灰色 hint（Sortr / folder N），与未编辑状态一致。
+  void _persistNewDir() {
+    final config = ref.read(configProvider);
+    final oldProfile = config.activeProfileData;
+    final newFolders = _subDirs
+        .asMap()
+        .entries
+        .map((e) => FolderTemplate(
+              key: e.key < _keyOrder.length ? _keyOrder[e.key] : '?',
+              label: e.value.trim(),
+            ))
+        .toList();
+    final newProfile = oldProfile.copyWith(
+      newDirParent:
+          _parentCtrl.text.trim().isEmpty ? null : _parentCtrl.text.trim(),
+      folders: newFolders,
+    );
+    final newProfiles = Map<String, Profile>.from(config.profiles)
+      ..[config.activeProfile] = newProfile;
+    ref.read(configProvider.notifier).state =
+        config.copyWith(profiles: newProfiles);
+    _persistTimer?.cancel();
+    _persistTimer = Timer(const Duration(milliseconds: 400), () {
+      ref.read(profilesServiceProvider).save(ref.read(configProvider));
+    });
+  }
+
+  /// 点击空白（非输入框）区域时收起键盘并立即落盘 toNewDir 编辑。
+  ///
+  /// 收键盘：FocusScope.unfocus 让当前 TextField 失焦 → 输入法收回。输入框为空
+  /// 时失焦后由 hintText 自然显示灰色占位（Sortr / folder*），无需回填——text 保持
+  /// 空串，hint 即占位；实际使用由 _buildNewDirFolders / _startScan 的 isEmpty
+  /// 兜底为 'Sortr' / 'folder N'。
+  /// 立即落盘：取消 _persistTimer 防抖直接 save，符合「点击即保存」语义，避免快速
+  /// 切换输入框或返回页面时编辑落在 400ms 防抖窗口内被 dispose cancel 掉而丢失。
+  void _dismissAndFlush() {
+    if (_persistTimer?.isActive ?? false) {
+      _persistTimer!.cancel();
+      ref.read(profilesServiceProvider).save(ref.read(configProvider));
+    }
+    FocusScope.of(context).unfocus();
   }
 
   /// MANAGE_MEDIA 权限引导横幅（未授权时显示）
@@ -898,7 +963,11 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
             title: '${t(ref, 'parent_dir')}  ·  Pictures/',
             controller: _parentCtrl,
             focusNode: _parentFocus,
-            onChanged: (_) => setState(() {}),
+            hintText: 'Sortr',
+            onChanged: (_) {
+              setState(() {});
+              _persistNewDir();
+            },
           ),
           const SizedBox(height: 20),
           // 子目录标题行 + 加号
@@ -953,6 +1022,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     final newIdx = _subDirs.length;
     setState(() => _subDirs.add(''));
     _subDirsKey.currentState?.insertItem(newIdx);
+    _persistNewDir();
   }
 
   /// 删除子目录行（保存被删行数据渲染退场动画，再移除数据）。
@@ -964,6 +1034,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
       (ctx, animation) => _buildSubDirRow(idx, removed, animation),
     );
     setState(() => _subDirs.removeAt(idx));
+    _persistNewDir();
   }
 
   /// 单个子目录行（AnimatedList 入场/退场共用）：SizeTransition + FadeTransition。
@@ -1003,7 +1074,11 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
                 Expanded(
                   child: _dirInputField(
                     controller: TextEditingController(text: value),
-                    onChanged: (val) => _subDirs[idx] = val,
+                    hintText: 'folder ${idx + 1}',
+                    onChanged: (val) {
+                      setState(() => _subDirs[idx] = val);
+                      _persistNewDir();
+                    },
                     onDelete: _subDirs.length > 1
                         ? () => _removeSubDir(idx)
                         : null,
@@ -1036,6 +1111,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     required TextEditingController controller,
     FocusNode? focusNode,
     ValueChanged<String>? onChanged,
+    String? hintText,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1047,6 +1123,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
           controller: controller,
           focusNode: focusNode,
           onChanged: onChanged,
+          hintText: hintText,
         ),
       ],
     );
@@ -1062,6 +1139,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     FocusNode? focusNode,
     ValueChanged<String>? onChanged,
     VoidCallback? onDelete,
+    String? hintText,
   }) {
     return TextField(
       controller: controller,
@@ -1069,6 +1147,12 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
       style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 14),
       decoration: InputDecoration(
         isDense: true,
+        hintText: hintText,
+        hintStyle: const TextStyle(
+            color: AppColors.muted,
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+            fontSize: 14),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
         filled: true,
@@ -1105,8 +1189,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   Widget _buildBottomBar() {
     final canStart = _sourceBucketIds.isNotEmpty &&
         ((_mode == ClassifyMode.toAlbum && _targetBucketIds.isNotEmpty) ||
-            (_mode == ClassifyMode.toNewDir &&
-                _subDirs.any((s) => s.trim().isNotEmpty)));
+            (_mode == ClassifyMode.toNewDir && _subDirs.isNotEmpty));
     return Container(
       decoration: const BoxDecoration(
         color: AppColors.bg,
@@ -1224,11 +1307,14 @@ class _SetupBucketTile extends StatefulWidget {
     required this.bucket,
     required this.selected,
     required this.onCheckToggle,
+    this.onInterceptWhileEditing,
     this.grid = false,
   });
   final MsBucket bucket;
   final bool selected;
   final VoidCallback onCheckToggle;
+  /// 输入法展开时点击本 tile 的回调（收键盘 + 保存）；为 null 则不拦截。
+  final VoidCallback? onInterceptWhileEditing;
   final bool grid;
 
   @override
@@ -1269,12 +1355,7 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
           // 封面缩略图 + 名称：点击进入相册浏览；选中时整行 accent 淡背景高亮
           Expanded(
             child: InkWell(
-              onTap: () => Navigator.pushNamed(context, AppRoutes.album,
-                  arguments: {
-                    'bucketId': widget.bucket.id,
-                    'bucketName': widget.bucket.name,
-                    'bucketCount': widget.bucket.count,
-                  }),
+              onTap: _openAlbum,
               borderRadius: BorderRadius.circular(8),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
@@ -1322,7 +1403,7 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
           const SizedBox(width: 8),
           // 圆点勾选 + 选中波动环
           InkWell(
-            onTap: widget.onCheckToggle,
+            onTap: _onCheckToggle,
             borderRadius: BorderRadius.circular(20),
             child: Padding(
               padding:
@@ -1395,7 +1476,29 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
     );
   }
   // ── 网格态：竖向 tile（封面 + 名称 + 角标勾选），与列表态共用波动环。
+  /// 输入法展开（有 TextField 聚焦）时，点击相册入口只用于收起键盘并保存
+  /// 编辑，不进入相册——避免编辑中的父/子目录改动落在防抖窗口内、随导航
+  /// 丢失。返回 true 表示已拦截（调用方应 return）。第二次点击（键盘已收）
+  /// 才执行原操作。
+  bool _interceptIfEditing() {
+    // 用 View 级 viewInsets（物理像素）而非 MediaQuery.viewInsetsOf：后者被
+    // Scaffold 的 resizeToAvoidBottomInset 消费（removeViewInsets 传给 body），
+    // 在 body 子树内恒为 0，无法据此判断键盘是否展开。
+    if (View.of(context).viewInsets.bottom > 0) {
+      widget.onInterceptWhileEditing?.call();
+      return true;
+    }
+    return false;
+  }
+
+  /// 勾选入口：输入态先收键盘保存，不勾选。
+  void _onCheckToggle() {
+    if (_interceptIfEditing()) return;
+    widget.onCheckToggle();
+  }
+
   void _openAlbum() {
+    if (_interceptIfEditing()) return;
     Navigator.pushNamed(context, AppRoutes.album, arguments: {
       'bucketId': widget.bucket.id,
       'bucketName': widget.bucket.name,
@@ -1456,7 +1559,7 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
                   top: 2,
                   right: 2,
                   child: GestureDetector(
-                    onTap: widget.onCheckToggle,
+                    onTap: _onCheckToggle,
                     behavior: HitTestBehavior.opaque,
                     child: _buildGridCheck(),
                   ),

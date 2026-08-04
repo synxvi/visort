@@ -14,6 +14,7 @@ import android.util.Log
 import android.util.Size
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 import java.io.InputStream
 
 // ───────────────────────── MediaStore 业务层 ─────────────────────────
@@ -92,7 +93,7 @@ class MediaStoreRepository(private val context: Context) {
                 val agg = mutableMapOf<String, Agg>()
                 while (cursor.moveToNext()) {
                     val bid = cursor.getString(idxId) ?: continue
-                    val bname = cursor.getString(idxName) ?: "Unknown"
+                    val bname = cursor.getString(idxName) ?: "根目录"
                     val coverId = cursor.getString(idxCover)
                     val dateAdded = if (cursor.isNull(idxDateAdded)) 0L else cursor.getLong(idxDateAdded) * 1000
                     val dateModified = if (cursor.isNull(idxDateModified)) 0L else cursor.getLong(idxDateModified) * 1000
@@ -481,7 +482,7 @@ class MediaStoreRepository(private val context: Context) {
     /// 解码量 12MP → ~3MP,相机大图全图解码 ~250ms → ~80-100ms,质量从原图解码保证清晰。
     /// (系统相册走私有 native libcodec 区域解码;sortr 用标准 BitmapFactory
     ///  + inSampleSize 下采样,同样只解目标尺寸像素,够用。)
-    fun readSampledImage(id: String, targetWidth: Int): ByteArray {
+    fun readSampledImage(id: String, targetWidth: Int): Map<String, Any> {
         val longId = id.toLongOrNull() ?: throw MsError.InvalidArg("非法图片 id: $id")
         val uri = ContentUris.withAppendedId(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
@@ -501,9 +502,8 @@ class MediaStoreRepository(private val context: Context) {
         }
         val origW = boundsOpts.outWidth
         if (origW <= 0) {
-            // 尺寸读不出(非图片/损坏)→ 回退 readBytes 全图兜底
-            Log.w(TAG, "readSampledImage: 无法读尺寸,回退 readBytes id=$id")
-            return readBytes(id)
+            // 尺寸读不出(非图片/损坏)→ 抛异常,由 dart 端 catch 走 readBytes 兜底
+            throw MsError.QueryFailed("readSampledImage: 无法读尺寸 id=$id")
         }
         // ② 算 inSampleSize(2 的幂,使解码宽度 ≤ targetWidth)。
         //    ⚠️ 用 origW/sampleSize > targetWidth(非 origW/(sample*2) >= target):
@@ -525,11 +525,14 @@ class MediaStoreRepository(private val context: Context) {
         val bitmap = dStream.use {
             BitmapFactory.decodeStream(BufferedInputStream(it, 65536), null, opts)
         } ?: throw MsError.QueryFailed("无法解码 id=$id")
-        // ④ compress JPEG 95 高质量
-        val baos = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, baos)
+        // ④ 直接拷贝 ARGB_8888 原始像素(不 compress JPEG):省掉 JPEG encode + dart 再
+        //    decode 两步 codec。copyPixelsToBuffer 字节序 RGBA(= Flutter rgba8888)。
+        val w = bitmap.width
+        val h = bitmap.height
+        val pixels = ByteArray(w * h * 4)
+        bitmap.copyPixelsToBuffer(ByteBuffer.wrap(pixels))
         bitmap.recycle()
-        return baos.toByteArray()
+        return mapOf("pixels" to pixels, "width" to w, "height" to h)
     }
 
     // ──────────── 读取缩略图（相册网格用） ────────────

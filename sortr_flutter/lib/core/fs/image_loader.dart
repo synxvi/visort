@@ -53,7 +53,7 @@ void evictImageCache(String mediaStoreId) {
 /// 缩略图**。PhotoViewer 关闭时对本次浏览过的照片逐个调用：原图/1024 缩略图
 /// 体积大（12MP ≈ 48MB/张），若留在全局 ImageCache 会把缓存占满、迫使网格
 /// 缩略图反复 evict + GC —— 表现为“打开关闭几次后滚动变卡”。
-void evictViewerImageCache(String mediaStoreId) {
+void evictViewerImageCache(String mediaStoreId, int targetWidth) {
   if (!Platform.isAndroid) return;
   final cache = PaintingBinding.instance.imageCache;
   final ref = imageRefFromMediaStoreId(mediaStoreId);
@@ -62,14 +62,18 @@ void evictViewerImageCache(String mediaStoreId) {
   cache.evict(_AndroidThumbnailProvider(ref: ref, size: 1024));
   // 全图：无 targetWidth（旧条目）与带 targetWidth（下采样）都清。
   cache.evict(_AndroidBytesImageProvider(ref: ref));
-  cache.evict(_AndroidBytesImageProvider(
-      ref: ref, targetWidth: kViewerTargetWidth));
+  cache.evict(_AndroidBytesImageProvider(ref: ref, targetWidth: targetWidth));
 }
 
-/// viewer 原图下采样宽度（物理像素）：1440 屏 × 2 裕量，兼顾双击 2x 放大；
-/// 必须与 PhotoViewer/_BigImage/飞行层的 buildImageProvider(targetWidth:)
-/// 使用同一常量，否则 evict 命中不了缓存条目。
-const int kViewerTargetWidth = 2880;
+/// viewer 原图下采样目标宽度（物理像素）：对齐系统相册 by70.c() = max(960, 屏宽×0.8)。
+/// 屏宽物理 = 逻辑宽 × devicePixelRatio。打开瞬间解码到此宽度：对 12MP 图约 ~1MP，
+/// 解码快、能压进 250ms 飞行动画窗；全屏 contain（屏宽 ≤1440）0.8× 略欠采样但视觉
+/// 可接受（系统相册同策略）；放大 scale>1.3 由 _hdTriggered 加载原片全像素覆盖。
+/// precache/_BigImage/evict 三处都用本函数算同一值，否则 ImageCache key 不匹配。
+int computeViewerTargetWidth(double screenWidthPx) {
+  final target = (screenWidthPx * 0.8).round();
+  return target < 960 ? 960 : target;
+}
 
 /// 安卓端从 MediaStore 读字节的 ImageProvider。
 class _AndroidBytesImageProvider
@@ -108,14 +112,15 @@ class _AndroidBytesImageProvider
     // 失败(超时/channel/解码异常)→ 回退 readBytes 全图,保证可用(诊断期)。
     if (tw != null && tw > 0) {
       try {
-        final sBytes = await _msChannel
+        // raw ARGB 像素(不经 JPEG):ImmutableBuffer + ImageDescriptor.raw 直接
+        // instantiateCodec,跳过 dart 侧二次 JPEG 解码(原 P0 根因)。
+        final r = await _msChannel
             .readSampledImage(key.ref.relativePath, targetWidth: tw)
             .timeout(const Duration(seconds: 5));
-        final sBuffer = await ui.ImmutableBuffer.fromUint8List(sBytes);
-        return decode(sBuffer,
-            getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
-          return ui.TargetImageSize(width: tw);
-        });
+        final sBuffer = await ui.ImmutableBuffer.fromUint8List(r.pixels);
+        final desc = ui.ImageDescriptor.raw(sBuffer,
+            width: r.width, height: r.height, pixelFormat: ui.PixelFormat.rgba8888);
+        return desc.instantiateCodec();
       } catch (_) {
         // readSampledImage 失败(超时/channel/解码)→ 落到下面 readBytes 兜底
       }

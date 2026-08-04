@@ -236,9 +236,10 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
     // 定位：基于锚点按钮的屏幕坐标
     final btnCtx = widget.anchorKey.currentContext;
     final screen = MediaQuery.sizeOf(context);
-    double left = 0, top = 0;
+    double left = 0, top = 0, btnW = 0;
     if (btnCtx != null) {
       final box = btnCtx.findRenderObject() as RenderBox;
+      btnW = box.size.width;
       final pos = box.localToGlobal(Offset.zero);
       // 菜单右对齐按钮右缘 -8dp
       left = (pos.dx + box.size.width - widget.menuWidth - 8 + widget.offsetX)
@@ -247,9 +248,12 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
       top = pos.dy + box.size.height + 4 + widget.offsetY;
     }
 
-    // 锚点（菜单内坐标）：按钮右下角相对菜单左上角
-    final anchorDx = widget.menuWidth + 8; // 菜单右缘到按钮右缘
-    final anchorDy = -4.0; // 菜单顶在按钮底+4，故按钮底相对菜单顶是 -4
+    // 锚点（菜单内坐标）：按钮水平中心正下方、与菜单顶边的交点。
+    // 菜单右缘对齐「按钮右缘 -8」，故按钮中心相对菜单左 = menuWidth + 8 - btnW/2；
+    // anchorDy=0 即菜单顶边。从此点缩放 → 菜单像从按钮正下方「长出来」，
+    // 比原先按钮右下角（≈右上顶点）更贴合触发位置、观感更自然。
+    final anchorDx = widget.menuWidth + 8 - btnW / 2;
+    final anchorDy = 0.0;
 
     return Stack(
       children: [
@@ -281,10 +285,10 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
               return Opacity(
                 opacity: o,
                 child: Transform(
-                  // 支点由下方 translate·scale·translate 矩阵精确给出（按钮右下角）。
+                  // 支点由下方 translate·scale·translate 矩阵精确给出（按钮正下方
+                  // 顶边交点，见上 anchorDx/anchorDy）。
                   // ⚠️ 不能再传 alignment：RenderTransform 会再叠一层 alignment 平移，
-                  //    把有效支点推到 (2·menuWidth+8, -4)（菜单右外），看起来像从
-                  //    屏幕右上角弹出。默认 center 分支会原样使用此矩阵。
+                  //    把有效支点推到错误位置。默认 center 分支会原样使用此矩阵。
                   transform: Matrix4.identity()
                     ..translateByDouble(anchorDx, anchorDy, 0, 1)
                     ..scaleByDouble(s, s, 1, 1)

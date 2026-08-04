@@ -80,11 +80,13 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
   // 是否允许 PageView 翻页（与 _activePointers 双层保护缩放独占）。
   // InteractiveViewer 交互开始（onInteractionStart）置 false；结束且 scale 归 1.0 才恢复。
   bool _scrollEnabled = true;
-  // 2880 原图是否允许加载：route 过渡动画（album 飞行层）完成后才置 true。
-  // 动画期间 viewer 被 Opacity 隐藏，若此时加载原图，缩放结束瞬间 viewer
-  // 直接是原图（没有 768→2880 的渐进）——“动画缩放时就已经垫了一层原图”。
-  // transition 为 null（无动画入口）时初始即 true。
+  // 2880 原图是否允许”显示”：route 过渡动画（album 飞行层）完成后才置 true。
+  // 2880 的解码已由 album 端 _openViewer 的 precacheImage 在点击瞬间发起；此处
+  // 只门控原图层进树——保证 t=1 衔接点 viewer 垫 300（与飞行末帧一致无跳变），
+  // 1~2 帧后 2880 命中缓存覆盖。transition 为 null（无动画入口）时初始即 true。
   bool _allowFull = false;
+  // viewer 全图下采样目标宽（屏宽物理×0.8，build 时算；evict 复用同值匹配 ImageCache key）。
+  int _viewerTargetWidth = 1152;
 
   @override
   void initState() {
@@ -133,7 +135,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
     // （实测多次进出后 30→10fps）。只 evict 实际加载过的（_viewedIds），
     // 而非全量遍历 _photos（可能几百张），避免 dispose 时 GC 峰值。
     for (final id in _viewedIds) {
-      evictViewerImageCache(id);
+      evictViewerImageCache(id, _viewerTargetWidth);
     }
     super.dispose();
   }
@@ -238,6 +240,9 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
                       onFavorite: _toggleFavoriteCurrent,
                       isTrashed: _photos[_index].isTrashed,
                       dateTrashedMs: _photos[_index].dateTrashedMs,
+                      onRestore: _photos[_index].isTrashed
+                          ? _restoreCurrent
+                          : null,
                     ),
                   ),
                 ),
@@ -258,84 +263,19 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
     if (_photos.isEmpty) return;
     final current = _photos[_index];
     final controller = ref.read(galleryControllerProvider.notifier);
-    String? toastKey;
     if (current.isTrashed) {
-      // 回收站视图：上排 左恢复 / 右彻底删除，下排 取消
-      final action = await showCenterDialog<String>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: AppColors.surface,
-          title: Text(t(ref, 'trash_item_title'),
-              style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 15)),
-          actions: [
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // 上排：左恢复（accent）、右彻底删除（danger 红色填充，醒目）
-                Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton(
-                        style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.accent,
-                            foregroundColor: AppColors.bg),
-                        onPressed: () => Navigator.pop(ctx, 'restore'),
-                        child: Text(t(ref, 'action_restore')),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: FilledButton(
-                        style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.danger,
-                            foregroundColor: AppColors.bg),
-                        onPressed: () => Navigator.pop(ctx, 'delete'),
-                        child: Text(t(ref, 'delete_permanently')),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                // 下排：取消（全宽）
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, null),
-                  child: Text(t(ref, 'cancel'),
-                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)),
-                ),
-              ],
-            ),
-          ],
-        ),
-      );
-      if (action == null) return;
-      if (action == 'restore') {
-        final err = await controller.restorePhoto(current.id);
-        if (err != null) {
-          if (mounted) toast(context, t(ref, 'restore_failed'));
-          return;
-        }
-        toastKey = 'restored';
-      } else {
-        final err = await controller.deletePhoto(current.id);
-        if (err != null) {
-          if (mounted) toast(context, t(ref, 'delete_failed'));
-          return;
-        }
-        toastKey = 'deleted';
-      }
-    } else {
-      // 普通视图：删除 = 移入回收站（与系统相册一致；回收站内可恢复/彻底删除）
+      // 回收站视图：彻底删除。恢复已拆到底栏独立按钮，不再用三选项弹窗。
+      // 确认弹窗风格与恢复/普通删除一致：左取消、右确认（danger 红色填充）。
       final confirmed = await showCenterDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: AppColors.surface,
-          title: Text(t(ref, 'confirm_trash'),
+          title: Text(t(ref, 'delete_permanently'),
               style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 15)),
-          content: Text(t(ref, 'trash_confirm_desc'),
+          content: Text(t(ref, 'delete_permanently_desc'),
               style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)),
           actions: [
-            // 左右布局：左取消、右删除（移到回收站）
+            // 左右布局：左取消、右确认（danger 红色填充）
             Row(
               children: [
                 Expanded(
@@ -352,7 +292,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
                         backgroundColor: AppColors.danger,
                         foregroundColor: AppColors.bg),
                     onPressed: () => Navigator.pop(ctx, true),
-                    child: Text(t(ref, 'action_trash')),
+                    child: Text(t(ref, 'confirm')),
                   ),
                 ),
               ],
@@ -361,24 +301,120 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
         ),
       );
       if (confirmed != true) return;
-      final err = await controller.trashPhoto(current.id);
+      final err = await controller.deletePhoto(current.id);
       if (err != null) {
-        if (mounted) toast(context, t(ref, 'trash_unsupported'));
+        if (mounted) toast(context, t(ref, 'delete_failed'));
         return;
       }
-      toastKey = 'trashed';
+      _removeCurrentAndAdvance('deleted');
+      return;
     }
+    // 普通视图：删除 = 移入回收站（与系统相册一致；回收站内可恢复/彻底删除）
+    final confirmed = await showCenterDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text(t(ref, 'confirm_trash'),
+            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 15)),
+        content: Text(t(ref, 'trash_confirm_desc'),
+            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)),
+        actions: [
+          // 左右布局：左取消、右删除（移到回收站）
+          Row(
+            children: [
+              Expanded(
+                child: TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: Text(t(ref, 'cancel'),
+                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.danger,
+                      foregroundColor: AppColors.bg),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: Text(t(ref, 'action_trash')),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final err = await controller.trashPhoto(current.id);
+    if (err != null) {
+      if (mounted) toast(context, t(ref, 'trash_unsupported'));
+      return;
+    }
+    _removeCurrentAndAdvance('trashed');
+  }
+
+  /// 恢复当前照片（回收站视图底栏恢复按钮）。确认弹窗风格与彻底删除一致：
+  /// 左取消、右确认（accent 蓝色——恢复为积极操作，与删除的 danger 红对照）。
+  Future<void> _restoreCurrent() async {
+    if (_photos.isEmpty) return;
+    final current = _photos[_index];
+    final confirmed = await showCenterDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text(t(ref, 'action_restore'),
+            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 15)),
+        content: Text(t(ref, 'restore_desc'),
+            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)),
+        actions: [
+          Row(
+            children: [
+              Expanded(
+                child: TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: Text(t(ref, 'cancel'),
+                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.accent,
+                      foregroundColor: AppColors.bg),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: Text(t(ref, 'confirm')),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final controller = ref.read(galleryControllerProvider.notifier);
+    final err = await controller.restorePhoto(current.id);
+    if (err != null) {
+      if (mounted) toast(context, t(ref, 'restore_failed'));
+      return;
+    }
+    _removeCurrentAndAdvance('restored');
+  }
+
+  /// 删除/恢复成功后从列表移除当前项并跳到下一张（或末张），刷新 chrome 计数。
+  /// 回收站的恢复、彻底删除与普通删除（移入回收站）共用此收尾逻辑。
+  void _removeCurrentAndAdvance(String toastKey) {
     if (!mounted) return;
     setState(() {
       _photos.removeAt(_index);
       if (_photos.isEmpty) {
-        // 最后一张已删除：直接强制退出（Navigator.pop 不走 PopScope 拦截）。
+        // 最后一张已移除：直接强制退出（Navigator.pop 不走 PopScope 拦截）。
         Navigator.pop(context);
         return;
       }
       _index = _index >= _photos.length ? _photos.length - 1 : _index;
     });
-    // Overlay 顶/底栏显示当前照片信息，删除后刷新
+    // Overlay 顶/底栏显示当前照片信息，移除后刷新
     _barEntry?.markNeedsBuild();
     if (_pageCtrl.hasClients) {
       Future.microtask(() {
@@ -424,6 +460,9 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
 
   @override
   Widget build(BuildContext context) {
+    _viewerTargetWidth = computeViewerTargetWidth(
+        MediaQuery.sizeOf(context).width *
+            MediaQuery.devicePixelRatioOf(context));
     return Scaffold(
       backgroundColor: Colors.black,
       body: _photos.isEmpty
@@ -591,6 +630,7 @@ class _BottomChromeBar extends ConsumerWidget {
     required this.onDelete,
     required this.isFavorite,
     required this.onFavorite,
+    this.onRestore,
     this.isTrashed = false,
     this.dateTrashedMs = 0,
   });
@@ -598,6 +638,8 @@ class _BottomChromeBar extends ConsumerWidget {
   final VoidCallback onDelete;
   final bool isFavorite;
   final VoidCallback onFavorite;
+  /// 回收站项恢复回调；非 null 时在删除按钮左侧显示恢复按钮（icon）。
+  final VoidCallback? onRestore;
   /// 回收站项：是否已删除（决定是否显示删除日期）。
   final bool isTrashed;
   /// 删除日期（DATE_EXPIRES * 1000）；>0 时显示。
@@ -633,6 +675,14 @@ class _BottomChromeBar extends ConsumerWidget {
               Padding(
                 padding: const EdgeInsets.only(right: 6),
                 child: _TrashDateLabel(ms: dateTrashedMs),
+              ),
+            // 回收站恢复按钮（删除按钮左侧，icon 表示）——把原三选项弹窗里的
+            // 「恢复」提升为底栏独立操作，与删除形成左恢复 / 右删除的并列入口。
+            if (onRestore != null)
+              IconButton(
+                icon: const Icon(Icons.restore, color: AppColors.accent),
+                tooltip: t(ref, 'action_restore'),
+                onPressed: onRestore,
               ),
             IconButton(
               icon: const Icon(Icons.delete_outline, color: AppColors.danger),
@@ -700,8 +750,9 @@ class _BigImage extends StatefulWidget {
   final MsImageInfo info;
   final bool active;
   final VoidCallback onTapChrome;
-  /// 是否允许加载 2880 原图（动画完成后才 true）。false 时只显示 300/768
-  /// 渐进层，原图层（静态图）与 GIF 原片层都不进入树、不 resolve。
+  /// 是否允许"显示"2880 原图层（动画完成后才 true）。2880 的解码已由 album 端
+  /// _openViewer 的 precacheImage 在点击瞬间发起，此处只门控原图层进树时机。
+  /// false 时只显示 300 垫底，原图层（静态图）与 GIF 原片层都不进入树。
   final bool loadFull;
   // 缩放交互回调：开始时通知外层禁用 PageView 翻页；
   // 结束时回传当前 scale，外层据此决定是否恢复翻页（scale 归 1 才恢复）。
@@ -738,8 +789,6 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
   // （同一照片同一 contain 布局，仅清晰度变化——**不要**用淡入淡出过渡，
   // 交叉淡化会产生叠影“闪一下”，实测观感差）。
   bool _fullLoaded = false;
-  // 中间缩略图（768）是否就绪：作 300→1920 之间的清晰过渡，缩短模糊尾巴。
-  bool _midLoaded = false;
   // 是否已触发高清原图加载。双击/双指缩放放大到 scale>1.3 时按需加载原片全像素
   // (readBytes 全图,~250ms)——日常浏览用上层下采样图(快),只有放大看细节才 load 原图。
   bool _hdTriggered = false;
@@ -837,9 +886,9 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
             : Stack(
           fit: StackFit.expand,
           children: [
-            if (!_midLoaded && !_fullLoaded)
+            if (!_fullLoaded)
               // ① 垫底 300：网格同 key 已缓存，飞行层移除瞬间立即衔接可见。
-              //    仅在 768 未就绪时显示（兜底）。
+              //    2880 就绪前显示（兜底）；就绪后 _fullLoaded=true，本层移除、原图覆盖。
               Image(
                 image: buildThumbnailProvider(ref, size: 300),
                 fit: BoxFit.contain,
@@ -849,36 +898,17 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
                       color: AppColors.muted, size: 48),
                 ),
               ),
-            // ② 中层 768：MediaStore 系统缩略图，解码快（~30-50ms），作 300→1920
-            //    之间的清晰过渡。就绪替换 300，显著缩短“模糊尾巴”。加载中
-            //    SizedBox.shrink 透明，透出底层 300。
-            if (!_fullLoaded)
-              Image(
-                image: buildThumbnailProvider(ref, size: 768),
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-                loadingBuilder: (ctx, child, progress) {
-                  if (progress == null) {
-                    if (!_midLoaded) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) setState(() => _midLoaded = true);
-                      });
-                    }
-                    return child;
-                  }
-                  return const SizedBox.shrink();
-                },
-                errorBuilder: (ctx, error, stack) => const SizedBox.shrink(),
-              ),
             // 原图层：contain 完整显示。加载完成前透明（不挡垫底层）；
             // 完成后直接上屏（垫底同帧移除，无叠影）。加载失败保持透明，
-            // 垫底缩略图继续可见。targetWidth 下采样（kViewerTargetWidth）：
-            // 屏幕只需要 ~1440 逻辑像素，全尺寸解码 48MB/张会撑爆 ImageCache。
+            // 垫底缩略图继续可见。targetWidth 运行时算（屏宽×0.8，computeViewerTargetWidth），
+            // 全屏 contain 够清晰、解码量小；放大 scale>1.3 由 _hdTriggered 原片覆盖。
             // ⚠️ loadFull 门控：缩放动画结束前不进树，避免"动画时已垫原图"。
             if (widget.loadFull)
               Image(
                 image: buildImageProvider(ref,
-                    targetWidth: kViewerTargetWidth),
+                    targetWidth: computeViewerTargetWidth(
+                        MediaQuery.sizeOf(context).width *
+                            MediaQuery.devicePixelRatioOf(context))),
                 fit: BoxFit.contain,
                 gaplessPlayback: true,
                 loadingBuilder: (ctx, child, progress) {
@@ -919,7 +949,7 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
   }
 
   /// GIF 动图渲染层:直接加载原片全像素(readBytes),Flutter 解出完整多帧 Codec
-  /// 自动播放动画。**不走** 300/768/2880 下采样渐进层——下采样走 native
+  /// 自动播放动画。**不走** 300/2880 下采样渐进层——下采样走 native
   /// BitmapFactory+inSampleSize(只取第一帧)再 compress JPEG(彻底丢帧),得到的是
   /// 静态首帧;只有 targetWidth:null 的原片能让 dart 解码器播动画。
   /// 300 系统缩略图(静态首帧)仅作原图加载期垫底防黑屏,原图就绪后覆盖。

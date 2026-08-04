@@ -616,8 +616,8 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         // native 下采样解码放后台线程,避免卡 UI
         ioExecutor.execute {
             try {
-                val bytes = repo.readSampledImage(id, targetWidth)
-                mainHandler.post { result.success(bytes) }
+                val data = repo.readSampledImage(id, targetWidth)
+                mainHandler.post { result.success(data) }
             } catch (e: MsError) {
                 mainHandler.post { result.error(e.code, e.message, null) }
             } catch (e: Exception) {
