@@ -68,13 +68,11 @@ NonModalMenuController showNonModalMenu({
     ),
   );
   overlay.insert(entry);
-  controller._entry = entry;
   return controller;
 }
 
 /// 菜单控制器：触发收回动画 + 资源清理。
 class NonModalMenuController {
-  OverlayEntry? _entry;
   ValueNotifier<bool>? _closeSignal;
   bool _closed = false;
 
@@ -93,7 +91,6 @@ class NonModalMenuController {
     if (_closed) return;
     _closed = true;
     entry.remove();
-    _entry = null;
     onDismiss?.call();
   }
 }

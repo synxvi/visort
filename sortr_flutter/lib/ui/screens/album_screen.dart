@@ -58,8 +58,6 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// 网格 GridView key：计算 cell 屏幕位置（返回飞行层终点）用。
   final GlobalKey _gridKey = GlobalKey();
 
-  /// viewer 内当前浏览的照片索引（翻页后更新）。
-  int _viewerIndex = 0;
   /// 打开 viewer 时的照片索引与网格滚动位置：
   /// 返回定位规则（对标系统相册）——向后滑→目标行贴视口底部；
   /// 向前滑→贴顶部；翻回原位→恢复打开时的网格视口。
@@ -269,7 +267,6 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   void _onViewerIndexChanged(int index) {
     final photos = ref.read(galleryControllerProvider).photos;
     if (index < 0 || index >= photos.length) return;
-    _viewerIndex = index;
     _flightImage = _buildFlightImage(photos[index]);
     _scrollToCellRow(index);
     final r = _cellRectFor(index);
@@ -349,7 +346,6 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         context);
     // 飞行层初始状态：当前照片 + 点击 cell 位置。
     // 翻页后由 [_onViewerIndexChanged] 更新——返回动画跟随当前照片。
-    _viewerIndex = index;
     _openViewerIndex = index;
     _openScrollOffset = _scrollCtrl.hasClients ? _scrollCtrl.offset : 0;
     _flightImage = _buildFlightImage(info);

@@ -228,6 +228,7 @@ class _AndroidThumbnailProvider
     // 让 loadingBuilder 在解码完成前插入占位层；完成帧到达后自动替换。
     // 时序安全：Image 添加 listener 是同步的，microtask 在 listener 之后执行。
     scheduleMicrotask(() {
+      // ignore: invalid_use_of_protected_member
       completer.reportImageChunkEvent(const ImageChunkEvent(
         cumulativeBytesLoaded: 1,
         expectedTotalBytes: null,

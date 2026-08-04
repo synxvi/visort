@@ -16,7 +16,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 
-import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'app.dart';
 import 'core/i18n/i18n.dart';

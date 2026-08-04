@@ -8,7 +8,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:sortr_flutter/core/config/models.dart';
 import 'package:sortr_flutter/core/i18n/i18n.dart';
 import 'package:sortr_flutter/features/session/session_controller.dart';
 import 'package:sortr_flutter/features/session/session_models.dart';
