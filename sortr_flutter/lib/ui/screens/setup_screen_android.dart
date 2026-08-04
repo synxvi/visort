@@ -53,6 +53,9 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
 
   // 模式
   ClassifyMode _mode = ClassifyMode.toAlbum;
+  // 模式切换方向(抽屉滑动):正向 toAlbum→toNewDir(新从右进/旧向左出),反向反之。
+  // 点击 SegmentedButton 与左右滑动手势共同维护,transitionBuilder 据此定向。
+  bool _slideForward = true;
 
   // 模式一（toNewDir）配置
   final _parentCtrl = TextEditingController(text: '');
@@ -487,6 +490,8 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
       body: GestureDetector(
         // 点击空白（非输入框）：收起键盘并立即落盘 toNewDir 待保存编辑。
         onTap: _dismissAndFlush,
+        // 左右滑动切换移动模式(对标系统相册页间滑动):右滑→相册间,左滑→子目录。
+        onHorizontalDragEnd: _onModeSwipe,
         behavior: HitTestBehavior.opaque,
         child: SafeArea(
           child: Column(
@@ -507,42 +512,115 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     );
   }
 
+  /// 切换模式:触发内容抽屉滑动(_slideForward 定向)。
+  void _applyMode(ClassifyMode m) {
+    if (m == _mode) return;
+    setState(() {
+      _slideForward = m.index > _mode.index;
+      _mode = m;
+    });
+  }
+
+  /// 左右滑动切换移动模式:右滑(正速度)→相册间(toAlbum);左滑→子目录(toNewDir)。
+  /// 阈值 300px/s 避免误触。垂直滚动(ListView)不受影响——水平 drag 由本层独占。
+  void _onModeSwipe(DragEndDetails details) {
+    final v = details.primaryVelocity ?? 0;
+    if (v > 300 && _mode != ClassifyMode.toAlbum) {
+      _applyMode(ClassifyMode.toAlbum);
+    } else if (v < -300 && _mode != ClassifyMode.toNewDir) {
+      _applyMode(ClassifyMode.toNewDir);
+    }
+  }
+
   Widget _buildModeSelector() {
+    final isAlbum = _mode == ClassifyMode.toAlbum;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: SegmentedButton<ClassifyMode>(
-        // 激活态不显示默认 ✅，保留各模式自身 icon
-        showSelectedIcon: false,
-        style: SegmentedButton.styleFrom(
-          backgroundColor: AppColors.surface,
-          foregroundColor: AppColors.text,
-          selectedBackgroundColor: AppColors.accent,
-          selectedForegroundColor: AppColors.bg,
+      child: Container(
+        // 轨道:未选段底色(surface),圆角;内 padding 让色块在其内滑动。
+        padding: const EdgeInsets.all(4),
+        clipBehavior: Clip.hardEdge,
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
         ),
-        segments: [
-          ButtonSegment(
-            value: ClassifyMode.toAlbum,
-            label: Text(t(ref, 'mode_to_album'),
-                style: const TextStyle(
-                    fontFamily: 'Space Mono',
-                    fontFamilyFallback: AppFonts.cjkFallback,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700)),
-            icon: const Icon(Icons.swap_horiz, size: 18),
+        child: LayoutBuilder(
+          builder: (ctx, c) {
+            final blockW = c.maxWidth / 2;
+            return SizedBox(
+              height: 40,
+              child: Stack(
+                children: [
+                  // 高亮色块:圆角矩形,水平滑动到选中段。曲线/时长与下方内容
+                  // 抽屉滑动一致(easeOutCubic ~280ms),保持视觉统一,无特效。
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 280),
+                    curve: Curves.easeOutCubic,
+                    left: isAlbum ? 0 : blockW,
+                    top: 0,
+                    bottom: 0,
+                    width: blockW,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.accent,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                  // 两段按钮(在上层,捕获点击;色块在下层装饰)
+                  Positioned.fill(
+                    child: Row(
+                      children: [
+                        Expanded(
+                            child: _modeSegment(ClassifyMode.toAlbum,
+                                Icons.swap_horiz, t(ref, 'mode_to_album'))),
+                        Expanded(
+                            child: _modeSegment(ClassifyMode.toNewDir,
+                                Icons.create_new_folder_outlined,
+                                t(ref, 'mode_to_newdir'))),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  /// 单段按钮:点击切换模式;文字/图标颜色随选中态淡入淡出(选中=bg,未选=text),
+  /// 与滑动色块同步,避免色块到位而字色仍滞留旧态。
+  Widget _modeSegment(ClassifyMode m, IconData icon, String label) {
+    final selected = _mode == m;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _applyMode(m),
+        borderRadius: BorderRadius.circular(8),
+        child: TweenAnimationBuilder<Color?>(
+          tween: ColorTween(end: selected ? AppColors.bg : AppColors.text),
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOut,
+          builder: (ctx, color, _) => Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 18, color: color),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: color,
+                  fontFamily: 'Space Mono',
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ),
-          ButtonSegment(
-            value: ClassifyMode.toNewDir,
-            label: Text(t(ref, 'mode_to_newdir'),
-                style: const TextStyle(
-                    fontFamily: 'Space Mono',
-                    fontFamilyFallback: AppFonts.cjkFallback,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700)),
-            icon: const Icon(Icons.create_new_folder_outlined, size: 18),
-          ),
-        ],
-        selected: {_mode},
-        onSelectionChanged: (s) => setState(() => _mode = s.first),
+        ),
       ),
     );
   }
@@ -602,12 +680,28 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
             switchInCurve: Curves.easeOutCubic,
             switchOutCurve: Curves.easeInCubic,
             transitionBuilder: (child, anim) {
-              final scale = Tween<double>(begin: 0.97, end: 1.0).animate(
-                CurvedAnimation(parent: anim, curve: Curves.easeOutCubic),
-              );
-              return FadeTransition(
-                opacity: anim,
-                child: ScaleTransition(scale: scale, child: child),
+              // 抽屉式同向水平滑动(对标桌面抽屉/系统页间切换,非淡入淡出):
+              // 正向(toAlbum→toNewDir):新内容从右进、旧内容向左出;反向反之。
+              // AnimatedSwitcher 对新旧 child 用同一 transitionBuilder + 正/反
+              // animation,这里靠 child.key(=ValueKey(_mode))区分新旧,各自取
+              // 相反方向的 offset——新进 child 从来向滑入,旧退 child 向同侧滑出,
+              // 形成连贯的同向流动而非"对开"。
+              final mode = (child.key as ValueKey<ClassifyMode>).value;
+              final isNew = mode == _mode;
+              final Offset begin;
+              if (isNew) {
+                begin =
+                    _slideForward ? const Offset(1, 0) : const Offset(-1, 0);
+              } else {
+                begin =
+                    _slideForward ? const Offset(-1, 0) : const Offset(1, 0);
+              }
+              return SlideTransition(
+                position:
+                    Tween<Offset>(begin: begin, end: Offset.zero).animate(
+                  CurvedAnimation(parent: anim, curve: Curves.easeOutCubic),
+                ),
+                child: child,
               );
             },
             // 自定义 layoutBuilder：新旧 child 顶部对齐。默认 alignment.center 在
@@ -1730,3 +1824,5 @@ class _Logo extends StatelessWidget {
     );
   }
 }
+
+
