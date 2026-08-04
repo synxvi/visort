@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.IntentSender
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
@@ -14,8 +15,11 @@ import android.util.Log
 import android.util.Size
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
+import java.io.File
 import java.io.InputStream
+import java.nio.ByteBuffer
+import java.util.concurrent.Semaphore
+import kotlin.math.max
 
 // ───────────────────────── MediaStore 业务层 ─────────────────────────
 //
@@ -542,25 +546,159 @@ class MediaStoreRepository(private val context: Context) {
     /// API 29+ 用 ContentResolver.loadThumbnail（系统级高效，返回指定尺寸的 Bitmap）。
     /// API <29 不支持 loadThumbnail，返回空数组 —— Dart 侧检测到空回退 readBytes 全图下采样。
     ///
+    /// 磁盘缩略图缓存（对标系统相册 mem→disk 两级缓存）：首次 loadThumbnail + 编码后
+    /// 落盘 {cacheDir}/sortr_thumb/{width}x{height}/{id}.jpg，二次进入零解码直出；
+    /// [dateModifiedMs]（源图 DATE_MODIFIED 毫秒）非空时用文件 mtime 校验源图是否
+    /// 编辑过——编辑后 mtime < 新 dateModified → 自动失效重取，零额外查询。
+    /// 容量上限 [MAX_THUMBNAIL_CACHE_BYTES]，超出按 mtime 删最旧。
+    ///
     /// [width]/[height] 为目标缩略图像素尺寸（如 256x256）。
-    fun readThumbnail(id: String, width: Int = 256, height: Int = 256): ByteArray {
+    fun readThumbnail(
+        id: String,
+        width: Int = 256,
+        height: Int = 256,
+        dateModifiedMs: Long? = null,
+    ): ByteArray {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             // 低版本不支持 loadThumbnail，返回空让 Dart 回退
             Log.d(TAG, "readThumbnail: API <29，跳过（id=$id）")
             return ByteArray(0)
         }
         val longId = id.toLongOrNull() ?: throw MsError.InvalidArg("非法图片 id: $id")
-        val uri = ContentUris.withAppendedId(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
-        )
-        val bitmap: Bitmap = try {
-            contentResolver.loadThumbnail(uri, Size(width, height), null)
-        } catch (e: Exception) {
-            throw MsError.QueryFailed("loadThumbnail 失败 id=$id: ${e.message}")
+
+        // ① 磁盘缓存命中 → 零解码直出
+        readThumbnailCache(longId, width, height, dateModifiedMs)?.let { return it }
+
+        // ② 小尺寸请求（占位层）优先 EXIF 内嵌缩略图（对标系统相册 fo0.java）：
+        //    相机 JPEG 内嵌 160×120 缩略图，解码 ~1-5ms，免系统 loadThumbnail
+        //    服务首次生成的 50~200ms —— 首屏占位秒显的关键。
+        //    无 EXIF 时回退 loadThumbnail（小尺寸采样少，也快于大尺寸）。
+        if (width <= EXIF_THUMBNAIL_MAX_SIZE && height <= EXIF_THUMBNAIL_MAX_SIZE) {
+            exifThumbnail(longId)?.let { bytes ->
+                writeThumbnailCache(longId, width, height, dateModifiedMs, bytes)
+                return bytes
+            }
+        }
+
+        // ③ 未命中 → loadThumbnail + 编码。信号量限制并发：首屏 20+ 张同时
+        //    压系统 MediaStore 缩略图服务会造成 CPU 尖峰与排队抖动。
+        val bitmap: Bitmap
+        thumbnailSemaphore.acquire()
+        try {
+            val uri = ContentUris.withAppendedId(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
+            )
+            bitmap = try {
+                contentResolver.loadThumbnail(uri, Size(width, height), null)
+            } catch (e: Exception) {
+                throw MsError.QueryFailed("loadThumbnail 失败 id=$id: ${e.message}")
+            }
+        } finally {
+            thumbnailSemaphore.release()
         }
         val baos = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, baos)
-        return baos.toByteArray()
+        // 质量 90→70：网格缩略图场景视觉无损（300~500px），编码更快、字节更小、
+        // Dart 侧解码更快 —— 三重收益。
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+        val bytes = baos.toByteArray()
+        writeThumbnailCache(longId, width, height, dateModifiedMs, bytes)
+        return bytes
+    }
+
+    /// 读取 JPEG 内嵌 EXIF 缩略图（无则返回 null）。
+    /// 仅 JPEG 文件含 EXIF 区；HEIC/PNG 等走回退路径。
+    private fun exifThumbnail(id: Long): ByteArray? {
+        return try {
+            val uri = ContentUris.withAppendedId(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id
+            )
+            val input = contentResolver.openInputStream(uri) ?: return null
+            input.use { stream ->
+                val exif = ExifInterface(stream)
+                if (!exif.hasThumbnail()) return null
+                val bmp = exif.getThumbnailBitmap() ?: return null
+                val baos = ByteArrayOutputStream()
+                bmp.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+                Log.d(TAG, "readThumbnail: EXIF 命中 id=$id ${bmp.width}x${bmp.height} ${baos.size()}B")
+                baos.toByteArray()
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "readThumbnail: EXIF 失败 id=$id: ${e.message}")
+            null
+        }
+    }
+
+    // ──────────── 缩略图磁盘缓存 ────────────
+
+    /// 命中条件：文件存在 &&（无 dateModifiedMs 校验 或 文件 mtime ≥ 源图 DATE_MODIFIED）。
+    /// 写入时把文件 mtime 对齐源图 DATE_MODIFIED（秒级值×1000 后的毫秒），
+    /// 图片被编辑后 dateModified 增大 → mtime 落后 → 此处判失效删文件重取。
+    private fun readThumbnailCache(
+        id: Long,
+        width: Int,
+        height: Int,
+        dateModifiedMs: Long?,
+    ): ByteArray? {
+        val file = File(File(thumbnailCacheDir, "${width}x$height"), "$id.jpg")
+        if (!file.exists()) return null
+        val dm = dateModifiedMs
+        if (dm == null || file.lastModified() >= dm) {
+            return try { file.readBytes() } catch (e: Exception) { null }
+        }
+        file.delete()
+        return null
+    }
+
+    private fun writeThumbnailCache(
+        id: Long,
+        width: Int,
+        height: Int,
+        dateModifiedMs: Long?,
+        bytes: ByteArray,
+    ) {
+        try {
+            val dir = File(thumbnailCacheDir, "${width}x$height")
+            dir.mkdirs()
+            val file = File(dir, "$id.jpg")
+            file.writeBytes(bytes)
+            // mtime 对齐源图 dateModified（毫秒）→ 命中校验依据；无校验来源时用当前时间
+            file.setLastModified(max(System.currentTimeMillis(), dateModifiedMs ?: 0L))
+            trimThumbnailCache()
+        } catch (e: Exception) {
+            Log.w(TAG, "writeThumbnailCache 失败: ${e.message}")
+        }
+    }
+
+    /// 容量上限：超出按 mtime 删最旧，直到达标。目录小（≤128MB）时跳过扫描。
+    private fun trimThumbnailCache() {
+        val files = thumbnailCacheDir.listFiles()?.filter { it.isFile } ?: return
+        var total = 0L
+        for (f in files) total += f.length()
+        if (total <= MAX_THUMBNAIL_CACHE_BYTES) return
+        val sorted = files.sortedBy { it.lastModified() }
+        for (f in sorted) {
+            if (total <= MAX_THUMBNAIL_CACHE_BYTES) break
+            val len = f.length()
+            if (f.delete()) total -= len
+        }
+    }
+
+    /// 缩略图磁盘缓存目录（app cache，系统可清）。
+    private val thumbnailCacheDir: File by lazy {
+        File(context.cacheDir, "sortr_thumb").apply { mkdirs() }
+    }
+
+    companion object {
+        /// 缩略图 loadThumbnail+编码 并发上限（与 ioExecutor 12 线程匹配，
+        /// 对标系统相册 BaseThumbnailLoader 12 并发）。
+        private val thumbnailSemaphore = Semaphore(12)
+
+        /// 磁盘缩略图缓存容量上限（128MB ≈ 数千张 300~500px JPEG）。
+        private const val MAX_THUMBNAIL_CACHE_BYTES = 128L * 1024 * 1024
+
+        /// EXIF 内嵌缩略图适用的最大请求尺寸（px）：≤128 的占位层请求
+        /// 优先走 EXIF（~5ms），更大请求直接 loadThumbnail（EXIF 图糊）。
+        private const val EXIF_THUMBNAIL_MAX_SIZE = 128
     }
 
     // ──────────── 批量删除（Recovery API） ────────────

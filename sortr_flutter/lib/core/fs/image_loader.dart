@@ -157,14 +157,21 @@ const MediaStoreChannel _msChannel = MediaStoreChannel();
 
 // ───────────────────────── 缩略图 Provider（相册网格用） ─────────────────────────
 
+/// 缩略图占位层尺寸（px）：两级渐进的第一级。
+/// Kotlin readThumbnail 对 ≤128 的请求优先解 EXIF 内嵌缩略图（~5ms），
+/// 占位秒显后再由清晰层替换（对标系统相册 xqip/EXIF 占位 → 清晰渐进）。
+const int kThumbnailPlaceholderSize = 128;
+
 /// 构建缩略图 ImageProvider（相册网格 cell 用）。
 ///
 /// 安卓端优先走 MediaStore loadThumbnail（API 29+，系统级高效缩略图），
 /// 低版本回退 readBytes 全图 + targetWidth 下采样。
 /// Windows 端用 ResizeImage 包 FileImage 做下采样。
-ImageProvider buildThumbnailProvider(ImageRef ref, {int size = 256}) {
+ImageProvider buildThumbnailProvider(ImageRef ref,
+    {int size = 256, int? dateModifiedMs}) {
   if (Platform.isAndroid) {
-    return _AndroidThumbnailProvider(ref: ref, size: size);
+    return _AndroidThumbnailProvider(
+        ref: ref, size: size, dateModifiedMs: dateModifiedMs);
   }
   return ResizeImage(FileImage(File(p.join(ref.root, ref.relativePath))),
       width: size);
@@ -185,10 +192,18 @@ ImageRef imageRefFromMediaStoreId(String id, {String extension = '.jpg'}) {
 /// 安卓缩略图 Provider：先试 loadThumbnail，空（API<29）回退 readBytes 下采样。
 class _AndroidThumbnailProvider
     extends ImageProvider<_AndroidThumbnailProvider> {
-  const _AndroidThumbnailProvider({required this.ref, required this.size});
+  const _AndroidThumbnailProvider({
+    required this.ref,
+    required this.size,
+    this.dateModifiedMs,
+  });
 
   final ImageRef ref;
   final int size;
+
+  /// 源图 DATE_MODIFIED（毫秒）：① 参与 ImageCache key —— 图片被编辑后
+  /// dateModified 变化 → 新 key 自动重取；② 透传 Kotlin 磁盘缓存校验。
+  final int? dateModifiedMs;
 
   @override
   Future<_AndroidThumbnailProvider> obtainKey(ImageConfiguration configuration) {
@@ -200,13 +215,25 @@ class _AndroidThumbnailProvider
     _AndroidThumbnailProvider key,
     ImageDecoderCallback decode,
   ) {
-    return MultiFrameImageStreamCompleter(
+    final completer = MultiFrameImageStreamCompleter(
       codec: _loadAsync(key, decode),
       scale: 1.0,
       informationCollector: () sync* {
         yield ErrorDescription('thumbnail id: ${key.ref.relativePath}');
       },
     );
+    // ⚠️ 关键：provider 是整体解码（无渐进 chunk），若不发 chunk 事件，
+    // Image.loadingBuilder 永远不会被调用（它挂在 onChunk 回调上）——
+    // 两级渐进的占位层（小图/灰底）就全部失效。发一个初始 chunk 事件
+    // 让 loadingBuilder 在解码完成前插入占位层；完成帧到达后自动替换。
+    // 时序安全：Image 添加 listener 是同步的，microtask 在 listener 之后执行。
+    scheduleMicrotask(() {
+      completer.reportImageChunkEvent(const ImageChunkEvent(
+        cumulativeBytesLoaded: 1,
+        expectedTotalBytes: null,
+      ));
+    });
+    return completer;
   }
 
   Future<ui.Codec> _loadAsync(
@@ -217,7 +244,8 @@ class _AndroidThumbnailProvider
     Uint8List bytes;
     try {
       bytes = await _msChannel.readThumbnail(key.ref.id,
-          width: key.size, height: key.size);
+          width: key.size, height: key.size,
+          dateModifiedMs: key.dateModifiedMs);
     } catch (_) {
       bytes = Uint8List(0);
     }
@@ -238,9 +266,10 @@ class _AndroidThumbnailProvider
     if (identical(this, other)) return true;
     return other is _AndroidThumbnailProvider &&
         other.ref.id == ref.id &&
-        other.size == size;
+        other.size == size &&
+        other.dateModifiedMs == dateModifiedMs;
   }
 
   @override
-  int get hashCode => Object.hash(ref.id, size);
+  int get hashCode => Object.hash(ref.id, size, dateModifiedMs);
 }

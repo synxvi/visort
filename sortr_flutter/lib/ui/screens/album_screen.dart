@@ -55,12 +55,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   late final ScrollController _scrollCtrl = ScrollController();
   static const _threshold = 0.7; // 滚动到 70% 触发加载更多
 
-
   @override
   void initState() {
     super.initState();
     _scrollCtrl.addListener(_onScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // 进入动画（网格由小变大）期间网格照常渲染——动画主体就是网格本身，
+      // query 在动画窗口内完成,动画结束缩略图渐进填充。
       if (widget.favoritesOnly) {
         ref.read(galleryControllerProvider.notifier).enterFavorites();
       } else if (widget.trashedOnly) {
@@ -127,10 +128,9 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   }
 
   Widget _buildBody(GalleryState gallery) {
-    if (gallery.loading) {
-      return const Center(
-          child: CircularProgressIndicator(color: AppColors.accent));
-    }
+    final cols = ref.watch(configProvider).photoGridColumns;
+    // ⚠️ 无转圈：首屏未完成（firstPageLoaded=false 且无数据）时显示灰格占位网格，
+    // 第一页到达后无缝替换；error 时显示错误页（可重试）。
     if (gallery.error != null) {
       return Center(
         child: Padding(
@@ -155,16 +155,26 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         ),
       );
     }
+    // 缩略图像素尺寸 = cell 逻辑宽 × dpr（物理像素对齐，对标系统相册 dp×dpr 分档）。
+    // 固定 300 时代 dpr≈3.19 的 cell≈466px 物理，缩略图欠采样发糊；按 dpr 全采样更清晰。
+    final cellWidth =
+        (MediaQuery.sizeOf(context).width - 4 * 2 - (cols - 1) * 3) / cols;
+    final thumbSize = (cellWidth * MediaQuery.devicePixelRatioOf(context))
+        .round()
+        .clamp(160, 512);
     // 直接用 scanImages 的 SQL 原序（已跟随 photoSortBy 排序），与首页封面
     // （listBuckets 取该 SQL 排序首张）严格一致。不用 sortedPhotos 内存重排，
     // 避免 Dart/SQL 对日期列（DATE_ADDED）为空（NULL）行的处理差异导致首张不一致。
     final photos = gallery.photos;
     if (photos.isEmpty) {
+      if (!gallery.firstPageLoaded) {
+        // 首次进入占位：灰格网格（无转圈），数据到达后无缝替换
+        return _ThumbGridPlaceholder(cols: cols);
+      }
       return Center(
           child: Text(t(ref, 'album_empty'),
               style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)));
     }
-    final cols = ref.watch(configProvider).photoGridColumns;
     return Stack(
       children: [
         GridView.builder(
@@ -175,18 +185,17 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             crossAxisSpacing: 3,
             mainAxisSpacing: 3,
           ),
-          itemCount:
-              photos.length + (gallery.hasMore || gallery.loadingMore ? 1 : 0),
+          // ⚠️ 无「加载更多」占位项：滚动 70% 自动触发 loadMore，数据到达直接插入，
+          // 底部不再渲染转圈 cell。
+          itemCount: photos.length,
           itemBuilder: (ctx, i) {
-            if (i >= photos.length) {
-              return const LoadingCell();
-            }
             final info = photos[i];
             // ⚠️ 不要用 RepaintBoundary 包 cell：滚动时每个新 cell 创建独立
             // layer、旧 cell 销毁，频繁 layer 分配会拖慢滚动（实测滚动变卡）。
             // cell 保持纯 InkWell + Image（与无动画版本一致，滚动流畅）。
             return _PhotoCell(
               info: info,
+              thumbSize: thumbSize,
               onTap: (cellRect) =>
                   _openViewer(context, gallery, photos, i, cellRect),
             );
@@ -349,9 +358,15 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
 /// RenderSliverGrid，强转 RenderBox 会崩——必须在 cell 自己的 context 取），
 /// 坐标传给 [_AlbumScreenState] 打开 viewer（飞行层动画在 viewer 侧播放）。
 class _PhotoCell extends StatelessWidget {
-  const _PhotoCell({required this.info, required this.onTap});
+  const _PhotoCell({
+    required this.info,
+    required this.onTap,
+    required this.thumbSize,
+  });
   final MsImageInfo info;
   final ValueChanged<Rect?> onTap;
+  /// 缩略图像素尺寸（cell 逻辑宽 × dpr，物理对齐，替代固定 300）。
+  final int thumbSize;
 
   @override
   Widget build(BuildContext context) {
@@ -366,15 +381,53 @@ class _PhotoCell extends StatelessWidget {
         onTap(rect);
       },
       child: Image(
-        image: buildThumbnailProvider(ref, size: 300),
+        image: buildThumbnailProvider(ref,
+            size: thumbSize, dateModifiedMs: info.dateModifiedMs),
         fit: BoxFit.cover,
         gaplessPlayback: true,
-        errorBuilder: (ctx, error, stack) => Container(
-          color: AppColors.surface,
-          child: const Icon(Icons.broken_image_outlined,
-              color: AppColors.muted, size: 28),
-        ),
+        // 两级渐进（对标系统相册 xqip/EXIF 占位 → 清晰替换）：
+        // 清晰层加载中先显示小尺寸层（Kotlin 侧 ≤128px 优先 EXIF 内嵌缩略图，
+        // ~5ms 秒显，替代纯灰底等待），清晰层完成直切。磁盘缓存命中时
+        // 两层近同步完成,无感。
+        loadingBuilder: (ctx, child, progress) {
+          if (progress == null) return child;
+          return ColoredBox(
+            color: AppColors.surface,
+            child: Image(
+              image: buildThumbnailProvider(ref,
+                  size: kThumbnailPlaceholderSize,
+                  dateModifiedMs: info.dateModifiedMs),
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              errorBuilder: (_, _, _) =>
+                  const ColoredBox(color: AppColors.surface),
+            ),
+          );
+        },
+        errorBuilder: (_, _, _) =>
+            const ColoredBox(color: AppColors.surface),
       ),
+    );
+  }
+}
+
+/// 首屏加载占位：静态灰格网格（替代转圈）。数据到达后由真实网格无缝替换。
+class _ThumbGridPlaceholder extends StatelessWidget {
+  const _ThumbGridPlaceholder({required this.cols});
+  final int cols;
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.builder(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.all(4),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: cols,
+        crossAxisSpacing: 3,
+        mainAxisSpacing: 3,
+      ),
+      itemCount: cols * 6,
+      itemBuilder: (_, __) => const ColoredBox(color: AppColors.surface),
     );
   }
 }

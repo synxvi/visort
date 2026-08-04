@@ -27,6 +27,7 @@ import 'package:sortr_flutter/shared/widgets/non_modal_menu.dart';
 import 'package:sortr_flutter/shared/widgets/sort_toggle.dart';
 import 'package:sortr_flutter/shared/widgets/toast.dart';
 import 'package:sortr_flutter/ui/router.dart';
+import 'album_flight.dart';
 
 class SetupScreenAndroid extends ConsumerStatefulWidget {
   const SetupScreenAndroid({super.key});
@@ -1323,6 +1324,9 @@ class _SetupBucketTile extends StatefulWidget {
 
 class _SetupBucketTileState extends State<_SetupBucketTile>
     with SingleTickerProviderStateMixin {
+  /// 封面缩略图 GlobalKey：点击进入相册时取其屏幕坐标做飞行层起点。
+  final GlobalKey _coverKey = GlobalKey();
+
   // 选中波动环：selected 由 false→true 时播放一次（从圆点向外扩散并淡出）。
   late final AnimationController _ripple = AnimationController(
     vsync: this,
@@ -1368,7 +1372,9 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
                 ),
                 child: Row(
                   children: [
-                    _CoverThumb(coverId: widget.bucket.coverId, size: 44),
+                    _CoverThumb(
+                        key: _coverKey,
+                        coverId: widget.bucket.coverId, size: 44),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -1497,13 +1503,29 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
     widget.onCheckToggle();
   }
 
-  void _openAlbum() {
+  void _openAlbum({BuildContext? coverContext}) {
     if (_interceptIfEditing()) return;
-    Navigator.pushNamed(context, AppRoutes.album, arguments: {
+    // 封面缩略图的屏幕坐标：list 模式取 _coverKey 挂载的封面；grid 模式
+    // 由调用方传封面区域的 context（GestureDetector/名称区）。网格动画
+    // 从封面位置"长"出来（由小变大）。
+    final ctx = coverContext ?? _coverKey.currentContext;
+    final box = ctx?.findRenderObject();
+    final rect = (box is RenderBox && box.attached)
+        ? box.localToGlobal(Offset.zero) & box.size
+        : null;
+    final args = {
       'bucketId': widget.bucket.id,
       'bucketName': widget.bucket.name,
       'bucketCount': widget.bucket.count,
-    });
+    };
+    if (rect != null) {
+      pushAlbumGrow(context,
+          args: args,
+          coverAlignment:
+              albumCoverAlignment(rect, MediaQuery.sizeOf(context)));
+    } else {
+      Navigator.pushNamed(context, AppRoutes.album, arguments: args);
+    }
   }
 
   Widget _buildGrid() {
@@ -1519,7 +1541,7 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
               fit: StackFit.expand,
               children: [
                 GestureDetector(
-                  onTap: _openAlbum,
+                  onTap: () => _openAlbum(coverContext: context),
                   child: LayoutBuilder(
                     builder: (ctx, c) => _CoverThumb(
                         coverId: widget.bucket.coverId, size: c.maxWidth),
@@ -1569,7 +1591,7 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
           ),
           const SizedBox(height: 4),
           GestureDetector(
-            onTap: _openAlbum,
+            onTap: () => _openAlbum(coverContext: context),
             behavior: HitTestBehavior.opaque,
             child: Text(
               widget.bucket.name,
@@ -1644,7 +1666,7 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
 
 /// 封面缩略图（正方形，圆角）。无封面时显示占位图标。
 class _CoverThumb extends StatelessWidget {
-  const _CoverThumb({required this.coverId, required this.size});
+  const _CoverThumb({super.key, required this.coverId, required this.size});
   final String? coverId;
   final double size;
 

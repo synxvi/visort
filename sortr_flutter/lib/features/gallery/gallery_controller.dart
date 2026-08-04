@@ -42,14 +42,26 @@ class _UnsetCursorSentinel {
 
 const _unsetCursor = _UnsetCursorSentinel();
 
+/// 相册内存快照：exitBucket 时保留该桶的网格数据与游标，同桶重进时
+/// 「秒出旧网格 + 后台静默刷新」（对标系统相册 loadFromCache → 后台校验）。
+/// 排序维度变化（effectivePhotoSortBy/asc）后快照失效，直接重查。
+class _BucketSnapshot {
+  const _BucketSnapshot(this.photos, this.nextCursor, this.sortBy, this.asc);
+
+  final List<MsImageInfo> photos;
+  final String? nextCursor;
+  final SortBy sortBy;
+  final bool asc;
+}
+
 /// 相册浏览状态
 class GalleryState {
   const GalleryState({
     this.buckets = const [],
     this.photos = const [],
     this.currentBucketId,
-    this.loading = false,
     this.loadingMore = false,
+    this.firstPageLoaded = false,
     this.nextCursor,
     this.error,
     this.albumSortBy = SortBy.name,
@@ -66,8 +78,10 @@ class GalleryState {
   /// 当前正在浏览的相册 id；null = 在相册列表页
   final String? currentBucketId;
 
-  final bool loading;
   final bool loadingMore;
+  /// 当前视图是否已完成首次加载（成功返回过第一页）。
+  /// UI 据此区分「加载中占位」与「真空相册」——加载中显示灰格占位而非"空"文案。
+  final bool firstPageLoaded;
   /// 下一页 keyset 游标；null = 无更多数据。
   final String? nextCursor;
   final String? error;
@@ -123,8 +137,8 @@ class GalleryState {
     List<MsImageInfo>? photos,
     String? currentBucketId,
     bool clearCurrentBucket = false,
-    bool? loading,
     bool? loadingMore,
+    bool? firstPageLoaded,
     /// 下一页游标。默认 [_unsetCursor] = 保持原值；显式传 String?（含 null）= 更新。
     Object? nextCursor = _unsetCursor,
     String? error,
@@ -141,8 +155,8 @@ class GalleryState {
       photos: photos ?? this.photos,
       currentBucketId:
           clearCurrentBucket ? null : (currentBucketId ?? this.currentBucketId),
-      loading: loading ?? this.loading,
       loadingMore: loadingMore ?? this.loadingMore,
+      firstPageLoaded: firstPageLoaded ?? this.firstPageLoaded,
       nextCursor: identical(nextCursor, _unsetCursor)
           ? this.nextCursor
           : nextCursor as String?,
@@ -159,6 +173,13 @@ class GalleryState {
 
 class GalleryController extends Notifier<GalleryState> {
   static const _pageSize = 60;
+
+  /// 桶快照缓存（内存）：exitBucket 写入，同桶重进直出。上限 8 桶 LRU 淘汰。
+  final Map<String, _BucketSnapshot> _bucketSnapshots = {};
+
+  /// 视图加载序号：enterBucket/enterFavorites/enterTrash 每次 +1，
+  /// 异步返回时比对，旧请求结果直接丢弃（防止切桶/切视图竞态覆盖）。
+  int _loadToken = 0;
 
   MediaStoreChannel get _channel => ref.read(mediaStoreChannelProvider);
   ProfilesService get _service => ref.read(profilesServiceProvider);
@@ -195,25 +216,21 @@ class GalleryController extends Notifier<GalleryState> {
   ///
   /// [silent]：静默更新（不触发 loading 闪烁）。相册内切排序时用，
   /// 避免相册内网格因 loading 切换而闪烁。
+  /// ⚠️ 无 loading 转圈：UI 层在 buckets 为空时显示占位（收藏/回收站入口行），
+  /// 数据到达后列表直接填充，不闪不转。
   Future<void> loadBuckets({bool silent = false}) async {
-    if (!silent) {
-      state = state.copyWith(loading: true, clearError: true);
-    }
     try {
       final buckets = await _channel.listBuckets(
         sortBy: state.effectivePhotoSortBy,
         asc: state.photoSortAsc,
       );
       if (buckets.isEmpty) {
-        state = state.copyWith(buckets: const [], loading: false);
+        state = state.copyWith(buckets: const []);
         return;
       }
-      // 静默更新只改 buckets，不碰 loading
-      state = silent
-          ? state.copyWith(buckets: buckets)
-          : state.copyWith(buckets: buckets, loading: false);
+      state = state.copyWith(buckets: buckets);
     } catch (e) {
-      state = state.copyWith(loading: false, error: e.toString());
+      state = state.copyWith(error: e.toString());
     }
   }
 
@@ -252,20 +269,40 @@ class GalleryController extends Notifier<GalleryState> {
 
   /// 进入某相册，加载第一页图片。
   /// [silent]：静默重载（切排序时用，保留旧数据直到新数据到达，避免闪烁）。
+  ///
+  /// ⚠️ 零转圈：不再设置 loading 全屏转圈——非 silent 时若有该桶内存快照
+  /// （之前进过），直接「秒出旧网格 + 后台静默刷新」；无快照则清空显示
+  /// 占位灰格（UI 层按 firstPageLoaded=false 渲染），第一页到达后填充。
   Future<void> enterBucket(String bucketId, {bool silent = false}) async {
-    if (!silent) {
+    final token = ++_loadToken;
+    final snap = _bucketSnapshots[bucketId];
+    final snapValid = snap != null &&
+        snap.sortBy == state.effectivePhotoSortBy &&
+        snap.asc == state.photoSortAsc;
+    if (!silent && snapValid) {
+      // 快照直出：旧网格立即可见（缩略图仍在 ImageCache，秒开），后台刷新替换。
       state = state.copyWith(
         currentBucketId: bucketId,
-        photos: const [],
-        nextCursor: null,
-        loading: true,
+        photos: snap.photos,
+        nextCursor: snap.nextCursor,
+        firstPageLoaded: true,
         isFavoritesView: false,
         isTrashView: false,
         clearError: true,
       );
-    } else {
-      state = state.copyWith(currentBucketId: bucketId, clearError: true);
+      await _refreshBucketPage(bucketId, token);
+      return;
     }
+    state = state.copyWith(
+      currentBucketId: bucketId,
+      // silent（切排序/observer 刷新）：保留旧数据避免闪烁；否则清空走占位。
+      photos: silent ? state.photos : const [],
+      nextCursor: null,
+      firstPageLoaded: silent ? state.firstPageLoaded : false,
+      isFavoritesView: false,
+      isTrashView: false,
+      clearError: true,
+    );
     try {
       final page = await _channel.scanImages(
         [bucketId],
@@ -274,24 +311,71 @@ class GalleryController extends Notifier<GalleryState> {
         sortBy: state.effectivePhotoSortBy,
         asc: state.photoSortAsc,
       );
-      state = state.copyWith(
-        photos: page.images,
-        loading: false,
-        nextCursor: page.nextCursor,
-      );
+      if (token != _loadToken || state.currentBucketId != bucketId) return;
+      _applyBucketPage(bucketId, page);
     } catch (e) {
-      state = state.copyWith(loading: false, error: e.toString());
+      if (token != _loadToken) return;
+      state = state.copyWith(error: e.toString());
     }
   }
 
-  /// 退出相册，回到相册列表
+  /// 后台静默刷新当前桶第一页（快照直出后/observer 刷新用）。
+  Future<void> _refreshBucketPage(String bucketId, int token) async {
+    try {
+      final page = await _channel.scanImages(
+        [bucketId],
+        afterCursor: null,
+        limit: _pageSize,
+        sortBy: state.effectivePhotoSortBy,
+        asc: state.photoSortAsc,
+      );
+      if (token != _loadToken || state.currentBucketId != bucketId) return;
+      _applyBucketPage(bucketId, page);
+    } catch (e) {
+      if (token != _loadToken) return;
+      state = state.copyWith(error: e.toString());
+    }
+  }
+
+  /// 应用第一页结果 + 更新桶快照（供下次直出）。
+  void _applyBucketPage(String bucketId, MsScanPage page) {
+    state = state.copyWith(
+      photos: page.images,
+      nextCursor: page.nextCursor,
+      loadingMore: false,
+      firstPageLoaded: true,
+    );
+    _putSnapshot(bucketId,
+        _BucketSnapshot(page.images, page.nextCursor,
+            state.effectivePhotoSortBy, state.photoSortAsc));
+  }
+
+  /// 桶快照 LRU：最多保留 8 桶，超出删最早写入的。
+  void _putSnapshot(String bucketId, _BucketSnapshot snap) {
+    _bucketSnapshots[bucketId] = snap;
+    if (_bucketSnapshots.length > 8) {
+      _bucketSnapshots.remove(_bucketSnapshots.keys.first);
+    }
+  }
+
+  /// 退出相册，回到相册列表。退出前把当前网格数据存入桶快照，
+  /// 同桶重进时秒出（对标系统相册内存缓存）。
   void exitBucket() {
+    final bucketId = state.currentBucketId;
+    if (bucketId != null && state.firstPageLoaded) {
+      _putSnapshot(
+        bucketId,
+        _BucketSnapshot(state.photos, state.nextCursor,
+            state.effectivePhotoSortBy, state.photoSortAsc),
+      );
+    }
     state = state.copyWith(
       clearCurrentBucket: true,
       photos: const [],
       isFavoritesView: false,
       isTrashView: false,
       nextCursor: null,
+      firstPageLoaded: false,
     );
   }
 
@@ -299,17 +383,16 @@ class GalleryController extends Notifier<GalleryState> {
 
   /// 进入「收藏」视图：扫描所有 IS_FAVORITE=1 的图（跨相册）。
   Future<void> enterFavorites({bool silent = false}) async {
-    if (!silent) {
-      state = state.copyWith(
-        currentBucketId: null,
-        isFavoritesView: true,
-        isTrashView: false,
-        photos: const [],
-        nextCursor: null,
-        loading: true,
-        clearError: true,
-      );
-    }
+    final token = ++_loadToken;
+    state = state.copyWith(
+      currentBucketId: null,
+      isFavoritesView: true,
+      isTrashView: false,
+      photos: silent ? state.photos : const [],
+      nextCursor: null,
+      firstPageLoaded: silent ? state.firstPageLoaded : false,
+      clearError: true,
+    );
     try {
       final page = await _channel.scanImages(
         const [], // 不限 bucket
@@ -319,13 +402,16 @@ class GalleryController extends Notifier<GalleryState> {
         asc: state.photoSortAsc,
         favoritesOnly: true,
       );
+      if (token != _loadToken) return;
       state = state.copyWith(
         photos: page.images,
-        loading: false,
         nextCursor: page.nextCursor,
+        loadingMore: false,
+        firstPageLoaded: true,
       );
     } catch (e) {
-      state = state.copyWith(loading: false, error: e.toString());
+      if (token != _loadToken) return;
+      state = state.copyWith(error: e.toString());
     }
   }
 
@@ -333,17 +419,16 @@ class GalleryController extends Notifier<GalleryState> {
 
   /// 进入「回收站」视图：扫描所有 IS_TRASHED=1 的图（跨相册）。
   Future<void> enterTrash({bool silent = false}) async {
-    if (!silent) {
-      state = state.copyWith(
-        currentBucketId: null,
-        isFavoritesView: false,
-        isTrashView: true,
-        photos: const [],
-        nextCursor: null,
-        loading: true,
-        clearError: true,
-      );
-    }
+    final token = ++_loadToken;
+    state = state.copyWith(
+      currentBucketId: null,
+      isFavoritesView: false,
+      isTrashView: true,
+      photos: silent ? state.photos : const [],
+      nextCursor: null,
+      firstPageLoaded: silent ? state.firstPageLoaded : false,
+      clearError: true,
+    );
     try {
       final page = await _channel.scanImages(
         const [],
@@ -353,13 +438,16 @@ class GalleryController extends Notifier<GalleryState> {
         asc: state.photoSortAsc,
         trashedOnly: true,
       );
+      if (token != _loadToken) return;
       state = state.copyWith(
         photos: page.images,
-        loading: false,
         nextCursor: page.nextCursor,
+        loadingMore: false,
+        firstPageLoaded: true,
       );
     } catch (e) {
-      state = state.copyWith(loading: false, error: e.toString());
+      if (token != _loadToken) return;
+      state = state.copyWith(error: e.toString());
     }
   }
 
@@ -505,9 +593,9 @@ class GalleryController extends Notifier<GalleryState> {
   // ───────────────────────── ContentObserver 刷新 ─────────────────────────
 
   /// MediaStore 发生变更时静默刷新当前视图（相册列表或相册内）。
-  /// 不触发 loading 闪烁；切排序/分页进行中则跳过避免打断。
+  /// 不触发 loading 闪烁；分页进行中则跳过避免打断。
   void _onMediaStoreChanged(MsChangeEvent event) {
-    if (state.loading || state.loadingMore) return;
+    if (state.loadingMore) return;
     switch (event.type) {
       case MsChangeType.delete:
         // 精准删除：从当前列表移除该 id（仅当它在当前视图）

@@ -20,6 +20,7 @@ import 'package:sortr_flutter/features/gallery/gallery_controller.dart';
 import 'package:sortr_flutter/shared/widgets/press_scale.dart';
 import 'package:sortr_flutter/shared/widgets/sort_toggle.dart';
 import 'package:sortr_flutter/ui/router.dart';
+import 'album_flight.dart';
 
 class GalleryScreen extends ConsumerStatefulWidget {
   const GalleryScreen({super.key});
@@ -64,10 +65,8 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
   }
 
   Widget _buildBody(GalleryState gallery) {
-    if (gallery.loading) {
-      return const Center(
-          child: CircularProgressIndicator(color: AppColors.accent));
-    }
+    // ⚠️ 无转圈：buckets 为空（加载中/真空）时列表仍渲染「收藏/回收站」入口行，
+    // 相册数据到达后直接追加行，不闪不转；error 时显示错误页（可重试）。
     if (gallery.error != null) {
       return Center(
         child: Padding(
@@ -178,25 +177,50 @@ class _TrashTile extends ConsumerWidget {
 }
 
 /// 单个相册行：左封面 + 名称 + 总数 → 点击进相册；右侧 Checkbox（预留勾选）
-class _AlbumTile extends ConsumerWidget {
+class _AlbumTile extends ConsumerStatefulWidget {
   const _AlbumTile({required this.bucket});
   final MsBucket bucket;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_AlbumTile> createState() => _AlbumTileState();
+}
+
+class _AlbumTileState extends ConsumerState<_AlbumTile> {
+  /// 封面缩略图 GlobalKey：飞行层动画起点（封面放大到全屏，对标系统相册）。
+  final GlobalKey _coverKey = GlobalKey();
+
+  void _open() {
+    // 封面缩略图的屏幕坐标：网格动画从封面位置"长"出来（由小变大）
+    final box = _coverKey.currentContext?.findRenderObject();
+    final rect = (box is RenderBox && box.attached)
+        ? box.localToGlobal(Offset.zero) & box.size
+        : null;
+    final args = {
+      'bucketId': widget.bucket.id,
+      'bucketName': widget.bucket.name,
+      'bucketCount': widget.bucket.count,
+    };
+    if (rect != null) {
+      pushAlbumGrow(context,
+          args: args,
+          coverAlignment:
+              albumCoverAlignment(rect, MediaQuery.sizeOf(context)));
+    } else {
+      Navigator.pushNamed(context, AppRoutes.album, arguments: args);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bucket = widget.bucket;
     return PressScale(
-      onTap: () => Navigator.pushNamed(context, AppRoutes.album,
-          arguments: {
-            'bucketId': bucket.id,
-            'bucketName': bucket.name,
-            'bucketCount': bucket.count,
-          }),
+      onTap: _open,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(
           children: [
             // 封面缩略图
-            _CoverThumb(coverId: bucket.coverId, size: 56),
+            _CoverThumb(key: _coverKey, coverId: bucket.coverId, size: 56),
             const SizedBox(width: 14),
             // 名称
             Expanded(
@@ -236,7 +260,7 @@ class _AlbumTile extends ConsumerWidget {
 
 /// 封面缩略图（正方形，圆角）。无封面时显示占位图标。
 class _CoverThumb extends StatelessWidget {
-  const _CoverThumb({required this.coverId, required this.size});
+  const _CoverThumb({super.key, required this.coverId, required this.size});
   final String? coverId;
   final double size;
 
@@ -256,14 +280,37 @@ class _CoverThumb extends StatelessWidget {
       );
     }
     final ref = imageRefFromMediaStoreId(coverId!);
+    // 封面缩略图像素尺寸 = 显示尺寸 × dpr（物理对齐，替代固定 300）
+    final thumbSize =
+        (size * MediaQuery.devicePixelRatioOf(context)).round().clamp(96, 512);
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
       child: Image(
-        image: buildThumbnailProvider(ref, size: 300),
+        image: buildThumbnailProvider(ref, size: thumbSize),
         width: size,
         height: size,
         fit: BoxFit.cover,
         gaplessPlayback: true,
+        // 两级渐进：清晰层加载中先显示小层（Kotlin EXIF 优先,~5ms），
+        // 避免封面空白等待
+        loadingBuilder: (ctx, child, progress) {
+          if (progress == null) return child;
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image(
+              image: buildThumbnailProvider(ref,
+                  size: kThumbnailPlaceholderSize),
+              width: size,
+              height: size,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => Container(
+                width: size,
+                height: size,
+                color: AppColors.surface,
+              ),
+            ),
+          );
+        },
         errorBuilder: (ctx, error, stack) => Container(
           width: size,
           height: size,

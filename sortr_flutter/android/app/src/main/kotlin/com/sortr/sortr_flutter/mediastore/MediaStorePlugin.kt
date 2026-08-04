@@ -72,8 +72,11 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     private var activity: Activity? = null
     private var repository: MediaStoreRepository? = null
 
-    /// IO 线程池：图片字节/缩略图/查询放后台，避免阻塞 UI 线程导致滚动卡顿
-    private val ioExecutor = Executors.newFixedThreadPool(4)
+    /// IO 线程池：图片字节/缩略图/查询放后台，避免阻塞 UI 线程导致滚动卡顿。
+    /// 12 线程 = 对标系统相册 BaseThumbnailLoader 的 12 并发上限——
+    /// 首屏 20+ 张缩略图 4 线程要排 5 轮（每轮 loadThumbnail 首次生成 50~200ms），
+    /// 12 线程 2 轮内发完，首屏时间减半以上。
+    private val ioExecutor = Executors.newFixedThreadPool(12)
     /// 回主线程回调 MethodChannel.Result（result 必须在主线程调用）
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -589,10 +592,12 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         }
         val width = call.argument<Int>("width") ?: 256
         val height = call.argument<Int>("height") ?: 256
+        // 源图 DATE_MODIFIED（毫秒，可空）：磁盘缩略图缓存校验用
+        val dateModifiedMs = call.argument<Long?>("dateModifiedMs")
         // loadThumbnail + compress 放后台线程，避免卡 UI
         ioExecutor.execute {
             try {
-                val bytes = repo.readThumbnail(id, width, height)
+                val bytes = repo.readThumbnail(id, width, height, dateModifiedMs)
                 mainHandler.post { result.success(bytes) }
             } catch (e: MsError) {
                 mainHandler.post { result.error(e.code, e.message, null) }

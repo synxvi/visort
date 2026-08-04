@@ -302,12 +302,18 @@ class MediaStoreChannel {
 
   /// 读取缩略图字节（JPEG 编码，API 29+ 用系统 loadThumbnail）。
   /// 返回空数组表示当前平台不支持（API <29），调用方应回退 readBytes。
+  /// [dateModifiedMs]：源图 DATE_MODIFIED（毫秒，可空），供 Kotlin 磁盘缓存校验。
   Future<Uint8List> readThumbnail(String id,
-      {int width = 256, int height = 256}) async {
+      {int width = 256, int height = 256, int? dateModifiedMs}) async {
     try {
       final raw = await _channel.invokeMethod<Uint8List>(
         'readThumbnail',
-        {'id': id, 'width': width, 'height': height},
+        {
+          'id': id,
+          'width': width,
+          'height': height,
+          if (dateModifiedMs != null) 'dateModifiedMs': dateModifiedMs,
+        },
       );
       return raw ?? Uint8List(0);
     } on PlatformException catch (e) {

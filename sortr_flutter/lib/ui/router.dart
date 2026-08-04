@@ -63,8 +63,10 @@ class RouteNameObserver extends NavigatorObserver {
 Route<dynamic>? onGenerateRoute(RouteSettings settings) {
   switch (settings.name) {
     case AppRoutes.setup:
-      // 根路由：实际无转场（首屏），但保持 couiSlide 以备 pushAndRemoveUntil 场景。
-      return couiSlideRoute(
+      // 根路由：实际无转场（首屏），但保持 couiFade 以备 pushAndRemoveUntil 场景。
+      // ⚠️ 不用 couiSlideRoute：其被推页视差（左移 8% + 暗化）会让相册返回时
+      // 首页整体"从左向右滑动"——couiFadeRoute 被推页无位移（仅 2% 缩放）。
+      return couiFadeRoute(
         builder: (_) => Platform.isAndroid
             ? const SetupScreenAndroid()
             : const SetupScreen(),
@@ -86,7 +88,9 @@ Route<dynamic>? onGenerateRoute(RouteSettings settings) {
         settings: settings,
       );
     case AppRoutes.gallery:
-      return couiSlideRoute(
+      // 相册浏览链（与 album 的 grow 动画配套）：被推页无位移——
+      // slide 的被推页视差会让相册返回时列表页整体滑动。
+      return couiFadeRoute(
         builder: (_) => const GalleryScreen(),
         settings: settings,
       );

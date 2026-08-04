@@ -130,6 +130,8 @@ void main() {
       var state = container.read(galleryControllerProvider);
       expect(state.photos.length, 5);
       expect(state.hasMore, false, reason: '不足一页应无更多');
+      // 首屏完成标记：UI 据此切换「灰格占位 → 真实网格」
+      expect(state.firstPageLoaded, true);
       expect(fakeChannel.scanCalls.length, 1);
     });
 
@@ -171,6 +173,38 @@ void main() {
       await controller.loadMore(); // hasMore=false，应直接返回
       await controller.loadMore();
       expect(fakeChannel.scanCalls.length, callsBefore);
+    });
+
+    test('exitBucket 后同桶重进：快照秒出 + 后台静默刷新', () async {
+      await controller.enterBucket('b1');
+      expect(container.read(galleryControllerProvider).photos.length, 5);
+
+      controller.exitBucket();
+      // 退出后清空当前网格，但桶快照已入内存
+      expect(container.read(galleryControllerProvider).photos.length, 0);
+
+      final callsBefore = fakeChannel.scanCalls.length;
+      await controller.enterBucket('b1');
+      // 快照直出：进入瞬间即有旧网格数据（无需等 query）
+      expect(container.read(galleryControllerProvider).photos.length, 5);
+      expect(container.read(galleryControllerProvider).firstPageLoaded, true);
+      // 后台静默刷新一次（与首次 enterBucket 各一次 scan）
+      expect(fakeChannel.scanCalls.length, callsBefore + 1);
+      expect(container.read(galleryControllerProvider).photos.length, 5);
+    });
+
+    test('切桶后旧桶后台刷新结果被丢弃（token 竞态防护）', () async {
+      await controller.enterBucket('b1');
+      controller.exitBucket();
+      // b1 快照直出（不 await 其后台刷新）→ 立刻切 b2
+      final pending = controller.enterBucket('b1');
+      await controller.enterBucket('b2'); // b2 在 fake 中不存在 → 空页
+      expect(container.read(galleryControllerProvider).currentBucketId, 'b2');
+      expect(container.read(galleryControllerProvider).photos.isEmpty, true);
+      await pending; // 收尾：等 b1 刷新结束
+      expect(container.read(galleryControllerProvider).currentBucketId, 'b2',
+          reason: 'b1 后台刷新（旧 token）不得覆盖 b2');
+      expect(container.read(galleryControllerProvider).photos.isEmpty, true);
     });
   });
 
@@ -236,7 +270,6 @@ void main() {
       final st = container.read(galleryControllerProvider);
       expect(st.buckets.length, 1);
       expect(st.buckets.first.name, 'Camera');
-      expect(st.loading, false);
     });
   });
 
