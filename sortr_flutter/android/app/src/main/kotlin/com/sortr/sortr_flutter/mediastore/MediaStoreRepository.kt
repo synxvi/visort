@@ -156,6 +156,9 @@ class MediaStoreRepository(private val context: Context) {
             add(MediaStore.Images.Media.BUCKET_ID)
             add(MediaStore.Images.Media.DATE_ADDED)
             add(MediaStore.Images.Media.DATE_MODIFIED)
+            // 原图像素尺寸（viewer 双击自适应铺满按宽高比算 coverRatio；损坏项为 0）
+            add(MediaStore.Images.Media.WIDTH)
+            add(MediaStore.Images.Media.HEIGHT)
             // IS_FAVORITE 仅 Android R+ 存在；低版本不加该列，解析时 getColumnIndex 返回 -1 当 false
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 add(MediaStore.Images.Media.IS_FAVORITE)
@@ -250,6 +253,9 @@ class MediaStoreRepository(private val context: Context) {
                 // DATE_EXPIRES（回收站删除日期）；非 R+ 或未查该列时 -1
                 val idxDateExpires = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
                     cursor.getColumnIndex(MediaStore.Images.Media.DATE_EXPIRES) else -1
+                // WIDTH/HEIGHT：标准列（全版本），个别格式/损坏项可能无值（-1 或 null → 0）
+                val idxWidth = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
+                val idxHeight = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
 
                 var lastSortRaw = ""
                 var lastId = ""
@@ -269,7 +275,9 @@ class MediaStoreRepository(private val context: Context) {
                     val isTrashed = idxTrash >= 0 && !cursor.isNull(idxTrash) && cursor.getInt(idxTrash) == 1
                     val dateTrashed = if (idxDateExpires >= 0 && !cursor.isNull(idxDateExpires))
                         cursor.getLong(idxDateExpires) * 1000 else 0L
-                    results.add(MsImageInfo(id, name, size, mime, bucketId, dateAdded, dateModified, isFavorite, isTrashed, dateTrashed))
+                    val imgWidth = if (idxWidth >= 0 && !cursor.isNull(idxWidth)) cursor.getInt(idxWidth) else 0
+                    val imgHeight = if (idxHeight >= 0 && !cursor.isNull(idxHeight)) cursor.getInt(idxHeight) else 0
+                    results.add(MsImageInfo(id, name, size, mime, bucketId, dateAdded, dateModified, isFavorite, isTrashed, dateTrashed, imgWidth, imgHeight))
                     lastSortRaw = cursor.getString(idxSort) ?: ""
                     lastId = id
                 }

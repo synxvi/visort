@@ -45,6 +45,8 @@ data class MsImageInfo(
     val isFavorite: Boolean = false,   // IS_FAVORITE（Android R+）；低版本始终 false
     val isTrashed: Boolean = false,   // IS_TRASHED（Android R+）；低版本始终 false
     val dateTrashedMs: Long = 0,   // DATE_EXPIRES * 1000（回收站删除日期；非回收站项为 0）
+    val width: Int = 0,           // WIDTH 像素；损坏/未知项为 0，Dart 侧 fallback readMeta 取尺寸
+    val height: Int = 0,          // HEIGHT 像素；损坏/未知项为 0
 ) {
     fun toMap(): Map<String, Any> = mapOf(
         "id" to id,
@@ -57,6 +59,8 @@ data class MsImageInfo(
         "isFavorite" to isFavorite,
         "isTrashed" to isTrashed,
         "dateTrashedMs" to dateTrashedMs,
+        "width" to width,
+        "height" to height,
     )
 }
 

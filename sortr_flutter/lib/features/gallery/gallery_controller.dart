@@ -512,6 +512,8 @@ class GalleryController extends Notifier<GalleryState> {
         isFavorite: fav,
         isTrashed: p.isTrashed,
         dateTrashedMs: p.dateTrashedMs,
+        width: p.width,
+        height: p.height,
       );
 
   /// 加载下一页（滚动到底触发）。keyset 游标法：用上一页返回的游标取下一页。

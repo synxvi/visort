@@ -81,9 +81,16 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
   // 的缩放独占手势竞技场。否则双指捏合时第一指的轻微横移就会让 PageView 的
   // drag 先胜出（翻页/抢手势），表现为“捏合很难触发”。
   int _activePointers = 0;
-  // 是否允许 PageView 翻页（与 _activePointers 双层保护缩放独占）。
-  // InteractiveViewer 交互开始（onInteractionStart）置 false；结束且 scale 归 1.0 才恢复。
-  bool _scrollEnabled = true;
+  // 翻页裁决三态（替代旧单 bool _scrollEnabled，对标系统相册"放大先 pan 到边再翻页"）：
+  //  InteractiveViewer 交互中（_interacting）或双指（_activePointers>=2）禁翻页；
+  //  放大态（_zoomed）且未到水平边界（_atHorizontalEdge=false）禁翻页——放大后需先
+  //  pan 到图片水平边缘，到边才允许 PageView 翻页。_zoomed/_atHorizontalEdge 由当前
+  //  active 图片经 onZoomEdgeChanged 实时上报；_interacting 在 onInteractionStart/End 切换。
+  bool _interacting = false;
+  bool _zoomed = false;
+  bool _atHorizontalEdge = false;
+  bool get _canFlip =>
+      !_interacting && _activePointers < 2 && (!_zoomed || _atHorizontalEdge);
   // 2880 原图是否允许”显示”：route 过渡动画（album 飞行层）完成后才置 true。
   // 2880 的解码已由 album 端 _openViewer 的 precacheImage 在点击瞬间发起；此处
   // 只门控原图层进树——保证 t=1 衔接点 viewer 垫 300（与飞行末帧一致无跳变），
@@ -185,6 +192,31 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
       // 右滑直接触发返回，不会被系统消费用于“显示系统栏/再次滑动返回”。
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     }
+  }
+
+  /// 放大态变化（scale 跨 1.05）→ 自动沉浸/恢复（对标系统相册/Google Photos）。
+  /// 放大：隐藏栏 + immersiveSticky；缩回 1.0：恢复栏 + edgeToEdge。触发时机是"放大"，
+  /// **不是**打开即沉浸——从缩略图进入时栏照常浮现（_insertBars 的 postFrame 淡入）。
+  /// 与 _toggleChrome（未放大点击切栏）不冲突：放大态点击已被 _BigImage 屏蔽（onTap=null）。
+  void _onZoomStateChanged(bool zoomed) {
+    if (!mounted) return;
+    if (zoomed) {
+      _barVisible.value = false;
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    } else {
+      _barVisible.value = true;
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    }
+  }
+
+  /// 甩到边即翻：放大态贴边 + 横向甩手（_BigImage 在 onInteractionEnd 检测）→ 程序式翻页。
+  /// delta=-1 上一张、+1 下一张。
+  void _flingPage(int delta) {
+    if (!_pageCtrl.hasClients) return;
+    final next = (_index + delta).clamp(0, _photos.length - 1);
+    if (next == _index) return;
+    _pageCtrl.animateToPage(next,
+        duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
   }
 
   /// 把顶/底栏插入 Navigator Overlay：位于当前 route（含飞行层转场）之上，
@@ -457,6 +489,8 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
         isFavorite: !p.isFavorite,
         isTrashed: p.isTrashed,
         dateTrashedMs: p.dateTrashedMs,
+        width: p.width,
+        height: p.height,
       );
     });
     // Overlay 底栏收藏图标刷新
@@ -485,13 +519,11 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
                 child: Stack(
                 children: [
                   // 图片层（PageView 左右滑 + 缩放）
-                  // physics 双层禁滚保护，确保双指缩放独占手势竞技场：
-                  //  ① 指针计数 _activePointers<2：第二指落下即禁滚（防第一指 drag 抢先 accept）；
-                  //  ② _scrollEnabled：InteractiveViewer 交互中（onInteractionStart）禁用，
-                  //     onInteractionEnd 且 scale 归 1 才恢复（对齐 Google Photos：放大态不翻页）。
+                  // 翻页裁决见 _canFlip：交互中/双指/放大未到边 时禁滚（让缩放与 pan 独占）；
+                  // 放大且已 pan 到水平边界 → 允许翻页（对标系统相册：先 pan 后翻）。
                   PageView.builder(
                     controller: _pageCtrl,
-                    physics: (_scrollEnabled && _activePointers < 2)
+                    physics: _canFlip
                         ? const _SnapSpringPhysics()
                         : const NeverScrollableScrollPhysics(),
                     itemCount: _photos.length,
@@ -515,12 +547,24 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
                           onTapChrome: _toggleChrome,
                           onSwipeUp: () => _showDetails(info),
                           onInteractionStart: () =>
-                              setState(() => _scrollEnabled = false),
-                          onInteractionEnd: (scale) {
-                            if (scale <= 1.0) {
-                              setState(() => _scrollEnabled = true);
-                            }
+                              setState(() => _interacting = true),
+                          onInteractionEnd: (scale) => setState(() {
+                            _interacting = false;
+                            _zoomed = scale > 1.0;
+                          }),
+                          // 当前 active 图片的缩放/边界态实时上报，驱动 _canFlip
+                          onZoomEdgeChanged: ({
+                            required bool zoomed,
+                            required bool atHorizontalEdge,
+                          }) {
+                            if (!mounted) return;
+                            setState(() {
+                              _zoomed = zoomed;
+                              _atHorizontalEdge = atHorizontalEdge;
+                            });
                           },
+                          onZoomStateChanged: _onZoomStateChanged,
+                          onFlingPage: _flingPage,
                           onFullLoaded: (id) => _viewedIds.add(id),
                         ),
                       );
@@ -779,6 +823,9 @@ class _BigImage extends StatefulWidget {
     this.loadFull = false,
     this.onInteractionStart,
     this.onInteractionEnd,
+    this.onZoomEdgeChanged,
+    this.onZoomStateChanged,
+    this.onFlingPage,
     this.onFullLoaded,
     this.onSwipeUp,
   });
@@ -789,10 +836,18 @@ class _BigImage extends StatefulWidget {
   /// _openViewer 的 precacheImage 在点击瞬间发起，此处只门控原图层进树时机。
   /// false 时只显示 300 垫底，原图层（静态图）与 GIF 原片层都不进入树。
   final bool loadFull;
-  // 缩放交互回调：开始时通知外层禁用 PageView 翻页；
-  // 结束时回传当前 scale，外层据此决定是否恢复翻页（scale 归 1 才恢复）。
+  // 缩放交互回调：开始/结束通知外层（维护 _interacting/_zoomed）。
   final VoidCallback? onInteractionStart;
   final void Function(double scale)? onInteractionEnd;
+  /// 缩放/边界态变化（_tc 变化时实时上报）：驱动外层 _canFlip 翻页裁决。
+  final void Function({
+    required bool zoomed,
+    required bool atHorizontalEdge,
+  })? onZoomEdgeChanged;
+  /// scale 跨 1.05（放大/缩回）：外层据此自动沉浸/恢复。
+  final void Function(bool zoomed)? onZoomStateChanged;
+  /// 放大态贴边横向甩手：外层程序式翻页（-1 上一张 / +1 下一张）。
+  final void Function(int delta)? onFlingPage;
   /// 原图（kViewerTargetWidth）加载完成时回调，外层记录 id 用于退出时 evict。
   final void Function(String mediaStoreId)? onFullLoaded;
   /// 照片上垂直上划手势:未放大时向上划唤出详情面板(对标系统相册上滑展开 details)。
@@ -807,16 +862,26 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
   //   双击用外层 GestureDetector 的 onDoubleTapDown + onDoubleTap，缩放矩阵用
   //   Flutter 官方 toScene 算法（落点保持不动）。
   final TransformationController _tc = TransformationController();
-  static const _doubleTapScale = 2.0;
+  // LayoutBuilder 捕获的 InteractiveViewer viewport 尺寸（边界判定 + 双击自适应用）。
+  Size? _viewportSize;
+  // 图片原始宽高比（双击自适应铺满算 coverRatio 用）。优先 widget.info.width/height，
+  // 为 0 时 readMeta 懒加载兜底；都无则双击 fallback 2.5×。
+  double? _imageAspect;
+  // 自动沉浸：scale 跨 1.05 的上一次态（仅边沿穿越回调，避免每帧重复上报）。
+  bool _wasZoomed = false;
+  // 边界判定的像素容差（tx 浮点误差）。
+  static const _edgeEps = 0.5;
 
   // 双击动画：listener 在初始化时注册一次（之前每次双击都 addListener 会泄漏
   // 导致矩阵错乱、双击「坏掉」）
   late final AnimationController _anim = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 250),
+    duration: const Duration(milliseconds: 300), // 对齐系统相册双击/pinch 动画 300ms
   )..addListener(() {
       if (_matrixTween != null) {
-        _tc.value = _matrixTween!.transform(_anim.value);
+        // Decelerate ≈ 系统相册 DecelerateInterpolator(2.5)：快进慢出
+        final t = Curves.decelerate.transform(_anim.value);
+        _tc.value = _matrixTween!.transform(t);
       }
     });
   Matrix4Tween? _matrixTween;
@@ -839,24 +904,104 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
     super.initState();
     _isGif = widget.info.mime == 'image/gif' ||
         extOf(widget.info.name) == '.gif';
-    // 监听缩放:放大超过 1.3x 触发高清原图加载(放大看细节清晰)。
-    // GIF 始终显示原片动画,无按需高清层,不监听。
-    if (!_isGif) {
-      _tc.addListener(_onScaleChanged);
+    // _tc listener 始终注册（不再按 isGif 区分）：边界上报、自动沉浸、高清触发都依赖它。
+    // 高清触发内部仍守卫 !isGif（GIF 始终原片，无按需高清层）。
+    _tc.addListener(_onMatrixChanged);
+  }
+
+  /// _tc 矩阵变化（双击动画 / 双指缩放 / 平移 驱动）统一处理：
+  ///  (1) 高清触发（仅非 GIF，scale>1.3）；
+  ///  (2) 边界上报（合并同帧多次回调，驱动外层 _canFlip）；
+  ///  (3) 自动沉浸（scale 跨 1.05 → 外层切栏 + 系统栏）。
+  void _onMatrixChanged() {
+    final scale = _tc.value.getMaxScaleOnAxis();
+    if (!_isGif && !_hdTriggered && scale > 1.3) {
+      setState(() => _hdTriggered = true);
+    }
+    if (widget.active) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _reportEdge());
+    }
+    final zoomed = scale > 1.05;
+    if (zoomed != _wasZoomed) {
+      _wasZoomed = zoomed;
+      widget.onZoomStateChanged?.call(zoomed);
     }
   }
 
-  void _onScaleChanged() {
-    if (!_hdTriggered && _tc.value.getMaxScaleOnAxis() > 1.3) {
-      setState(() => _hdTriggered = true);
+  /// 上报当前 active 图片的缩放态 + 是否触达水平边界（外层据此裁决翻页）。
+  //  child 是 Stack(StackFit.expand) → 尺寸 == viewport；变换 = 均匀缩放 s + 平移 (tx,ty)。
+  //  atLeftEdge: child 左缘贴 viewport 左缘（tx >= -eps）→ 继续右拖翻上一张。
+  //  atRightEdge: child 右缘贴 viewport 右缘（tx <= vw*(1-s)+eps）→ 继续左拖翻下一张。
+  void _reportEdge() {
+    if (!mounted || !widget.active || _viewportSize == null) return;
+    final m = _tc.value;
+    final s = m.getMaxScaleOnAxis();
+    final tx = m[12];
+    final vw = _viewportSize!.width;
+    final zoomed = s > 1.0;
+    final atLeft = tx >= -_edgeEps;
+    final atRight = tx <= vw * (1 - s) + _edgeEps;
+    widget.onZoomEdgeChanged?.call(
+      zoomed: zoomed,
+      atHorizontalEdge: !zoomed || atLeft || atRight,
+    );
+  }
+
+  /// 甩到边即翻：放大态、贴水平边、横向甩手速度足够 → 通知外层程序式翻页。
+  //  ScaleEndDetails.velocity.pixelsPerSecond.dx = 横向速度（px/s）。
+  void _maybeFlingPage(ScaleEndDetails details) {
+    if (_viewportSize == null) return;
+    final m = _tc.value;
+    final s = m.getMaxScaleOnAxis();
+    if (s <= 1.0) return;
+    final tx = m[12];
+    final vw = _viewportSize!.width;
+    final vx = details.velocity.pixelsPerSecond.dx;
+    if (vx.abs() < 600) return;
+    if (tx <= vw * (1 - s) + _edgeEps && vx < 0) {
+      widget.onFlingPage?.call(1); // 贴右缘 + 左甩 → 下一张
+    } else if (tx >= -_edgeEps && vx > 0) {
+      widget.onFlingPage?.call(-1); // 贴左缘 + 右甩 → 上一张
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _ensureImageAspect();
+  }
+
+  /// 双击自适应铺满需要的图片宽高比。优先 MsImageInfo.width/height（列表已带回）；
+  //  为 0（损坏/低版本）时 readMeta 懒加载兜底；都没就留空 → 双击 fallback 2.5×。
+  Future<void> _ensureImageAspect() async {
+    if (_imageAspect != null) return;
+    final info = widget.info;
+    if (info.width > 0 && info.height > 0) {
+      _imageAspect = info.width / info.height;
+      return;
+    }
+    try {
+      final meta = await MediaStoreChannel().readMeta(info.id);
+      if (mounted && meta.width > 0 && meta.height > 0) {
+        _imageAspect = meta.width / meta.height;
+      }
+    } catch (_) {
+      // 留空 → 双击 fallback 2.5
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _BigImage old) {
+    super.didUpdateWidget(old);
+    // 翻页过来（active false→true）：立即上报自身态，否则外层 _canFlip 带上一张状态
+    if (widget.active && !old.active) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _reportEdge());
     }
   }
 
   @override
   void dispose() {
-    if (!_isGif) {
-      _tc.removeListener(_onScaleChanged);
-    }
+    _tc.removeListener(_onMatrixChanged);
     _anim.dispose();
     _tc.dispose();
     super.dispose();
@@ -882,15 +1027,14 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
   }
 
   /// 双击：放大↔复位，以【落点】为锚点（官方 toScene 算法）。
+  /// 目标倍率自适应：未放大 → max(2.5, coverRatio) 铺满屏幕消除黑边；
+  /// 已放大 → 回 contain(1.0)。落点 pivot 用官方 toScene（落点下图片点不动）。
   void _onDoubleTap() {
     final begin = _tc.value;
     final currentScale = begin.getMaxScaleOnAxis();
     final zooming = currentScale <= 1.01;
-    final targetScale = zooming ? _doubleTapScale : 1.0;
+    final targetScale = zooming ? _computeDoubleTapTarget() : 1.0;
 
-    // ⭐ 官方算法：toScene 把屏幕落点转成场景坐标（落点下的图片点）
-    // （translate/scale 虽有 deprecation info，但其替代 API 签名为 4 参数矩阵形式，
-    //  这里保持与原 album_screen 一致的 2D 链式写法——deprecation 不影响正确性。）
     final scenePoint = _tc.toScene(_doubleTapPos);
     // T(scenePoint) · S(targetScale) · T(-scenePoint)：该点缩放后保持不动
     final target = Matrix4.identity()
@@ -905,94 +1049,130 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
       ..fling(velocity: 0.4);
   }
 
+  /// 双击放大目标倍率（相对 contain=1.0）：max(2.5, coverRatio).clamp(1,5)。
+  //  coverRatio = max(imgAspect/vpAspect, vpAspect/imgAspect) = cover/contain 倍率，
+  //  保证双击后图片短边也铺满屏幕、无上下黑边（对标系统相册 FIT×2.5 并补足铺满）。
+  double _computeDoubleTapTarget() {
+    final vp = _viewportSize;
+    final ia = _imageAspect;
+    if (vp == null || vp.width <= 0 || vp.height <= 0 || ia == null || ia <= 0) {
+      return 2.5; // 尺寸未就绪 fallback
+    }
+    final viewportAspect = vp.width / vp.height;
+    final r = ia / viewportAspect;
+    final coverRatio = r >= 1 ? r : 1 / r; // = max(r, 1/r) ≥ 1
+    final target = coverRatio > 2.5 ? coverRatio : 2.5;
+    if (target < 1.0) return 1.0;
+    if (target > 5.0) return 5.0;
+    return target;
+  }
+
   @override
   Widget build(BuildContext context) {
     final ref = imageRefFromMediaStoreId(widget.info.id,
         extension: extOf(widget.info.name));
-    // 外层 GestureDetector 处理单击/双击，双指捏合由 InteractiveViewer 内部处理。
+    // 放大态：onTap / onVerticalDragEnd 置 null——
+    //  ① 点击不切栏（放大自动沉浸已隐藏栏，避免与 _toggleChrome 打架）；
+    //  ② 不注册垂直 drag → 竖向拖交给 InteractiveViewer pan（修复"放大后竖拖不动"：
+    //     原 onVerticalDragEnd 的 VerticalDragGestureRecognizer 会抢赢竞技场，使
+    //     InteractiveViewer 收不到竖向 update）。
+    final zoomed = _tc.value.getMaxScaleOnAxis() > 1.05;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: _onTap,
+      onTap: zoomed ? null : _onTap,
       onDoubleTapDown: (d) => _doubleTapPos = d.localPosition,
       onDoubleTap: _onDoubleTap,
-      onVerticalDragEnd: _onVerticalDragEnd,
-      child: InteractiveViewer(
-        transformationController: _tc,
-        clipBehavior: Clip.hardEdge,
-        minScale: 1.0,
-        maxScale: 4.0,
-        panEnabled: true,
-        scaleEnabled: true,
-        onInteractionStart: (_) => widget.onInteractionStart?.call(),
-        onInteractionEnd: (_) =>
-            widget.onInteractionEnd?.call(_tc.value.getMaxScaleOnAxis()),
+      onVerticalDragEnd: zoomed ? null : _onVerticalDragEnd,
+      // LayoutBuilder 捕获 InteractiveViewer viewport 尺寸（边界判定 + 双击自适应用）。
+      // 注意外层 Padding(horizontal:4) 使 viewport 宽 = 屏宽 - 8，用真实约束值最稳。
+      child: LayoutBuilder(builder: (ctx, constraints) {
+        _viewportSize = constraints.biggest;
         // 展开转场由飞行层负责（图从 cell 位置线性放大到全屏 contain）。
-        // 静态图:多层叠图保证飞行层移除瞬间无跳变(见下 Stack 内注释)。
-        // GIF:单独走 _gifStack——直接原片动画,不参与下采样渐进(下采样丢帧)。
-        child: _isGif
-            ? _gifStack(ref)
-            : Stack(
-          fit: StackFit.expand,
-          children: [
-            if (!_fullLoaded)
-              // ① 垫底 300：网格同 key 已缓存，飞行层移除瞬间立即衔接可见。
-              //    2880 就绪前显示（兜底）；就绪后 _fullLoaded=true，本层移除、原图覆盖。
-              Image(
-                image: buildThumbnailProvider(ref, size: 300),
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-                errorBuilder: (ctx, error, stack) => const Center(
-                  child: Icon(Icons.broken_image_outlined,
-                      color: AppColors.muted, size: 48),
-                ),
-              ),
-            // 原图层：contain 完整显示。加载完成前透明（不挡垫底层）；
-            // 完成后直接上屏（垫底同帧移除，无叠影）。加载失败保持透明，
-            // 垫底缩略图继续可见。targetWidth 运行时算（屏宽×0.8，computeViewerTargetWidth），
-            // 全屏 contain 够清晰、解码量小；放大 scale>1.3 由 _hdTriggered 原片覆盖。
-            // ⚠️ loadFull 门控：缩放动画结束前不进树，避免"动画时已垫原图"。
-            if (widget.loadFull)
-              Image(
-                image: buildImageProvider(ref,
-                    targetWidth: computeViewerTargetWidth(
-                        MediaQuery.sizeOf(context).width *
-                            MediaQuery.devicePixelRatioOf(context))),
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-                loadingBuilder: (ctx, child, progress) {
-                  if (progress == null) {
-                    if (!_fullLoaded) {
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) {
-                          setState(() => _fullLoaded = true);
-                          // 通知外层记录 id：退出 viewer 时 evict 这些大图，
-                          // 否则 ImageCache 残留导致多次进出后滚动掉帧（实测 30→10fps）。
-                          widget.onFullLoaded?.call(widget.info.id);
-                        }
-                      });
+        return InteractiveViewer(
+          transformationController: _tc,
+          clipBehavior: Clip.hardEdge,
+          minScale: 1.0,
+          maxScale: 5.0,
+          panEnabled: true,
+          scaleEnabled: true,
+          onInteractionStart: (_) => widget.onInteractionStart?.call(),
+          onInteractionUpdate: (_) {
+            if (widget.active) _reportEdge();
+          },
+          onInteractionEnd: (details) {
+            _reportEdge();
+            widget.onInteractionEnd?.call(_tc.value.getMaxScaleOnAxis());
+            _maybeFlingPage(details);
+          },
+          child: _buildContent(ref),
+        );
+      }),
+    );
+  }
+
+  /// 图片内容层：静态图多层 Stack（垫底 300 / 原图 / 高清）或 GIF 原片层。
+  //  从 build 提取，便于 build 用 LayoutBuilder 包裹 InteractiveViewer 捕获 viewport 尺寸。
+  Widget _buildContent(ImageRef ref) {
+    if (_isGif) return _gifStack(ref);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (!_fullLoaded)
+          // ① 垫底 300：网格同 key 已缓存，飞行层移除瞬间立即衔接可见。
+          //    2880 就绪前显示（兜底）；就绪后 _fullLoaded=true，本层移除、原图覆盖。
+          Image(
+            image: buildThumbnailProvider(ref, size: 300),
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+            errorBuilder: (ctx, error, stack) => const Center(
+              child: Icon(Icons.broken_image_outlined,
+                  color: AppColors.muted, size: 48),
+            ),
+          ),
+        // 原图层：contain 完整显示。加载完成前透明（不挡垫底层）；
+        // 完成后直接上屏（垫底同帧移除，无叠影）。加载失败保持透明，
+        // 垫底缩略图继续可见。targetWidth 运行时算（屏宽×0.8，computeViewerTargetWidth），
+        // 全屏 contain 够清晰、解码量小；放大 scale>1.3 由 _hdTriggered 原片覆盖。
+        // ⚠️ loadFull 门控：缩放动画结束前不进树，避免"动画时已垫原图"。
+        if (widget.loadFull)
+          Image(
+            image: buildImageProvider(ref,
+                targetWidth: computeViewerTargetWidth(
+                    MediaQuery.sizeOf(context).width *
+                        MediaQuery.devicePixelRatioOf(context))),
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+            loadingBuilder: (ctx, child, progress) {
+              if (progress == null) {
+                if (!_fullLoaded) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) {
+                      setState(() => _fullLoaded = true);
+                      // 通知外层记录 id：退出 viewer 时 evict 这些大图，
+                      // 否则 ImageCache 残留导致多次进出后滚动掉帧（实测 30→10fps）。
+                      widget.onFullLoaded?.call(widget.info.id);
                     }
-                    return child;
-                  }
-                  return const SizedBox.shrink();
-                },
-                errorBuilder: (ctx, error, stack) =>
-                    const SizedBox.shrink(),
-              ),
-            // 高清原图层:放大(scale>1.3)时按需加载原片全像素(readBytes 全图)。
-            // 日常浏览用上层下采样图(快),只有放大看细节才 load 原图;高清就绪后
-            // 覆盖 1536,放大清晰;加载中透明(透出下层 1536,放大虽糊但可见)。
-            if (_hdTriggered)
-              Image(
-                image: buildImageProvider(ref, targetWidth: null),
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-                loadingBuilder: (ctx, child, progress) =>
-                    progress == null ? child : const SizedBox.shrink(),
-                errorBuilder: (ctx, error, stack) => const SizedBox.shrink(),
-              ),
-          ],
-        ),
-      ),
+                  });
+                }
+                return child;
+              }
+              return const SizedBox.shrink();
+            },
+            errorBuilder: (ctx, error, stack) => const SizedBox.shrink(),
+          ),
+        // 高清原图层:放大(scale>1.3)时按需加载原片全像素(readBytes 全图)。
+        // 日常浏览用上层下采样图(快),只有放大看细节才 load 原图;高清就绪后
+        // 覆盖 1536,放大清晰;加载中透明(透出下层 1536,放大虽糊但可见)。
+        if (_hdTriggered)
+          Image(
+            image: buildImageProvider(ref, targetWidth: null),
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+            loadingBuilder: (ctx, child, progress) =>
+                progress == null ? child : const SizedBox.shrink(),
+            errorBuilder: (ctx, error, stack) => const SizedBox.shrink(),
+          ),
+      ],
     );
   }
 

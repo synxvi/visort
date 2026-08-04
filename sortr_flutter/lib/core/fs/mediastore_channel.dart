@@ -92,6 +92,8 @@ class MsImageInfo {
     this.isFavorite = false,
     this.isTrashed = false,
     this.dateTrashedMs = 0,
+    this.width = 0,
+    this.height = 0,
   });
   final String id; // MediaStore _ID（ImageRef.relativePath 编码此值）
   final String name;
@@ -103,6 +105,10 @@ class MsImageInfo {
   final bool isFavorite;  // IS_FAVORITE（Android R+）；低版本始终 false
   final bool isTrashed;  // IS_TRASHED（Android R+）；低版本始终 false
   final int dateTrashedMs;  // DATE_EXPIRES * 1000（回收站删除日期；非回收站项为 0）
+  /// 原图像素宽/高（MediaStore WIDTH/HEIGHT）。损坏/未知项为 0；
+  /// viewer 双击自适应铺满按宽高比算 coverRatio，为 0 时 fallback readMeta 或 2.5×。
+  final int width;
+  final int height;
 }
 
 /// 单图元信息
@@ -424,6 +430,8 @@ class MediaStoreChannel {
         isFavorite: m['isFavorite'] == true,
         isTrashed: m['isTrashed'] == true,
         dateTrashedMs: (m['dateTrashedMs'] as num?)?.toInt() ?? 0,
+        width: (m['width'] as num?)?.toInt() ?? 0,
+        height: (m['height'] as num?)?.toInt() ?? 0,
       );
 
   MsException _convertError(PlatformException e) => MsException(
