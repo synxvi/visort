@@ -240,7 +240,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   /// 模式一新建分类 → FolderDescriptor（path = Pictures/父目录/子目录）
   List<FolderDescriptor> _buildNewDirFolders() {
     final parent = _parentCtrl.text.trim().isEmpty
-        ? 'Sortr'
+        ? 'Visort'
         : _parentCtrl.text.trim();
     return _subDirs.asMap().entries.map((e) {
       final label = e.value.trim().isEmpty ? 'folder${e.key + 1}' : e.value.trim();
@@ -307,7 +307,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     // - toAlbum：根目录按钮已隐藏（无父目录根概念），destinationParent 不会被消费，
     //   保留 kImagesAuthority 仅作占位。
     final newDirParent = _parentCtrl.text.trim().isEmpty
-        ? 'Sortr'
+        ? 'Visort'
         : _parentCtrl.text.trim();
     final destParent = _mode == ClassifyMode.toNewDir
         ? 'Pictures/$newDirParent'
@@ -985,9 +985,9 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   /// 点击空白（非输入框）区域时收起键盘并立即落盘 toNewDir 编辑。
   ///
   /// 收键盘：FocusScope.unfocus 让当前 TextField 失焦 → 输入法收回。输入框为空
-  /// 时失焦后由 hintText 自然显示灰色占位（Sortr / folder*），无需回填——text 保持
+  /// 时失焦后由 hintText 自然显示灰色占位（Visort / folder*），无需回填——text 保持
   /// 空串，hint 即占位；实际使用由 _buildNewDirFolders / _startScan 的 isEmpty
-  /// 兜底为 'Sortr' / 'folder N'。
+  /// 兜底为 'Visort' / 'folder N'。
   /// 立即落盘：取消 _persistTimer 防抖直接 save，符合「点击即保存」语义，避免快速
   /// 切换输入框或返回页面时编辑落在 400ms 防抖窗口内被 dispose cancel 掉而丢失。
   void _dismissAndFlush() {
@@ -1058,7 +1058,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
             title: '${t(ref, 'parent_dir')}  ·  Pictures/',
             controller: _parentCtrl,
             focusNode: _parentFocus,
-            hintText: 'Sortr',
+            hintText: 'Visort',
             onChanged: (_) {
               setState(() {});
               _persistNewDir();
@@ -1807,19 +1807,20 @@ class _Logo extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text('SORT',
-            style: TextStyle(
-                fontFamily: 'Syne',
-                fontFamilyFallback: AppFonts.cjkFallback,
-                fontWeight: FontWeight.w800,
-                fontSize: 22)),
-        Text('R',
+        // V 用主题绿(accent),ISORT 白色 —— VISORT logo。
+        Text('V',
             style: TextStyle(
                 fontFamily: 'Syne',
                 fontFamilyFallback: AppFonts.cjkFallback,
                 fontWeight: FontWeight.w800,
                 fontSize: 22,
                 color: AppColors.accent)),
+        Text('ISORT',
+            style: TextStyle(
+                fontFamily: 'Syne',
+                fontFamilyFallback: AppFonts.cjkFallback,
+                fontWeight: FontWeight.w800,
+                fontSize: 22)),
       ],
     );
   }

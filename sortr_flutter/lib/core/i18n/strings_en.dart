@@ -99,7 +99,7 @@ const Map<String, String> stringsEn = {
   'no_albums': 'No albums found',
   'permission_denied': 'Storage permission denied',
   'permission_needed':
-      'SORTR needs to read your photo albums to sort images. Please grant the permission.',
+      'Visort needs to read your photo albums to sort images. Please grant the permission.',
   'grant_permission': 'Grant Permission',
   'retry': 'Retry',
   'cancel': 'Cancel',

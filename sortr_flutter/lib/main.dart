@@ -91,7 +91,7 @@ Future<void> main() async {
 
 Future<void> _setupWindows() async {
   await windowManager.ensureInitialized();
-  await windowManager.setTitle('SORTR');
+  await windowManager.setTitle('Visort');
   await windowManager.setMinimumSize(const Size(900, 600));
 
   // 恢复上次窗口状态（大小 + 位置 + 最大化）

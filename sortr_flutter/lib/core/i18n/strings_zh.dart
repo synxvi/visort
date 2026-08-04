@@ -97,7 +97,7 @@ const Map<String, String> stringsZh = {
   'no_selection': '未选择相册',
   'no_albums': '未找到相册',
   'permission_denied': '存储权限被拒绝',
-  'permission_needed': 'SORTR 需要读取相册权限才能整理图片，请授予权限。',
+  'permission_needed': 'Visort 需要读取相册权限才能整理图片，请授予权限。',
   'grant_permission': '授予权限',
   'retry': '重试',
   'cancel': '取消',

@@ -25,7 +25,7 @@ class SortrApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final lang = ref.watch(currentLanguageProvider);
     return MaterialApp(
-      title: 'SORTR',
+      title: 'Visort',
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(),
       locale: Locale(lang),

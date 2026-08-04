@@ -20,7 +20,7 @@
          一次滑动直接返回（对齐 ColorOS 系统相册行为）；③onBackInvoked 转发 popRoute，
          PopScope/导航逻辑不受影响。 -->
     <application
-        android:label="sortr_flutter"
+        android:label="Visort"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:enableOnBackInvokedCallback="true">
