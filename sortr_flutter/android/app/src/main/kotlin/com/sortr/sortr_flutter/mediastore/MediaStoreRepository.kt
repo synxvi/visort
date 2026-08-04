@@ -370,6 +370,9 @@ class MediaStoreRepository(private val context: Context) {
                 put("FocalLength", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_FOCAL_LENGTH))
                 put("DateTime", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME_ORIGINAL))
                 put("Orientation", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION))
+                // 曝光补偿 EV(对标系统相册图片参数卡 ISO|EV|快门|光圈|焦距 五项)。
+                // 值形如 "-3/10"(有理数,Dart 侧 formatEv 格式化为 "-0.3")。
+                put("ExposureBiasValue", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_EXPOSURE_BIAS_VALUE))
                 val latLng = exif.latLong
                 if (latLng != null) {
                     val gps = result.getOrPut("GPS") { mutableMapOf() }
