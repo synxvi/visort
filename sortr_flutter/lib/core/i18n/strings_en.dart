@@ -209,6 +209,18 @@ const Map<String, String> stringsEn = {
   'meta_lat': 'Latitude',
   'meta_lng': 'Longitude',
 
+  // ───────── 详情面板卡片(ColorOS 相册式卡片栈)─────────
+  'detail_device': 'Device',
+  'detail_shutter': 'Shutter',
+  'detail_ev': 'EV',
+  'detail_pixels': 'Pixels',
+  'detail_resolution': 'Resolution',
+  'detail_path': 'Path',
+  'detail_gps': 'Location',
+  'detail_file_info': 'File info',
+  'detail_no_camera_info': 'No camera information',
+  'detail_no_location_info': 'No location information',
+
   // ───────── P1b · 收藏 ─────────
   'action_favorite': 'Add to favorites',
   'action_unfavorite': 'Remove from favorites',

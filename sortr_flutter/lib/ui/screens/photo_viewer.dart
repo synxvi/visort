@@ -513,6 +513,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
                           active: i == _index,
                           loadFull: _allowFull,
                           onTapChrome: _toggleChrome,
+                          onSwipeUp: () => _showDetails(info),
                           onInteractionStart: () =>
                               setState(() => _scrollEnabled = false),
                           onInteractionEnd: (scale) {
@@ -531,16 +532,41 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
     );
   }
 
-  /// 显示当前照片的详情信息抽屉。
+  /// 显示当前照片的详情面板(ColorOS 相册式卡片栈)。
   ///
-  /// showModalBottomSheet 默认从底部滑入 + fade，时长接近一加 coui_bottom_dialog（250ms）。
-  /// （默认曲线已足够接近，不强行注入 controller 以免引入类型/生命周期复杂度。）
+  /// 用 DraggableScrollableSheet 承载:上划展开、下划收起,拖至最小自动关闭——
+  /// 对标系统相册 PhotoDetailsPanelSection 的 VERTICAL_SLIDE_UP 两态面板
+  /// (EXPAND/COLLAPSE + 顶部渐隐)。入口:底栏 info 按钮,或照片上垂直上划。
   void _showDetails(MsImageInfo info) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (ctx) => PhotoDetailsSheet(info: info),
+      useSafeArea: false,
+      builder: (ctx) {
+        // dismissed 标志:确保「拖到最小尺寸→关闭」只 pop 一次,避免 pop 动画
+        // 期间重复 maybePop 误关下层相册路由。
+        var dismissed = false;
+        return NotificationListener<DraggableScrollableNotification>(
+          onNotification: (n) {
+            if (!dismissed && n.extent <= n.minExtent + 0.01) {
+              dismissed = true;
+              Navigator.of(ctx).maybePop();
+            }
+            return false;
+          },
+          child: DraggableScrollableSheet(
+            initialChildSize: 0.6,
+            minChildSize: 0.2,
+            maxChildSize: 0.95,
+            snapSizes: const [0.6, 0.9],
+            snap: true,
+            expand: false,
+            builder: (_, controller) =>
+                PhotoDetailsSheet(info: info, scrollController: controller),
+          ),
+        );
+      },
     );
   }
 }
@@ -754,6 +780,7 @@ class _BigImage extends StatefulWidget {
     this.onInteractionStart,
     this.onInteractionEnd,
     this.onFullLoaded,
+    this.onSwipeUp,
   });
   final MsImageInfo info;
   final bool active;
@@ -768,6 +795,8 @@ class _BigImage extends StatefulWidget {
   final void Function(double scale)? onInteractionEnd;
   /// 原图（kViewerTargetWidth）加载完成时回调，外层记录 id 用于退出时 evict。
   final void Function(String mediaStoreId)? onFullLoaded;
+  /// 照片上垂直上划手势:未放大时向上划唤出详情面板(对标系统相册上滑展开 details)。
+  final VoidCallback? onSwipeUp;
 
   @override
   State<_BigImage> createState() => _BigImageState();
@@ -842,6 +871,16 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
     widget.onTapChrome();
   }
 
+  /// 照片上垂直上划:未放大(scale≈1)时向上划(负速度)唤出详情面板。
+  /// 放大态的垂直拖拽交给 InteractiveViewer 平移,不触发(对齐系统相册:
+  /// 放大看图时上划是平移图片,而非唤出 details)。PageView 占水平翻页,
+  /// 垂直 drag 透传到本 GestureDetector,与水平翻页不冲突。
+  void _onVerticalDragEnd(DragEndDetails details) {
+    if (_tc.value.getMaxScaleOnAxis() > 1.05) return;
+    final v = details.primaryVelocity;
+    if (v != null && v < -350) widget.onSwipeUp?.call();
+  }
+
   /// 双击：放大↔复位，以【落点】为锚点（官方 toScene 算法）。
   void _onDoubleTap() {
     final begin = _tc.value;
@@ -876,6 +915,7 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
       onTap: _onTap,
       onDoubleTapDown: (d) => _doubleTapPos = d.localPosition,
       onDoubleTap: _onDoubleTap,
+      onVerticalDragEnd: _onVerticalDragEnd,
       child: InteractiveViewer(
         transformationController: _tc,
         clipBehavior: Clip.hardEdge,

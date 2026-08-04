@@ -49,33 +49,45 @@ class _ToastViewState extends State<_ToastView>
 
   @override
   Widget build(BuildContext context) {
+    // 水平居中 + 抬到(可能的)底栏上方:viewer 底栏按钮(delete/restore)在右下角,
+    // 原 right:24 会盖住它们导致无法点击。改居中并抬高避开;IgnorePointer 让点击
+    // 穿透到下层,即便视觉重叠也不挡底栏操作。无底栏的页面则在屏幕底部偏上居中。
+    final bottom = MediaQuery.viewPaddingOf(context).bottom + 76;
     return Positioned(
-      bottom: 24,
-      right: 24,
-      child: FadeTransition(
-        opacity: _controller,
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              border: Border.all(color: AppColors.border),
-              borderRadius: BorderRadius.circular(6),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x66000000),
-                  blurRadius: 12,
-                  offset: Offset(0, 4),
+      bottom: bottom,
+      left: 0,
+      right: 0,
+      child: IgnorePointer(
+        child: Center(
+          child: FadeTransition(
+            opacity: _controller,
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(6),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x66000000),
+                      blurRadius: 12,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: Text(
-              widget.message,
-              style: const TextStyle(
-                fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
-                fontSize: 13,
-                color: AppColors.text,
+                child: Text(
+                  widget.message,
+                  style: const TextStyle(
+                    fontFamily: 'Space Mono',
+                    height: 1.2,
+                    fontFamilyFallback: AppFonts.cjkFallback,
+                    fontSize: 13,
+                    color: AppColors.text,
+                  ),
+                ),
               ),
             ),
           ),

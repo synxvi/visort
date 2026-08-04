@@ -206,6 +206,18 @@ const Map<String, String> stringsZh = {
   'meta_lat': '纬度',
   'meta_lng': '经度',
 
+  // ───────── 详情面板卡片(ColorOS 相册式卡片栈)─────────
+  'detail_device': '设备',
+  'detail_shutter': '快门',
+  'detail_ev': 'EV',
+  'detail_pixels': '尺寸',
+  'detail_resolution': '分辨率',
+  'detail_path': '路径',
+  'detail_gps': '位置',
+  'detail_file_info': '文件信息',
+  'detail_no_camera_info': '无相机信息',
+  'detail_no_location_info': '暂无地点信息',
+
   // ───────── P1b · 收藏 ─────────
   'action_favorite': '收藏',
   'action_unfavorite': '取消收藏',
