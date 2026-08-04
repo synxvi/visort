@@ -201,12 +201,12 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
   void _onZoomStateChanged(bool zoomed) {
     if (!mounted) return;
     if (zoomed) {
+      // 放大：自动隐藏栏 + 沉浸（对标系统相册）
       _barVisible.value = false;
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    } else {
-      _barVisible.value = true;
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
+    // 缩回 1.0：不自动恢复栏——放大隐藏 UI 后缩小保持隐藏，由单击（_toggleChrome）
+    // 切换显隐，对标系统相册。系统栏也保持沉浸，单击显栏时统一恢复 edgeToEdge。
   }
 
   /// 甩到边即翻：放大态贴边 + 横向甩手（_BigImage 在 onInteractionEnd 检测）→ 程序式翻页。
@@ -1016,14 +1016,14 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
     widget.onTapChrome();
   }
 
-  /// 照片上垂直上划:未放大(scale≈1)时向上划(负速度)唤出详情面板。
-  /// 放大态的垂直拖拽交给 InteractiveViewer 平移,不触发(对齐系统相册:
-  /// 放大看图时上划是平移图片,而非唤出 details)。PageView 占水平翻页,
-  /// 垂直 drag 透传到本 GestureDetector,与水平翻页不冲突。
-  void _onVerticalDragEnd(DragEndDetails details) {
+  /// 单指垂直上划（未放大时）→ 唤详情面板。在 InteractiveViewer.onInteractionEnd
+  //  用 velocity 检测——原外层 onVerticalDragEnd 的 VerticalDragGestureRecognizer 会
+  //  与双指缩放抢竞技场（第一指垂直微移被 accept → 双指 scale 首次失效），故移到
+  //  内层 Scale 回调。放大态（scale>1.05）不触发（上划是平移图片）。
+  void _maybeSwipeUp(ScaleEndDetails details) {
     if (_tc.value.getMaxScaleOnAxis() > 1.05) return;
-    final v = details.primaryVelocity;
-    if (v != null && v < -350) widget.onSwipeUp?.call();
+    final vy = details.velocity.pixelsPerSecond.dy;
+    if (vy < -350) widget.onSwipeUp?.call();
   }
 
   /// 双击：放大↔复位，以【落点】为锚点（官方 toScene 算法）。
@@ -1035,7 +1035,44 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
     final zooming = currentScale <= 1.01;
     final targetScale = zooming ? _computeDoubleTapTarget() : 1.0;
 
-    final scenePoint = _tc.toScene(_doubleTapPos);
+    var scenePoint = _tc.toScene(_doubleTapPos);
+    // 落点 pivot：对「contain 时未铺满的轴」clamp 到「放大后仍覆盖 viewport（无黑边）」
+    // 的合法范围，已铺满轴保留落点。这样无论点图片内还是黑边，放大后都不留黑边，
+    // 且落点尽量不动——落点在合法范围内时完全不动，只有会导致黑边时才贴到边界
+    // （系统相册靠动画后 snapback 钳位，这里在算 pivot 时直接保证）。
+    final vp = _viewportSize;
+    final ia = _imageAspect;
+    if (zooming && targetScale > 1.0 &&
+        vp != null && vp.width > 0 && vp.height > 0 &&
+        ia != null && ia > 0) {
+      final vpAspect = vp.width / vp.height;
+      // contain 图在 scene（Stack=viewport）内的尺寸与位置
+      final double cw, ch;
+      if (ia >= vpAspect) {
+        cw = vp.width; // 宽铺满
+        ch = vp.width / ia;
+      } else {
+        ch = vp.height; // 高铺满
+        cw = vp.height * ia;
+      }
+      final cx0 = (vp.width - cw) / 2, cy0 = (vp.height - ch) / 2;
+      final cx1 = cx0 + cw, cy1 = cy0 + ch;
+      final s = targetScale;
+      double sx = scenePoint.dx, sy = scenePoint.dy;
+      // 仅 contain 未铺满的轴（图<viewport）需 clamp：放大后该轴覆盖 viewport，
+      // pivot 合法范围 = [让图起点贴 viewport 起点, 让图终点贴 viewport 终点]。
+      if (cw < vp.width) {
+        final sxMin = s * cx0 / (s - 1);
+        final sxMax = (s * cx1 - vp.width) / (s - 1);
+        sx = sx.clamp(sxMin, sxMax);
+      }
+      if (ch < vp.height) {
+        final syMin = s * cy0 / (s - 1);
+        final syMax = (s * cy1 - vp.height) / (s - 1);
+        sy = sy.clamp(syMin, syMax);
+      }
+      scenePoint = Offset(sx, sy);
+    }
     // T(scenePoint) · S(targetScale) · T(-scenePoint)：该点缩放后保持不动
     final target = Matrix4.identity()
       ..translate(scenePoint.dx, scenePoint.dy)
@@ -1082,7 +1119,10 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
       onTap: zoomed ? null : _onTap,
       onDoubleTapDown: (d) => _doubleTapPos = d.localPosition,
       onDoubleTap: _onDoubleTap,
-      onVerticalDragEnd: zoomed ? null : _onVerticalDragEnd,
+      // 注：不注册 onVerticalDragEnd——其 VerticalDragGestureRecognizer 会与
+      // InteractiveViewer 双指缩放抢竞技场（scale=1 时它活跃，第一指垂直微移被
+      // accept → 双指 scale 首次无反应）。上划唤详情改由 onInteractionEnd 的
+      // velocity 检测（见 _maybeSwipeUp）。
       // LayoutBuilder 捕获 InteractiveViewer viewport 尺寸（边界判定 + 双击自适应用）。
       // 注意外层 Padding(horizontal:4) 使 viewport 宽 = 屏宽 - 8，用真实约束值最稳。
       child: LayoutBuilder(builder: (ctx, constraints) {
@@ -1103,6 +1143,7 @@ class _BigImageState extends State<_BigImage> with SingleTickerProviderStateMixi
             _reportEdge();
             widget.onInteractionEnd?.call(_tc.value.getMaxScaleOnAxis());
             _maybeFlingPage(details);
+            _maybeSwipeUp(details);
           },
           child: _buildContent(ref),
         );
