@@ -56,44 +56,55 @@ class MainActivity : FlutterActivity() {
     // 代价：app 前台时 display 始终高刷（LTPO 不降），耗电略增；用户已开全局高刷，可接受。
     private fun applyFixedFrameRate() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
-        val rate = pickHighestRefreshRate() ?: return
-        val surfaceView = findSurfaceView(window.decorView) ?: return
-        surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {
+        // ⚠️ onAttachedToWindow 时机太早：Flutter embedding 的 FlutterSurfaceView 此时
+        // 尚未创建（延迟 attach），findSurfaceView 返回 null → 永不注册 callback →
+        // setFrameRate 从不调用 → surface 无帧率声明 → ColorOS 回落 baseMode（60Hz），
+        // 仅触摸升频（单指滑动）能临时撑 120，双指缩放不触发 → 缩放掉 60 且粘滞。
+        // 修复：post 到 decorView 队列末尾，此时 view 树已完整。
+        window.decorView.post {
+            val surfaceView = findSurfaceView(window.decorView)
+            android.util.Log.d("VisortFPS", "applyFixedFrameRate surfaceView=${surfaceView != null}")
+            if (surfaceView == null) return@post
+            val holder = surfaceView.holder
+            holder.addCallback(object : SurfaceHolder.Callback {
+                override fun surfaceCreated(holder: SurfaceHolder) {
+                    android.util.Log.d("VisortFPS", "surfaceCreated")
+                    declareFrameRate(holder)
+                }
+
+                override fun surfaceChanged(
+                    holder: SurfaceHolder,
+                    format: Int,
+                    width: Int,
+                    height: Int,
+                ) {
+                    // surface 尺寸/格式变化后 SF 可能重置 layer 帧率声明，重新声明一次。
+                    declareFrameRate(holder)
+                }
+
+                override fun surfaceDestroyed(holder: SurfaceHolder) {}
+            })
+            // post 执行时 surface 可能已创建（错过 surfaceCreated 回调）——立即声明一次。
+            if (holder.surface.isValid) {
+                android.util.Log.d("VisortFPS", "surface already valid, declare now")
                 declareFrameRate(holder)
             }
-
-            override fun surfaceChanged(
-                holder: SurfaceHolder,
-                format: Int,
-                width: Int,
-                height: Int,
-            ) {
-                // surface 尺寸/格式变化后 SF 可能重置 layer 帧率声明，重新声明一次。
-                declareFrameRate(holder)
-            }
-
-            override fun surfaceDestroyed(holder: SurfaceHolder) {}
-        })
+        }
     }
 
     private fun declareFrameRate(holder: SurfaceHolder) {
         val rate = pickHighestRefreshRate() ?: return
         try {
             // ⚠️ FRAME_RATE_COMPATIBILITY_AT_LEAST 关键（2026-08 实测，ColorOS 16）：
-            // 之前用 FIXED_SOURCE（SF dump 显示 ExactOrMultiple）——其语义允许
-            // “声明帧率的约数”（120 的约数含 60/30/24），ColorOS 智能帧率在 app
-            // 提交节奏波动时合法降档到 30 且不回升（引擎 120fps 提交、display 120Hz，
-            // 但 SF 合成 30，开发者选项“显示屏幕刷新率”显示 30）。
-            // AT_LEAST = display 帧率至少为声明值（120 为设备上限 → 锁死 120 不降档）。
-            // 设备 ROM 无 4 参 setFrameRate（无 FrameRateCategory），3 参即可。
+            // FIXED_SOURCE（ExactOrMultiple）允许声明帧率的约数（120→60/30），ColorOS 智能帧率
+            // 合法降档且不回升。AT_LEAST = display 帧率至少为声明值 → 锁死上限不降档。
             holder.surface.setFrameRate(
                 rate,
                 Surface.FRAME_RATE_COMPATIBILITY_AT_LEAST,
                 Surface.CHANGE_FRAME_RATE_ALWAYS,
             )
+            android.util.Log.d("VisortFPS", "declareFrameRate ok rate=$rate")
         } catch (e: Throwable) {
-            // 个别 OEM 实现差异——忽略，回退系统默认策略
             android.util.Log.w("VisortFPS", "setFrameRate failed: $e")
         }
     }
