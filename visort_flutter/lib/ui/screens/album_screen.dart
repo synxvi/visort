@@ -66,7 +66,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   int _openViewerIndex = 0;
   double _openScrollOffset = 0;
   /// 飞行层图：跟随当前照片（翻页后返回动画缩回的是当前照片，不是初始那张）。
-  late Image _flightImage;
+  late Widget _flightImage;
   /// 飞行层终点：当前照片所在 cell 的屏幕位置（翻页时滚动网格到该行后计算）。
   Rect? _flightEndRect;
 
@@ -539,21 +539,33 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// ⚠️ 必须用 size:300（网格同 key，ImageCache 已缓存）——用 1024 时动画
   /// 250ms 内 loadThumbnail 加载不完 → 飞行层空白 → 灰屏且无缩放效果。
   /// errorBuilder 用灰块兜底：即使加载失败也有可见内容在放大（诊断+兜底）。
-  Image _buildFlightImage(MsImageInfo info) {
+  Widget _buildFlightImage(MsImageInfo info) {
     final imgRef =
         imageRefFromMediaStoreId(info.id, extension: extOf(info.name));
-    return Image(
-      image: buildThumbnailProvider(imgRef, size: 300),
-      fit: BoxFit.contain,
-      gaplessPlayback: true,
-      loadingBuilder: (ctx, child, progress) {
-        debugPrint('[FlightImg] loading progress=$progress');
-        return child;
-      },
-      errorBuilder: (_, _, _) {
-        debugPrint('[FlightImg] ERROR');
-        return const ColoredBox(color: Color(0xFF2A2A2A));
-      },
+    // 两级飞行层：300 缩略图（网格缓存，push 立即可见）+ 下采样原图
+    // （与 viewer 用同一 computeViewerTargetWidth → pop 时命中 viewer 已加载
+    // 的缓存，返回动画清晰；push 期间解码完则无缝覆盖 300，没完也有 300 兜
+    // 底不灰屏）。之前只挂 300 → pop 时 viewer 原图已就绪却被 300 盖住、
+    // 返回发虚（用户反馈"图已加载出来不该再模糊"）。
+    final tw = computeViewerTargetWidth(MediaQuery.sizeOf(context).width *
+        MediaQuery.devicePixelRatioOf(context));
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image(
+          image: buildThumbnailProvider(imgRef, size: 300),
+          fit: BoxFit.contain,
+          gaplessPlayback: true,
+          errorBuilder: (_, _, _) =>
+              const ColoredBox(color: Color(0xFF2A2A2A)),
+        ),
+        Image(
+          image: buildImageProvider(imgRef, targetWidth: tw),
+          fit: BoxFit.contain,
+          gaplessPlayback: true,
+          errorBuilder: (_, _, _) => const SizedBox.shrink(),
+        ),
+      ],
     );
   }
 
