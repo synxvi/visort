@@ -88,11 +88,11 @@ visort_flutter/
 │  │  ├─ screens/                  # setup/sort/review/results/gallery/album + photo_viewer/photo_details_sheet + editors
 │  │  └─ adaptive/                 # WindowsKeyboardHandler
 │  └─ shared/widgets/             # Kbd/DecisionBadge, toast, ProfileDropdown, SortToggle, LoadingOverlay
-├─ android/app/src/main/kotlin/com/sortr/visort_flutter/
+├─ android/app/src/main/kotlin/com/synxvi/visort/
 │  └─ mediastore/                  # MediaStore MethodChannel + EventChannel plugin (ContentObserver); registered in MainActivity
 ├─ windows/                        # CMake desktop runner (C++17, /W4 /WX)
 ├─ tools/                          # subset_fonts.py (CJK font subsetter), generate_icons.py (Android+Windows app icon generator)
-└─ test/                           # pure-Dart unit tests (5 files / 52 cases)
+└─ test/                           # pure-Dart unit tests (5 files / 56 cases)
 # Repo root:
 docs/ANDROID_ROADMAP.md   # Flutter Android port decisions (A0–A4)
 ```
@@ -167,13 +167,13 @@ python tools/generate_icons.py          # regenerates Android mipmap + adaptive 
 - **Flutter ≥ 3.44.0** (Dart ≥ 3.12.0; `pubspec.yaml` lower bound `sdk: ^3.10.4`). Resolved floor from `pubspec.lock`.
 - **Android toolchain:** JDK 17, AGP 8.11.1, Kotlin 2.2.20, Gradle 8.14.
 - **Windows desktop:** CMake ≥ 3.14, MSVC C++17 (`/W4 /WX` warnings-as-errors).
-- **Android package:** `com.sortr.visort_flutter`. SDK versions use Flutter toolchain defaults (not pinned in `build.gradle.kts`). Impeller enabled.
+- **Android package:** `com.synxvi.visort`. SDK versions use Flutter toolchain defaults (not pinned in `build.gradle.kts`). Impeller enabled.
 - **Signing:** ⚠️ Release currently signs with **debug keys** (no production keystore / `key.properties` committed). Works for local `--release` builds; a real keystore is required for Play Store upload.
 - **Python (tooling only):** Used by `tools/subset_fonts.py` (CJK font subsetting; `fonttools`/`brotli`/`zopfli`) and `tools/generate_icons.py` (app icon generation; `pillow`). Python 3.11+.
 
 ## Testing & QA
 
-**Flutter** — `flutter test` from `visort_flutter/`. Five files, **52 cases, all pure-Dart unit tests** (no widget/integration/golden tests). Tests guard platform-agnostic logic (config, session state machine, run flow, desktop FS) plus the **album (gallery) controller** (v2):
+**Flutter** — `flutter test` from `visort_flutter/`. Five files, **56 cases, all pure-Dart unit tests** (no widget/integration/golden tests). Tests guard platform-agnostic logic (config, session state machine, run flow, desktop FS) plus the **album (gallery) controller** (v2):
 
 | Test file | Covers | Cases |
 |---|---|---|
@@ -181,7 +181,7 @@ python tools/generate_icons.py          # regenerates Android mipmap + adaptive 
 | `test/session_controller_test.dart` | `features/session` state machine — `decide`/`undo`/`initFromScan`/bounds (via real `ProviderContainer`) | 15 |
 | `test/run_controller_test.dart` | `features/run` — execute flow + progress stream (in-memory `FakeFileSystem`) | 5 |
 | `test/fs_desktop_test.dart` | `core/fs/desktop_file_system` — real-IO scan/filter/move/collision-rename/delete | 11 |
-| `test/gallery_controller_test.dart` | `features/gallery` — keyset pagination (cursor advance/hasMore), deletePhoto (local remove + bucket count decrement + coverId clear), sort persistence; via `_FakeMediaStoreChannel` injected through `mediaStoreChannelProvider` override | 8 |
+| `test/gallery_controller_test.dart` | `features/gallery` — keyset pagination (cursor advance/hasMore), deletePhoto (local remove + bucket count decrement + coverId clear), sort persistence; via `_FakeMediaStoreChannel` injected through `mediaStoreChannelProvider` override | 12 |
 
 - **Framework:** `flutter_test` SDK only. No `mocktail`/`bloc_test` — fakes are hand-written (`FakeFileSystem` implements `FileSystemRepository`; `_FakeMediaStoreChannel` extends `MediaStoreChannel`).
 - **Conventions:** `*_test.dart` files, `group()`/`test()` clusters, Chinese descriptive names, `setUp`/`tearDown`. Fixtures inline (1×1 PNG byte array). Controllers needing `PaintingBinding` (e.g. `deletePhoto`→`evictImageCache`) call `TestWidgetsFlutterBinding.ensureInitialized()` at the top of `main()`.
