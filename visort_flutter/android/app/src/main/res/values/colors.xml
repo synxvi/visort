@@ -3,4 +3,6 @@
     <!-- 应用深色背景（与 Dart 侧 AppColors.bg = #0D0D0D 对齐）。
          启动屏与 NormalTheme 窗口背景统一用此色，消除冷启动白闪。 -->
     <color name="sortr_launch_bg">#FF0D0D0D</color>
+    <!-- Adaptive icon 背景:纯黑(logo 黑底 + app 深色主题,与 foreground 黑画布一致)。 -->
+    <color name="ic_launcher_background">#FF000000</color>
 </resources>

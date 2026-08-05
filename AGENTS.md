@@ -91,7 +91,7 @@ visort_flutter/
 ├─ android/app/src/main/kotlin/com/sortr/visort_flutter/
 │  └─ mediastore/                  # MediaStore MethodChannel + EventChannel plugin (ContentObserver); registered in MainActivity
 ├─ windows/                        # CMake desktop runner (C++17, /W4 /WX)
-├─ tools/                          # subset_fonts.py (HarmonyOS CJK font subsetter)
+├─ tools/                          # subset_fonts.py (CJK font subsetter), generate_icons.py (Android+Windows app icon generator)
 └─ test/                           # pure-Dart unit tests (5 files / 52 cases)
 # Repo root:
 docs/ANDROID_ROADMAP.md   # Flutter Android port decisions (A0–A4)
@@ -120,7 +120,15 @@ Font subsetting (Android cold-start optimization, run when i18n strings change):
 ```bash
 cd visort_flutter
 pip install fonttools brotli zopfli
-python tools/subset_fonts.py           # subsets HarmonyOS Sans SC; idempotent
+python tools/subset_fonts.py           # subsets Noto Sans Mono CJK SC; idempotent
+```
+
+App icon generation (run after replacing `assets/icon/visort.png`):
+
+```bash
+cd visort_flutter
+pip install pillow
+python tools/generate_icons.py          # regenerates Android mipmap + adaptive icon + Windows ico; idempotent
 ```
 
 ## Code Conventions & Common Patterns
@@ -161,7 +169,7 @@ python tools/subset_fonts.py           # subsets HarmonyOS Sans SC; idempotent
 - **Windows desktop:** CMake ≥ 3.14, MSVC C++17 (`/W4 /WX` warnings-as-errors).
 - **Android package:** `com.sortr.visort_flutter`. SDK versions use Flutter toolchain defaults (not pinned in `build.gradle.kts`). Impeller enabled.
 - **Signing:** ⚠️ Release currently signs with **debug keys** (no production keystore / `key.properties` committed). Works for local `--release` builds; a real keystore is required for Play Store upload.
-- **Python (tooling only):** Used solely by `tools/subset_fonts.py` (CJK font subsetting). Python 3.11 + `fonttools`/`brotli`/`zopfli`.
+- **Python (tooling only):** Used by `tools/subset_fonts.py` (CJK font subsetting; `fonttools`/`brotli`/`zopfli`) and `tools/generate_icons.py` (app icon generation; `pillow`). Python 3.11+.
 
 ## Testing & QA
 
