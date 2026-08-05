@@ -29,7 +29,7 @@ Hundreds of photos piling up in one folder? SORTR lets you sort them as fast as 
 | **Windows desktop** | Stable · feature-complete | Keyboard-driven sorting, window-state persistence |
 | **Android** | Active development | MediaStore album browser + sorter; the album/gallery experience is the current focus |
 
-The active codebase is the **Flutter app** in [`sortr_flutter/`](sortr_flutter/). The Python/Flask app at the repo root is the legacy build (still shipped via Releases — see [Archive](#legacy-archive)).
+The codebase is the **Flutter app** in [`sortr_flutter/`](sortr_flutter/), a verified port of a prior Python/Flask implementation (since removed).
 
 ## Features
 
@@ -47,8 +47,8 @@ The active codebase is the **Flutter app** in [`sortr_flutter/`](sortr_flutter/)
 Requires [Flutter ≥ 3.44](https://flutter.dev) (Dart ≥ 3.12).
 
 ```bash
-git clone https://github.com/synxvi/sortr.git
-cd sortr/sortr_flutter
+git clone https://github.com/synxvi/visort.git
+cd visort/sortr_flutter
 flutter pub get
 flutter run -d windows        # Windows desktop
 flutter run -d android        # Android device/emulator
@@ -87,16 +87,6 @@ Setup → Sort → Review → Run
 | Windows native | CMake runner (C++17) |
 | Tests | `flutter_test`, 52 unit cases |
 | State | Staged in memory, no DB |
-
-## Legacy Archive
-
-The original implementation is a Python/Flask single-file app (`app.py` + `index.html`, packaged via PyInstaller). It is **frozen — no new features** — but still ships from [Releases](https://github.com/synxvi/sortr/releases) for v1.2.x.
-
-```bash
-pip install -r requirements.txt
-python app.py
-pyinstaller sortr.spec --noconfirm --clean   # → dist/sortr-windows.exe
-```
 
 ## Documentation
 

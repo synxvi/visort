@@ -1,8 +1,8 @@
 # Repository Guidelines
 
-> Guidance for AI assistants working in this repo. **The Flutter app in `sortr_flutter/` is the active codebase.** The Python/Flask files at the repo root (`app.py`, `index.html`) are the legacy, still-shipped implementation kept for reference and release builds.
+> Guidance for AI assistants working in this repo. **The Flutter app in `sortr_flutter/` is the sole codebase** (Windows desktop + Android). The legacy Python/Flask implementation (`app.py`, `index.html`, PyInstaller) has been removed; the Flutter app is a verified port of that prior implementation.
 
-⚠️ **Doc currency:** `CLAUDE.md` now redirects here. `readme.md` / `README_zh.md` reflect the Flutter-first reality (legacy Python archived). `QA_TESTING.md` still covers only the legacy Python manual scenarios. The current architecture docs are this file and `docs/ANDROID_ROADMAP.md`. Trust this file and the code otherwise.
+⚠️ **Doc currency:** `CLAUDE.md` redirects here. `readme.md` / `README_zh.md` cover the Flutter app. The current architecture docs are this file and `docs/ANDROID_ROADMAP.md`. Trust this file and the code otherwise.
 
 ## Project Overview
 
@@ -10,8 +10,7 @@
 
 Workflow: **Setup → Sort → Review → Results**. Android adds a Gallery/Album browser for MediaStore albums.
 
-- **Legacy (v1.2.0):** Flask backend (`app.py`) + vanilla-JS SPA (`index.html`), packaged as a one-file PyInstaller exe. pywebview/browser window wrapper.
-- **Active rewrite:** Flutter app (`sortr_flutter/`) targeting **Windows desktop** (feature-complete) and **Android**. The Android port (milestones A0–A4 + the SAF→MediaStore pivot) is delivered and validated on real hardware; the **album/gallery experience is the current development focus** (v2, `docs/ANDROID_ROADMAP.md` §7) — core album architecture (keyset cursor pagination, ContentObserver live refresh, injectable `MediaStoreChannel`, `GalleryController` unit tests) is in place and features continue to iterate.
+- **Flutter app** (`sortr_flutter/`) targeting **Windows desktop** (feature-complete) and **Android**. It is a verified port of a prior Python/Flask implementation (v1.2.0, since removed). The Android port (milestones A0–A4 + the SAF→MediaStore pivot) is delivered and validated on real hardware; the **album/gallery experience is the current development focus** (v2, `docs/ANDROID_ROADMAP.md` §7) — core album architecture (keyset cursor pagination, ContentObserver live refresh, injectable `MediaStoreChannel`, `GalleryController` unit tests) is in place and features continue to iterate.
 
 ## Architecture & Data Flow
 
@@ -58,7 +57,7 @@ Provider styles are deliberately mixed:
 `ImageRef { root, relativePath, extension, displayName? }` unifies platforms: on Windows `root`=dir path; on Android `root`=`kImagesAuthority`, `relativePath`=MediaStore `_ID`, `displayName`=real `DISPLAY_NAME`. Use `ref.label` for user-facing names — on Android `ref.name` returns the `_ID` digit, not the filename.
 
 ### Non-destructive execution
-Mirrors the legacy `/api/run`. `RunController.run(session)` returns a `Stream<RunProgress>` (consumed by `ResultsScreen` via `StreamBuilder`): per-file progress events then a terminal `RunResults { moved, deleted, skipped, errors }`. On Android, deletes/moves are **batched** and submitted once each (one system consent dialog).
+`RunController.run(session)` returns a `Stream<RunProgress>` (consumed by `ResultsScreen` via `StreamBuilder`): per-file progress events then a terminal `RunResults { moved, deleted, skipped, errors }`. On Android, deletes/moves are **batched** and submitted once each (one system consent dialog).
 
 ### Bootstrap (`main.dart`)
 `WidgetsFlutterBinding.ensureInitialized()` → **platform-forked init** (explicit `Platform.isXxx` branches):
@@ -94,12 +93,8 @@ sortr_flutter/
 ├─ windows/                        # CMake desktop runner (C++17, /W4 /WX)
 ├─ tools/                          # subset_fonts.py (HarmonyOS CJK font subsetter)
 └─ test/                           # pure-Dart unit tests (5 files / 52 cases)
-# Repo root (LEGACY Python app — not the active codebase):
-app.py            # Flask backend, 16 routes, in-memory session_state, v1.2.0
-index.html        # vanilla-JS SPA, 4 CSS-toggled screens
-sortr.spec        # PyInstaller one-file build
-requirements.txt  # Flask>=3.0.0, pyinstaller>=6.0.0
-docs/ANDROID_ROADMAP.md   # CURRENT — Flutter Android port decisions (A0–A4)
+# Repo root:
+docs/ANDROID_ROADMAP.md   # Flutter Android port decisions (A0–A4)
 ```
 
 ## Development Commands
@@ -120,14 +115,6 @@ flutter build windows --release # Windows .exe bundle
 
 Build output: `sortr_flutter/build/` (APKs at `build/app/outputs/flutter-apk/`; Windows exe at `build/windows/x64/runner/Release/sortr_flutter.exe`).
 
-Legacy Python (only if working on the old app):
-
-```bash
-pip install -r requirements.txt
-python app.py                          # dev server; first free port in 5050–5069
-pyinstaller sortr.spec --noconfirm --clean   # → dist/sortr-windows.exe
-```
-
 Font subsetting (Android cold-start optimization, run when i18n strings change):
 
 ```bash
@@ -139,13 +126,13 @@ python tools/subset_fonts.py           # subsets HarmonyOS Sans SC; idempotent
 ## Code Conventions & Common Patterns
 
 - **No code generation.** No `freezed`, `json_serializable`, `build_runner`, or `riverpod_generator`. All value classes in `core/config/models.dart` and `features/session/session_models.dart` are **hand-written `@immutable`** with manual `copyWith` / `toJson` / `fromJson` / `operator==` / `hashCode` (`Object.hash`, `listEquals`). Match this style for new models — do not introduce codegen for consistency.
-- **i18n everywhere.** User-facing strings go through `t(ref, 'key')` (`tr(key)` is contextless). Controllers return **i18n keys** (or `null`) from mutating methods; translate at the call site. `strings_en.dart` / `strings_zh.dart` (~161 keys, expanded from the original ~94) ported from legacy `index.html`. Add new keys to both.
+- **i18n everywhere.** User-facing strings go through `t(ref, 'key')` (`tr(key)` is contextless). Controllers return **i18n keys** (or `null`) from mutating methods; translate at the call site. `strings_en.dart` / `strings_zh.dart` (~161 keys). Add new keys to both.
 - **Theming discipline.** Never hardcode colors/fonts in screens — import `AppColors` / `AppFonts` from `core/theme/`. Dark-only Material 3. Ripple/splash globally disabled (`NoSplash`). `WithNoise` grain overlay wraps the whole app.
 - **Platform forking.** Explicit `Platform.isAndroid` / `Platform.isWindows` at FS-provider, route, screen, layout (`ResponsiveBuilder` >800px), keyboard-handler, and image-loader levels. Beyond `FileSystemRepository`, platform differences are branched inline — don't over-abstract.
 - **Riverpod consumption.** `ConsumerWidget` / `ConsumerStatefulWidget` + `ref.watch` (rebuild) / `ref.read` (one-shot). `initState` seeds local `TextEditingController`s from `ref.read(configProvider)`.
 - **Widget decomposition.** snake_case files, one responsibility per file. Screens split into many small private `_Foo` widgets (e.g. `sort_screen.dart` has `_ImageArea`, `_FullscreenImage`, `_SortPanel`, `_AndroidBottomBar`). Public widgets PascalCase; private helpers `_`-prefixed. `const` constructors pervasive.
 - **Defensive ROM workarounds** are common and commented (e.g. `GalleryController.deletePhoto` re-checks `exists()` because some Android ROMs misreport; M3 popup white-flash workarounds in theme + custom `ProfileDropdown`). Preserve these comments.
-- **Legacy parity comments.** Files open with a header comment mapping logic back to legacy `app.py` (the Flutter app is a verified port — tests assert parity with the Python `/api` flow).
+- **Port provenance comments.** Some files carry a header comment noting the logic was ported from a prior Python implementation (`app.py`, since removed); tests assert behavioral parity with that implementation. This is historical context — preserve but do not extend.
 
 ## Important Files
 
@@ -163,8 +150,7 @@ python tools/subset_fonts.py           # subsets HarmonyOS Sans SC; idempotent
 | `sortr_flutter/lib/core/fs/file_system_repository.dart` | Platform-agnostic FS contract + `imageExtensions` (18 formats) |
 | `sortr_flutter/lib/core/fs/fs_provider.dart` | Platform fork → `AndroidMediaStoreFileSystem` / `DesktopFileSystem` |
 | `sortr_flutter/android/.../MainActivity.kt` | Registers the MediaStore plugin (MethodChannel + EventChannel); SAF plugin removed in v2 |
-| `app.py` | **Legacy** Flask backend (16 routes, non-destructive, port 5050+) |
-| `docs/ANDROID_ROADMAP.md` | Current — Android port decisions, SAF→MediaStore pivot |
+| `docs/ANDROID_ROADMAP.md` | Android port decisions, SAF→MediaStore pivot |
 
 **Supported image formats (18):** `.jpg .jpeg .png .gif .bmp .webp .tiff .tif .svg .ico .heic .heif .raw .cr2 .nef .arw .dng .avif`
 
@@ -175,11 +161,11 @@ python tools/subset_fonts.py           # subsets HarmonyOS Sans SC; idempotent
 - **Windows desktop:** CMake ≥ 3.14, MSVC C++17 (`/W4 /WX` warnings-as-errors).
 - **Android package:** `com.sortr.sortr_flutter`. SDK versions use Flutter toolchain defaults (not pinned in `build.gradle.kts`). Impeller enabled.
 - **Signing:** ⚠️ Release currently signs with **debug keys** (no production keystore / `key.properties` committed). Works for local `--release` builds; a real keystore is required for Play Store upload.
-- **Python (legacy only):** Python 3.11 (as used by CI), Flask ≥3.0.0, PyInstaller ≥6.0.0.
+- **Python (tooling only):** Used solely by `tools/subset_fonts.py` (CJK font subsetting). Python 3.11 + `fonttools`/`brotli`/`zopfli`.
 
 ## Testing & QA
 
-**Flutter** — `flutter test` from `sortr_flutter/`. Five files, **52 cases, all pure-Dart unit tests** (no widget/integration/golden tests). Tests deliberately guard the **Python→Dart port** of platform-agnostic logic, plus the **album (gallery) controller** (v2):
+**Flutter** — `flutter test` from `sortr_flutter/`. Five files, **52 cases, all pure-Dart unit tests** (no widget/integration/golden tests). Tests guard platform-agnostic logic (config, session state machine, run flow, desktop FS) plus the **album (gallery) controller** (v2):
 
 | Test file | Covers | Cases |
 |---|---|---|
@@ -194,10 +180,4 @@ python tools/subset_fonts.py           # subsets HarmonyOS Sans SC; idempotent
 - **Coverage:** not measured/enforced (no lcov/codecov/`--coverage`).
 - **Gaps:** all UI (`lib/ui/`, screens, `shared/widgets`, router), `features/setup`/`scan`, `core/i18n`/`theme`/`window`, the `FileSystemRepository` interface, and the `shared_preferences` storage layer are untested. (`features/gallery` logic **is** now covered; only its UI/widget layer remains untested.)
 
-**Legacy Python** — **no automated tests.** Correctness validated only by the 12 manual scenarios (TC-01…TC-12) in `QA_TESTING.md`. `requirements.txt` has no `pytest`.
-
-**CI** — `.github/workflows/release.yml` builds **only the legacy Python exe** (PyInstaller on Windows, on `v*` tags). There is **no Flutter build/test/analyze step and no coverage gate** in CI. Flutter verification is entirely local.
-
-## Legacy Python Reference (for context only)
-
-The active codebase is Flutter; this section documents the legacy app that the Flutter port mirrors. `app.py` (Flask, 16 routes, module-global `session_state` dict, no DB, v1.2.0) and `index.html` (vanilla-JS SPA, 4 CSS-toggled screens). Non-destructive design: only `/api/run` and `/api/run-stream` mutate the filesystem; everything else stages entries in `session_state["decisions"]`. Dual-mode path resolution (`sys.frozen`→`sys._MEIPASS` vs `__file__`); port auto-discovery from 5050; frozen mode runs a 30s heartbeat watchdog that `os._exit(0)`s when the browser tab closes. Do not extend this codebase for new features — port to Flutter instead.
+**CI** — `.github/workflows/release.yml` builds the Flutter app for both targets on `v*` tags: Android (split-per-ABI APK) and Windows (zip). There is no `flutter test`/`flutter analyze` step and no coverage gate in CI; those run locally.

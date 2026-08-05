@@ -1,5 +1,0 @@
-# Runtime dependencies
-Flask>=3.0.0
-
-# Build dependencies (only needed to produce standalone executables)
-pyinstaller>=6.0.0

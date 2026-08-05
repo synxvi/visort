@@ -29,7 +29,7 @@
 | **Windows 桌面** | 稳定 · 功能完整 | 键盘驱动分类，窗口状态持久化 |
 | **Android** | 活跃开发中 | MediaStore 相册浏览 + 整理；相册体验为当前开发重心 |
 
-活动代码库是 [`sortr_flutter/`](sortr_flutter/) 下的 **Flutter 应用**。仓库根目录的 Python / Flask 应用是历史版本（仍通过 Releases 发布——见[历史存档](#历史存档)）。
+代码库是 [`sortr_flutter/`](sortr_flutter/) 下的 **Flutter 应用**，移植自早期的 Python / Flask 实现（已移除）。
 
 ## 功能
 
@@ -47,8 +47,8 @@
 需要 [Flutter ≥ 3.44](https://flutter.dev)（Dart ≥ 3.12）。
 
 ```bash
-git clone https://github.com/synxvi/sortr.git
-cd sortr/sortr_flutter
+git clone https://github.com/synxvi/visort.git
+cd visort/sortr_flutter
 flutter pub get
 flutter run -d windows        # Windows 桌面
 flutter run -d android        # 安卓真机 / 模拟器
@@ -87,16 +87,6 @@ flutter build apk --release       # → build/app/outputs/flutter-apk/
 | Windows 原生 | CMake 运行器（C++17） |
 | 测试 | `flutter_test`，52 个单测用例 |
 | 状态 | 内存暂存，无数据库 |
-
-## 历史存档
-
-最初的实现是一套 Python / Flask 单文件应用（`app.py` + `index.html`，经 PyInstaller 打包）。它已**冻结——不再加新功能**——但仍从 [Releases](https://github.com/synxvi/sortr/releases) 发布 v1.2.x。
-
-```bash
-pip install -r requirements.txt
-python app.py
-pyinstaller sortr.spec --noconfirm --clean   # → dist/sortr-windows.exe
-```
 
 ## 文档
 

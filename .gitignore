@@ -16,12 +16,6 @@ build/
 venv/
 env/
 
-# PyInstaller
-*.spec.bak
-dist/
-build/
-*.manifest
-
 # OS-generated
 .DS_Store
 Thumbs.db
@@ -42,8 +36,6 @@ s_*.png
 
 # App data
 /config/
-docs/dev-branch-changelog.md
-docs/QA_TESTING.md
 
 # Tool caches
 .claude/
