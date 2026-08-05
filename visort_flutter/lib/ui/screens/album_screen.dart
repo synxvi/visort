@@ -847,7 +847,7 @@ class _ThumbGridPlaceholder extends StatelessWidget {
         mainAxisSpacing: 3,
       ),
       itemCount: cols * 6,
-      itemBuilder: (_, __) => const ColoredBox(color: AppColors.surface),
+      itemBuilder: (_, _) => const ColoredBox(color: AppColors.surface),
     );
   }
 }

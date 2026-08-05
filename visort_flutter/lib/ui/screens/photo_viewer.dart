@@ -3,8 +3,8 @@
 //     didUpdateWidget 合并进本地列表，大相册可一路滑到底（原版本只能看已加载页）。
 //   - 删除后从列表移除当前项，自动跳到下一张（或末尾）。
 
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 import 'package:extended_image/extended_image.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -49,12 +49,17 @@ class PhotoViewer extends ConsumerStatefulWidget {
   ConsumerState<PhotoViewer> createState() => _PhotoViewerState();
 }
 
-class _PhotoViewerState extends ConsumerState<PhotoViewer> {
+class _PhotoViewerState extends ConsumerState<PhotoViewer>
+    with SingleTickerProviderStateMixin {
   late final ExtendedPageController _pageCtrl;
   late List<MsImageInfo> _photos;
   late int _index;
   OverlayEntry? _barEntry;
   final ValueNotifier<bool> _barVisible = ValueNotifier(false);
+  /// 顶/底栏淡入淡出。显式 AnimationController 驱动 Opacity，每帧 markNeedsBuild
+  /// 刷新 OverlayEntry——比 AnimatedOpacity 可靠（后者在 OverlayEntry 重建路径下
+  /// 隐式动画会失效，曾出现"淡出有动画、淡入无动画"的不对称）。
+  late final AnimationController _chromeFade;
   bool _loadingMore = false;
   /// 本次浏览中**已加载完成全图**的照片 id 集合。
   /// dispose 时逐个 evict（2880px 大图 ≈ 数十 MB/张，残留会撑爆 ImageCache →
@@ -68,17 +73,22 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
   @override
   void initState() {
     super.initState();
+    _chromeFade = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    )..addListener(() => _barEntry?.markNeedsBuild());
     _photos = List.of(widget.photos);
     _index = widget.initialIndex.clamp(0, widget.photos.length - 1);
     _pageCtrl = ExtendedPageController(initialPage: _index);
     final tr = widget.transition;
+    // 始终监听 route 动画 status：completed → 放行原图；dismissed → 移除栏。
+    // 无条件 add——之前 `if(!_allowFull) addStatusListener` 在 _allowFull 初值
+    // 为 true 时漏 add，dismissed 永不触发，栏残留覆盖相册/首页。
+    tr?.addStatusListener(_onTransitionStatus);
     if (tr == null) {
       _allowFull = true;
     } else {
       _allowFull = tr.status == AnimationStatus.completed;
-      if (!_allowFull) {
-        tr.addStatusListener(_onTransitionStatus);
-      }
     }
     // 顶/底栏插入 Navigator Overlay（route 之上）：点击打开立即浮现（50ms 淡入），
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -91,6 +101,14 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
     if (status == AnimationStatus.completed && mounted && !_allowFull) {
       setState(() => _allowFull = true);
     }
+    // 返回动画结束（dismissed）：立即移除栏。PageRouteBuilder(opaque:false) 下
+    // page 的 dispose 会延迟甚至不触发，而栏挂在 root Overlay 不随 route 消失，
+    // 必须主动 remove——否则返回相册/首页后顶/底栏残留覆盖网格（已实测复现）。
+    if (status == AnimationStatus.dismissed) {
+      _chromeFade.stop();
+      _barEntry?.remove();
+      _barEntry = null;
+    }
   }
 
   @override
@@ -99,6 +117,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
     // 移除 Overlay 顶/底栏 + 释放状态
     _barEntry?.remove();
     _barEntry = null;
+    _chromeFade.dispose();
     _barVisible.dispose();
     _pageCtrl.dispose();
     // 离开页面恢复 edge-to-edge，避免影响其他页的系统栏
@@ -147,8 +166,10 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
   void _toggleChrome() {
     _barVisible.value = !_barVisible.value;
     if (_barVisible.value) {
+      _chromeFade.forward();
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     } else {
+      _chromeFade.reverse();
       // 右滑直接触发返回，不会被系统消费用于“显示系统栏/再次滑动返回”。
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     }
@@ -159,6 +180,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
     if (!mounted) return;
     if (zoomed) {
       _barVisible.value = false;
+      _chromeFade.reverse();
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     }
     // 缩回 1.0：不自动恢复栏——放大隐藏 UI 后缩小保持隐藏，由单击（_toggleChrome）
@@ -179,21 +201,19 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
   void _insertBars() {
     final overlay = Overlay.of(context);
     _barEntry = OverlayEntry(
-      builder: (_) => ValueListenableBuilder<bool>(
-        valueListenable: _barVisible,
-        builder: (ctx, visible, _) => Stack(
+      builder: (_) {
+        final opacity = _chromeFade.value;
+        return Stack(
           children: [
             // 顶部渐变遮罩栏：返回 + 当前照片时间 | 计数器
             Positioned(
               top: 0,
               left: 0,
               right: 0,
-              child: AnimatedOpacity(
-                opacity: visible ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 50),
-                curve: Curves.easeOutCubic,
+              child: Opacity(
+                opacity: opacity,
                 child: IgnorePointer(
-                  ignoring: !visible,
+                  ignoring: opacity < 0.5,
                   child: Material(
                     // ⚠️ OverlayEntry 无 Material 祖先：Text 会回退到
                     // DefaultTextStyle.fallback（自带黄色下划线警告），必须包 Material
@@ -214,12 +234,10 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
               bottom: 0,
               left: 0,
               right: 0,
-              child: AnimatedOpacity(
-                opacity: visible ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 50),
-                curve: Curves.easeOutCubic,
+              child: Opacity(
+                opacity: opacity,
                 child: IgnorePointer(
-                  ignoring: !visible,
+                  ignoring: opacity < 0.5,
                   child: Material(
                     color: Colors.black,
                     child: _BottomChromeBar(
@@ -238,12 +256,15 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer> {
               ),
             ),
           ],
-        ),
-      ),
+        );
+      },
     );
     overlay.insert(_barEntry!);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _barVisible.value = true;
+      if (mounted) {
+        _barVisible.value = true;
+        _chromeFade.forward();
+      }
     });
   }
 
@@ -767,6 +788,8 @@ class _BigImageState extends State<_BigImage>
   int? _trackPointer;
   Offset? _trackDown;
   Offset? _trackLast;
+  Timer? _chromeTapTimer;
+  Duration? _lastChromeTapAt;
 
   @override
   void initState() {
@@ -828,6 +851,7 @@ class _BigImageState extends State<_BigImage>
 
   @override
   void dispose() {
+    _chromeTapTimer?.cancel();
     _doubleTapAnim.dispose();
     super.dispose();
   }
@@ -876,17 +900,12 @@ class _BigImageState extends State<_BigImage>
   Widget build(BuildContext context) {
     final ref = imageRefFromMediaStoreId(widget.info.id,
         extension: extOf(widget.info.name));
-    final zoomed = _currentScale > 1.05;
     return Listener(
       onPointerDown: _handleSwipeDown,
       onPointerMove: _handleSwipeMove,
       onPointerUp: _handleSwipeUp,
       onPointerCancel: (_) => _resetSwipeTrack(),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        // Tap 输（不闪栏）；单击需等 double-tap 超时(~300ms)才触发（与旧版一致）。
-        onTapUp: zoomed ? null : (_) => widget.onTapChrome(),
-        child: ExtendedImage(
+      child: ExtendedImage(
         image: widget.loadFull
             ? _providerFor(ref)
             : buildThumbnailProvider(ref, size: 300),
@@ -936,14 +955,13 @@ class _BigImageState extends State<_BigImage>
           return null;
         },
       ),
-      ),
     );
   }
 
   /// 上划详情：未放大时单指快速上划 → 详情面板。
   void _handleSwipeDown(PointerDownEvent e) {
     _doubleTapAnim.stop();
-    if (_trackPointer != null || _currentScale > 1.05) return;
+    if (_trackPointer != null) return;
     _trackPointer = e.pointer;
     _trackDown = e.position;
     _trackLast = e.position;
@@ -963,9 +981,31 @@ class _BigImageState extends State<_BigImage>
     _resetSwipeTrack();
     if (down == null) return;
     final delta = up - down;
-    // 单指快速上划：向上位移 > 90px 且以向上为主（dx 不超过 dy 的 2/3）。
-    if (delta.dy < -90 && delta.dy.abs() > delta.dx.abs() * 1.5) {
+    // 单指快速上划（未放大时）→ 详情面板。放大时禁用，避免与平移冲突。
+    if (_currentScale <= 1.05 &&
+        delta.dy < -90 &&
+        delta.dy.abs() > delta.dx.abs() * 1.5) {
       widget.onSwipeUp?.call();
+      return;
+    }
+    // 单击（小位移）→ 切换栏。带双击抑制：300ms 内的第二次小位移 up
+    // 视为双击，取消挂起的单击，交给 ExtendedImage.onDoubleTap 缩放。
+    // Listener 在 pointer 层不参与竞技场，避免与 ExtendedImage 双击识别器抢手势
+    // （原 GestureDetector.onTapUp 方案下第二次 tap 被库双击吃掉，单击不稳）。
+    // 放大时也允许单击切换栏——否则放大隐藏栏后无法恢复（用户反馈"回不来"）。
+    if (delta.distance < 18) {
+      final last = _lastChromeTapAt;
+      if (last != null &&
+          (e.timeStamp - last) < const Duration(milliseconds: 300)) {
+        _lastChromeTapAt = null;
+        _chromeTapTimer?.cancel();
+        return;
+      }
+      _lastChromeTapAt = e.timeStamp;
+      _chromeTapTimer?.cancel();
+      _chromeTapTimer = Timer(const Duration(milliseconds: 300), () {
+        widget.onTapChrome();
+      });
     }
   }
 

@@ -91,7 +91,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     try {
       final subdirs = await fs.listSubdirs(parent);
       if (subdirs.isEmpty) {
-        toast(context, t(ref, 'no_subdirs'));
+        if (mounted) toast(context, t(ref, 'no_subdirs'));
         return;
       }
       final config = ref.read(configProvider);
@@ -114,7 +114,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         imported++;
       }
       if (imported == 0) {
-        toast(context, t(ref, 'no_new_subdirs'));
+        if (mounted) toast(context, t(ref, 'no_new_subdirs'));
         return;
       }
       await home.updateFolders(templates);

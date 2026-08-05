@@ -536,7 +536,9 @@ class GalleryController extends Notifier<GalleryState> {
     final trashView = state.isTrashView;
     if ((bucketId == null && !favView && !trashView) ||
         state.loadingMore ||
-        cursor == null) return;
+        cursor == null) {
+      return;
+    }
     state = state.copyWith(loadingMore: true);
     try {
       final page = await _channel.scanImages(
