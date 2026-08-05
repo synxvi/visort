@@ -8,7 +8,7 @@
 
 **VISORT** is a keyboard-driven desktop + mobile image organizer. It scans directories recursively, presents images one-by-one, and lets users sort each into configurable folders via single-key shortcuts. **Core invariant: all operations are staged in memory and only executed when the user explicitly confirms "Run"** — no file moves or deletes happen until then.
 
-Workflow: **Setup → Sort → Review → Results**. Android adds a Gallery/Album browser for MediaStore albums.
+Workflow: **Home → Sort → Review → Results**. Android adds a Gallery/Album browser for MediaStore albums.
 
 - **Flutter app** (`visort_flutter/`) targeting **Windows desktop** (feature-complete) and **Android**. It is a verified port of a prior Python/Flask implementation (v1.2.0, since removed). The Android port (milestones A0–A4 + the SAF→MediaStore pivot) is delivered and validated on real hardware; the **album/gallery experience is the current development focus** (v2, `docs/ANDROID_ROADMAP.md` §7) — core album architecture (keyset cursor pagination, ContentObserver live refresh, injectable `MediaStoreChannel`, `GalleryController` unit tests) is in place and features continue to iterate.
 
@@ -18,13 +18,13 @@ Workflow: **Setup → Sort → Review → Results**. Android adds a Gallery/Albu
 Plain Flutter `Navigator` named routes (no `go_router`) defined in `visort_flutter/lib/ui/router.dart`:
 
 ```
-setup(/) ──Start/scan──▶ sort ──Review──▶ review ──Run──▶ results ──Continue──▶ setup
+home(/) ──Start/scan──▶ sort ──Review──▶ review ──Run──▶ results ──Continue──▶ home
    │
    └─(Android)─▶ gallery ──tap album──▶ album(bucketId/bucketName)
 ```
 
-- `setup` route **platform-forks**: `SetupScreenAndroid` vs `SetupScreen`.
-- `sort` screen guards empty session (pops back to setup).
+- `home` route **platform-forks**: `HomeScreenAndroid` vs `HomeScreen`.
+- `sort` screen guards empty session (pops back to home).
 - `safDemo` route (legacy SAF PoC) has been **removed** in v2 — SAF code is fully gone.
 
 ### State management — Riverpod ^2.6.1
@@ -44,7 +44,7 @@ Provider styles are deliberately mixed:
 | `galleryControllerProvider` | `NotifierProvider` | `GalleryState` | `features/gallery/gallery_controller.dart` |
 | `fileSystemRepositoryProvider` | `Provider` (platform-forked) | `FileSystemRepository` | `core/fs/fs_provider.dart` |
 
-> Note: global config providers live in `core/i18n/i18n.dart`, **not** in `core/config/`. `SetupController` and `RunController` are plain classes (not Notifiers) — they take `WidgetRef`/deps and mutate other providers.
+> Note: global config providers live in `core/i18n/i18n.dart`, **not** in `core/config/`. `HomeController` and `RunController` are plain classes (not Notifiers) — they take `WidgetRef`/deps and mutate other providers.
 
 ### Filesystem abstraction
 `FileSystemRepository` (`core/fs/file_system_repository.dart`) is the platform-agnostic contract (`pickDirectories`, `scanImages`, `move`/`moveBatch`, `delete`/`deleteBatch`, `readMeta`, `exists`, `joinPath`, `readBytes`). Implementations:
@@ -77,7 +77,7 @@ visort_flutter/
 │  │  ├─ window/                   # WindowStateService (desktop window-bounds persistence)
 │  │  └─ fs/                       # FileSystemRepository + desktop/MediaStore impls (SAF removed v2)
 │  ├─ features/
-│  │  ├─ setup/                    # SetupController (profiles, folders, action-keys)
+│  │  ├─ home/                     # HomeController (profiles, folders, action-keys)
 │  │  ├─ session/                  # SessionController + models (the decision state machine)
 │  │  ├─ scan/                     # ScanController (scan → init session)
 │  │  ├─ run/                      # RunController (streaming execute)
@@ -85,7 +85,7 @@ visort_flutter/
 │  │  └─ gallery/                  # GalleryController (Android album browsing)
 │  ├─ ui/
 │  │  ├─ router.dart               # named routes (no go_router)
-│  │  ├─ screens/                  # setup/sort/review/results/gallery/album + photo_viewer/photo_details_sheet + editors
+│  │  ├─ screens/                  # home/sort/review/results/gallery/album + photo_viewer/photo_details_sheet + editors
 │  │  └─ adaptive/                 # WindowsKeyboardHandler
 │  └─ shared/widgets/             # Kbd/DecisionBadge, toast, ProfileDropdown, SortToggle, LoadingOverlay
 ├─ android/app/src/main/kotlin/com/synxvi/visort/
@@ -148,7 +148,7 @@ python tools/generate_icons.py          # regenerates Android mipmap + adaptive 
 |---|---|
 | `visort_flutter/lib/main.dart` | Entry; platform-forked init, builds/seeds `ProviderContainer` |
 | `visort_flutter/lib/app.dart` | Root `VisortApp` `MaterialApp`, theme, locale, noise overlay |
-| `visort_flutter/lib/ui/router.dart` | Named routes, setup platform-fork, navigator key |
+| `visort_flutter/lib/ui/router.dart` | Named routes, home platform-fork, navigator key |
 | `visort_flutter/lib/features/session/session_controller.dart` | **Core decision state machine** (`decide`/`undo`/`initFromScan`) |
 | `visort_flutter/lib/features/session/session_models.dart` | `SessionState`, `Decision`, `DecisionAction`, `kRootDestKey='__root__'` |
 | `visort_flutter/lib/features/run/run_controller.dart` | Streaming execute (`Stream<RunProgress>`), MediaStore batching |
@@ -173,7 +173,7 @@ python tools/generate_icons.py          # regenerates Android mipmap + adaptive 
 
 ## Testing & QA
 
-**Flutter** — `flutter test` from `visort_flutter/`. Five files, **56 cases, all pure-Dart unit tests** (no widget/integration/golden tests). Tests guard platform-agnostic logic (config, session state machine, run flow, desktop FS) plus the **album (gallery) controller** (v2):
+**Flutter** — `flutter test` from `visort_flutter/`. Five files, **58 cases, all pure-Dart unit tests** (no widget/integration/golden tests). Tests guard platform-agnostic logic (config, session state machine, run flow, desktop FS) plus the **album (gallery) controller** (v2):
 
 | Test file | Covers | Cases |
 |---|---|---|
@@ -181,11 +181,11 @@ python tools/generate_icons.py          # regenerates Android mipmap + adaptive 
 | `test/session_controller_test.dart` | `features/session` state machine — `decide`/`undo`/`initFromScan`/bounds (via real `ProviderContainer`) | 15 |
 | `test/run_controller_test.dart` | `features/run` — execute flow + progress stream (in-memory `FakeFileSystem`) | 5 |
 | `test/fs_desktop_test.dart` | `core/fs/desktop_file_system` — real-IO scan/filter/move/collision-rename/delete | 11 |
-| `test/gallery_controller_test.dart` | `features/gallery` — keyset pagination (cursor advance/hasMore), deletePhoto (local remove + bucket count decrement + coverId clear), sort persistence; via `_FakeMediaStoreChannel` injected through `mediaStoreChannelProvider` override | 12 |
+|`test/gallery_controller_test.dart`|`features/gallery` — keyset pagination (cursor advance/hasMore), delete/trash/restore (local remove + buckets 重查：count 递减/封面推进), sort persistence; via `_FakeMediaStoreChannel` injected through `mediaStoreChannelProvider` override|14|
 
 - **Framework:** `flutter_test` SDK only. No `mocktail`/`bloc_test` — fakes are hand-written (`FakeFileSystem` implements `FileSystemRepository`; `_FakeMediaStoreChannel` extends `MediaStoreChannel`).
 - **Conventions:** `*_test.dart` files, `group()`/`test()` clusters, Chinese descriptive names, `setUp`/`tearDown`. Fixtures inline (1×1 PNG byte array). Controllers needing `PaintingBinding` (e.g. `deletePhoto`→`evictImageCache`) call `TestWidgetsFlutterBinding.ensureInitialized()` at the top of `main()`.
 - **Coverage:** not measured/enforced (no lcov/codecov/`--coverage`).
-- **Gaps:** all UI (`lib/ui/`, screens, `shared/widgets`, router), `features/setup`/`scan`, `core/i18n`/`theme`/`window`, the `FileSystemRepository` interface, and the `shared_preferences` storage layer are untested. (`features/gallery` logic **is** now covered; only its UI/widget layer remains untested.)
+- **Gaps:** all UI (`lib/ui/`, screens, `shared/widgets`, router), `features/home`/`scan`, `core/i18n`/`theme`/`window`, the `FileSystemRepository` interface, and the `shared_preferences` storage layer are untested. (`features/gallery` logic **is** now covered; only its UI/widget layer remains untested.)
 
 **CI** — `.github/workflows/release.yml` builds the Flutter app for both targets on `v*` tags: Android (split-per-ABI APK) and Windows (zip). There is no `flutter test`/`flutter analyze` step and no coverage gate in CI; those run locally.

@@ -1,4 +1,4 @@
-// Setup 屏幕 —— 配置整理方案（对应前端 #screen-setup）
+// Home 屏幕 —— 配置整理方案（对应前端 #screen-setup）
 //
 // 还原 K1 UI 元素：
 //   - 源目录 + Browse + 扫描模式（Recursive/Flat）
@@ -17,21 +17,21 @@ import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/scan/scan_controller.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
-import 'package:visort_flutter/features/setup/setup_controller.dart';
+import 'package:visort_flutter/features/home/home_controller.dart';
 import 'package:visort_flutter/shared/widgets/profile_dropdown.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/router.dart';
 import 'package:visort_flutter/ui/screens/action_keys_editor.dart';
 import 'package:visort_flutter/ui/screens/folder_editor.dart';
 
-class SetupScreen extends ConsumerStatefulWidget {
-  const SetupScreen({super.key});
+class HomeScreen extends ConsumerStatefulWidget {
+  const HomeScreen({super.key});
 
   @override
-  ConsumerState<SetupScreen> createState() => _SetupScreenState();
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _SetupScreenState extends ConsumerState<SetupScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen> {
   late TextEditingController _sourceCtrl;
   late TextEditingController _destCtrl;
   bool _recursive = true;
@@ -104,11 +104,11 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       if (isDefaultOnly) templates.clear();
 
       final existingLabels = templates.map((e) => e.label).toSet();
-      final setup = SetupController(ref);
+      final home = HomeController(ref);
       var imported = 0;
       for (final name in subdirs) {
         if (existingLabels.contains(name)) continue;
-        final key = setup.allocateKey(templates);
+        final key = home.allocateKey(templates);
         templates.add(FolderTemplate(key: key, label: name));
         existingLabels.add(name);
         imported++;
@@ -117,7 +117,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
         toast(context, t(ref, 'no_new_subdirs'));
         return;
       }
-      await setup.updateFolders(templates);
+      await home.updateFolders(templates);
       if (mounted) toast(context, t(ref, 'imported_count', [imported]));
     } catch (_) {
       if (mounted) toast(context, t(ref, 'import_failed'));
@@ -340,7 +340,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 value: config.activeProfile,
                 items: names,
                 onSelected: (v) async {
-                  final err = await SetupController(ref).switchProfile(v);
+                  final err = await HomeController(ref).switchProfile(v);
                   if (err != null && mounted) toast(context, t(ref, err));
                 },
               ),
@@ -389,7 +389,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       },
     );
     if (name == null || name.isEmpty) return;
-    final err = await SetupController(ref).createProfile(name);
+    final err = await HomeController(ref).createProfile(name);
     if (!mounted) return;
     if (err == null) {
       toast(context, t(ref, 'profile_created', [name]));
@@ -423,7 +423,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       ),
     );
     if (ok != true) return;
-    final err = await SetupController(ref).deleteProfile(name);
+    final err = await HomeController(ref).deleteProfile(name);
     if (!mounted) return;
     if (err == null) {
       toast(context, t(ref, 'profile_deleted'));

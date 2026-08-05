@@ -1,11 +1,11 @@
-// 安卓 Setup 屏幕（双模式分类）—— 统一 MediaStore 方案
+// 安卓 Home 屏幕（双模式分类）—— 统一 MediaStore 方案
 //
 // 两种分类模式（顶部 segmented control 切换）：
 //   模式一 toAlbum（默认）：选源相册 + 选目标相册，move 改 RELATIVE_PATH 到目标相册
 //   模式二 toNewDir：选源相册 + 输入父目录 + 编辑子目录，move 改 RELATIVE_PATH 到新建分类目录
 //
 // 数据流：
-//   Setup 构建 List<FolderDescriptor>（path=RELATIVE_PATH）→ scan prebuiltFolders → session folders
+//   Home 构建 List<FolderDescriptor>（path=RELATIVE_PATH）→ scan prebuiltFolders → session folders
 //   Sort 底部按钮 = folders（两种模式统一）
 //   Run 按 RELATIVE_PATH 分组批量 moveBatch（createWriteRequest）
 
@@ -29,14 +29,14 @@ import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/router.dart';
 import 'album_flight.dart';
 
-class SetupScreenAndroid extends ConsumerStatefulWidget {
-  const SetupScreenAndroid({super.key});
+class HomeScreenAndroid extends ConsumerStatefulWidget {
+  const HomeScreenAndroid({super.key});
 
   @override
-  ConsumerState<SetupScreenAndroid> createState() => _SetupScreenAndroidState();
+  ConsumerState<HomeScreenAndroid> createState() => _HomeScreenAndroidState();
 }
 
-class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
+class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     with WidgetsBindingObserver {
   static const _channel = MediaStoreChannel();
   static const _keyOrder = 'ABCDEFGHIJ'; // 目标相册/子目录的快捷键分配
@@ -104,7 +104,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    debugPrint('[Setup] lifecycle: $state, permissionGranted=$_permissionGranted');
+    debugPrint('[Home] lifecycle: $state, permissionGranted=$_permissionGranted');
     // app 从后台恢复前台（用户从系统设置授权后返回）→ 重新检测 MANAGE_MEDIA
     if (state == AppLifecycleState.resumed) {
       // 延迟 500ms 检测，确保系统权限状态已刷新
@@ -142,7 +142,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   /// 从系统设置返回后重新检测 MANAGE_MEDIA
   Future<void> _recheckManageMedia() async {
     final granted = await _channel.hasManageMedia();
-    debugPrint('[Setup] _recheckManageMedia: granted=$granted, current=$_manageMediaGranted');
+    debugPrint('[Home] _recheckManageMedia: granted=$granted, current=$_manageMediaGranted');
     if (mounted && granted != _manageMediaGranted) {
       setState(() => _manageMediaGranted = granted);
       if (granted) {
@@ -338,16 +338,19 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   }
 
   /// 右上角 3 点菜单：收藏 / 回收站快捷入口（相册浏览走首页列表直接点）。
-  void _onMenuSelected(String value) {
+  Future<void> _onMenuSelected(String value) async {
     if (value == 'favorites') {
-      Navigator.pushNamed(context, AppRoutes.album,
+      await Navigator.pushNamed(context, AppRoutes.album,
           arguments: const {'favoritesOnly': true});
     } else if (value == 'trash') {
-      Navigator.pushNamed(context, AppRoutes.album,
+      await Navigator.pushNamed(context, AppRoutes.album,
           arguments: const {'trashedOnly': true});
     } else if (value == 'settings') {
       Navigator.pushNamed(context, AppRoutes.settings);
+      return;
     }
+    // 收藏/回收站视图返回：可能发生了恢复/彻底删除，刷新首页封面/数量。
+    _refreshCovers();
   }
 
   /// 右上角 ⋮ 菜单：非模态浮层——从按钮右下角弹性展开，不阻塞主界面滚动。
@@ -890,12 +893,13 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     final sorted = _sortedBuckets();
     final isGrid = config.homeLayout == HomeLayout.grid;
     final tiles = sorted
-        .map((b) => _SetupBucketTile(
+        .map((b) => _HomeBucketTile(
               key: ValueKey(b.id),
               bucket: b,
               selected: selectedIds.contains(b.id),
               onCheckToggle: () => onToggle(b.id),
               onInterceptWhileEditing: _dismissAndFlush,
+              onAlbumReturned: _refreshCovers,
               grid: isGrid,
             ))
         .toList();
@@ -1389,20 +1393,21 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   }
 }
 
-/// 单个相册行（Setup 用）：左封面 + 名称（点击进相册浏览）+ 右侧圆点勾选。
+/// 单个相册行（Home 用）：左封面 + 名称（点击进相册浏览）+ 右侧圆点勾选。
 ///
 /// 交互分区：
 ///   - 封面缩略图 + 名称区域 → 进入相册内浏览（AlbumScreen）
 ///   - 右侧圆点 → 勾选/取消勾选（作为源/目标相册）
 /// 选中反馈：圆点变实心 + 选中瞬间扩散波动环 + 整行 accent 淡背景高亮，
 /// 让用户清晰知道哪一行是待操作项。
-class _SetupBucketTile extends StatefulWidget {
-  const _SetupBucketTile({
+class _HomeBucketTile extends StatefulWidget {
+  const _HomeBucketTile({
     super.key,
     required this.bucket,
     required this.selected,
     required this.onCheckToggle,
     this.onInterceptWhileEditing,
+    this.onAlbumReturned,
     this.grid = false,
   });
   final MsBucket bucket;
@@ -1410,13 +1415,15 @@ class _SetupBucketTile extends StatefulWidget {
   final VoidCallback onCheckToggle;
   /// 输入法展开时点击本 tile 的回调（收键盘 + 保存）；为 null 则不拦截。
   final VoidCallback? onInterceptWhileEditing;
+  /// 从相册浏览返回后的回调（刷新封面/数量——删除/恢复会改变它们）。
+  final VoidCallback? onAlbumReturned;
   final bool grid;
 
   @override
-  State<_SetupBucketTile> createState() => _SetupBucketTileState();
+  State<_HomeBucketTile> createState() => _HomeBucketTileState();
 }
 
-class _SetupBucketTileState extends State<_SetupBucketTile>
+class _HomeBucketTileState extends State<_HomeBucketTile>
     with SingleTickerProviderStateMixin {
   /// 封面缩略图 GlobalKey：点击进入相册时取其屏幕坐标做飞行层起点。
   final GlobalKey _coverKey = GlobalKey();
@@ -1428,7 +1435,7 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
   );
 
   @override
-  void didUpdateWidget(covariant _SetupBucketTile oldWidget) {
+  void didUpdateWidget(covariant _HomeBucketTile oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.selected && !oldWidget.selected) {
       _ripple.forward(from: 0);
@@ -1597,7 +1604,7 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
     widget.onCheckToggle();
   }
 
-  void _openAlbum({BuildContext? coverContext}) {
+  Future<void> _openAlbum({BuildContext? coverContext}) async {
     if (_interceptIfEditing()) return;
     // 封面缩略图的屏幕坐标：list 模式取 _coverKey 挂载的封面；grid 模式
     // 由调用方传封面区域的 context（GestureDetector/名称区）。网格动画
@@ -1613,13 +1620,15 @@ class _SetupBucketTileState extends State<_SetupBucketTile>
       'bucketCount': widget.bucket.count,
     };
     if (rect != null) {
-      pushAlbumGrow(context,
+      await pushAlbumGrow(context,
           args: args,
           coverAlignment:
               albumCoverAlignment(rect, MediaQuery.sizeOf(context)));
     } else {
-      Navigator.pushNamed(context, AppRoutes.album, arguments: args);
+      await Navigator.pushNamed(context, AppRoutes.album, arguments: args);
     }
+    // 从相册返回：刷新封面/数量（相册内可能删除了图片/改了排序）
+    widget.onAlbumReturned?.call();
   }
 
   Widget _buildGrid() {

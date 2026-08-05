@@ -5,7 +5,7 @@ const Map<String, String> stringsEn = {
   'app_title': 'Image Organizer v1.2',
   'lang_toggle': '中文',
 
-  // ───────── Setup · 目录输入 ─────────
+  // ───────── Home · 目录输入 ─────────
   'source_dir': 'SOURCE DIRECTORY',
   'dest_parent': 'DESTINATION PARENT',
   'browse': '📂 Browse',
@@ -19,7 +19,7 @@ const Map<String, String> stringsEn = {
   'toggle_scan': 'Toggle scan mode',
   'start': 'Start',
 
-  // ───────── Setup · Profile ─────────
+  // ───────── Home · Profile ─────────
   'profile_group': 'Profile',
   'profile_new': '+ New',
   'profile_delete': '🗑 Delete',
@@ -40,7 +40,7 @@ const Map<String, String> stringsEn = {
   'delete_profile_failed': 'Failed to delete profile',
   'profile_name_empty': 'Please provide a profile name',
 
-  // ───────── Setup · 文件夹编辑器 ─────────
+  // ───────── Home · 文件夹编辑器 ─────────
   'target_subdirs_suffix': ' · Target Sub-folders',
   'add_folder': 'Add Folder',
   'dest_preview': 'DESTINATION PREVIEW',
@@ -57,7 +57,7 @@ const Map<String, String> stringsEn = {
   'save_failed': 'Save failed',
   'config_saved': 'Configuration saved',
 
-  // ───────── Setup · Action Keys ─────────
+  // ───────── Home · Action Keys ─────────
   'undo_label': 'Undo',
   'delete_label': 'Delete',
   'skip_label': 'Skip',
@@ -69,7 +69,7 @@ const Map<String, String> stringsEn = {
   'key_reserved': '"{0}" is reserved, cannot use',
   'key_used_folder2': '"{0}" is already used by folder "{1}"',
 
-  // ───────── Setup · 扫描 ─────────
+  // ───────── Home · 扫描 ─────────
   'enter_source': 'Please enter source directory',
   'enter_dest': 'Please enter destination parent',
   'enter_dest_parent': 'Please enter destination parent path',
@@ -83,14 +83,14 @@ const Map<String, String> stringsEn = {
   'dir_not_exist': 'Directory does not exist',
   'no_images': 'No image files found in this directory',
 
-  // ───────── Setup (Android, A2) ─────────
-  'setup_title_android': 'Sort Images',
-  'setup_hint_android':
+  // ───────── Home (Android, A2) ─────────
+  'home_title_android': 'Sort Images',
+  'home_hint_android':
       'Pick a directory. Images will be sorted into subfolders within it.',
   'pick_dir_android': 'Pick Directory',
   'auth_revoked': 'Directory access was revoked. Please pick again.',
 
-  // ───────── Setup (Android MediaStore, A1') ─────────
+  // ───────── Home (Android MediaStore, A1') ─────────
   'select_albums': 'Select Albums',
   'select_albums_hint': 'Choose one or more albums as image sources.',
   'no_album_selected': 'Please select at least one album.',
@@ -104,7 +104,7 @@ const Map<String, String> stringsEn = {
   'retry': 'Retry',
   'cancel': 'Cancel',
 
-  // ───────── Setup (Android 双模式分类) ─────────
+  // ───────── Home (Android 双模式分类) ─────────
   'mode_to_album': 'Between Albums',
   'mode_to_newdir': 'Subdirs',
   'source_albums': 'Source Albums',
@@ -144,6 +144,16 @@ const Map<String, String> stringsEn = {
   'photo_details': 'Details',
   'delete_photo': 'Delete',
   'delete_confirm': 'Delete this photo?',
+
+  // ───────── 批量选择（相册内/收藏/回收站）─────────
+  'batch_select': 'Select',
+  'batch_cancel': 'Cancel',
+  'select_all': 'Select all',
+  'selected_n': '{0} selected',
+  'batch_delete_confirm': 'Delete {0} photos?',
+  'batch_restore_confirm': 'Restore {0} photos?',
+  'batch_delete_permanent_confirm':
+      'Permanently delete {0} photos? This cannot be undone.',
 
   // ───────── Sort ─────────
   'move_to': 'Move to →',
@@ -233,9 +243,7 @@ const Map<String, String> stringsEn = {
   // ───────── P1a · 回收站 ─────────
   'trash_title': 'Trash',
   'trash_empty': 'Trash is empty',
-  'action_trash': 'Move to trash',
   'action_restore': 'Restore',
-  'confirm_trash': 'Move to trash?',
   'trashed': 'Moved to trash',
   'restored': 'Restored',
   'restore_failed': 'Failed to restore',
@@ -245,8 +253,6 @@ const Map<String, String> stringsEn = {
   'gallery_manage': 'Gallery',
 
   // ───────── P1a · 回收站对话框 ─────────
-  'trash_item_title': 'Trash options',
-  'trash_confirm_desc': 'It can be restored from Trash.',
   'delete_permanently': 'Delete permanently',
   'delete_permanently_desc': 'This cannot be undone.',
   'restore_desc': 'Restore to its original album.',

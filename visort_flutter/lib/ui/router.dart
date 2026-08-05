@@ -1,8 +1,8 @@
-// 路由 —— 4 屏命名路由（Setup / Sort / Review / Results）+ 相册浏览（gallery/album）
+// 路由 —— 4 屏命名路由（Home / Sort / Review / Results）+ 相册浏览（gallery/album）
 //
 // 用 Flutter 内置 Navigator，不引入 go_router（规模无需）。
-// 流程：Setup → Sort → Review → Results，Results 完成后 popTo Setup。
-// 安卓额外：Setup → gallery → album（相册浏览）。
+// 流程：Home → Sort → Review → Results，Results 完成后 popTo Home。
+// 安卓额外：Home → gallery → album（相册浏览）。
 //
 // （已移除 A0 SAF PoC demo 路由——SAF 方案已被 MediaStore 取代，相关代码清理。）
 
@@ -17,12 +17,12 @@ import 'screens/gallery_screen.dart';
 import 'screens/results_screen.dart';
 import 'screens/review_screen.dart';
 import 'screens/settings_screen.dart';
-import 'screens/setup_screen.dart';
-import 'screens/setup_screen_android.dart';
+import 'screens/home_screen.dart';
+import 'screens/home_screen_android.dart';
 import 'screens/sort_screen.dart';
 
 class AppRoutes {
-  static const setup = '/';
+  static const home = '/';
   static const sort = '/sort';
   static const review = '/review';
   static const results = '/results';
@@ -62,14 +62,14 @@ class RouteNameObserver extends NavigatorObserver {
 
 Route<dynamic>? onGenerateRoute(RouteSettings settings) {
   switch (settings.name) {
-    case AppRoutes.setup:
+    case AppRoutes.home:
       // 根路由：实际无转场（首屏），但保持 couiFade 以备 pushAndRemoveUntil 场景。
       // ⚠️ 不用 couiSlideRoute：其被推页视差（左移 8% + 暗化）会让相册返回时
       // 首页整体"从左向右滑动"——couiFadeRoute 被推页无位移（仅 2% 缩放）。
       return couiFadeRoute(
         builder: (_) => Platform.isAndroid
-            ? const SetupScreenAndroid()
-            : const SetupScreen(),
+            ? const HomeScreenAndroid()
+            : const HomeScreen(),
         settings: settings,
       );
     case AppRoutes.sort:

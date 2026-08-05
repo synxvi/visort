@@ -33,13 +33,13 @@ Future<void> main() async {
     // 状态栏占位挤偏。桌面端无系统栏，此调用为 no-op。
     _enableEdgeToEdge();
     // SharedPreferences 预热改为后台执行，不阻塞首帧。
-    // 它的初始化结果直到 SetupScreen 首次真正读写 prefs 时才被需要，
+    // 它的初始化结果直到 HomeScreen 首次真正读写 prefs 时才被需要，
     // 而那发生在首帧绘制之后的 postFrameCallback 里，晚于 runApp。
     unawaited(_setupAndroid());
   }
 
   // ──────────── 加载配置（两端共享） ────────────
-  // 注意：配置加载保持 await —— SetupScreen 首帧需要用户已保存的 profiles，
+  // 注意：配置加载保持 await —— HomeScreen 首帧需要用户已保存的 profiles，
   // 延后加载会导致首屏先用默认配置再跳变，时序复杂且体验更差。
   final container = ProviderContainer();
   try {
@@ -138,7 +138,7 @@ void _enableEdgeToEdge() {
 Future<void> _setupAndroid() async {
   // 预热 shared_preferences（首次访问会异步初始化，提前做避免后续访问 jank）。
   // 由 main() 以 unawaited 后台调用，不阻塞 runApp。
-  // 授权有效性检查留给 setup_screen_android（需要 UI 上下文提示重新授权）
+  // 授权有效性检查留给 home_screen_android（需要 UI 上下文提示重新授权）
   await SharedPreferences.getInstance();
 }
 

@@ -34,9 +34,6 @@ class MainActivity : FlutterActivity() {
             }
     }
 
-    // 在窗口属性创建阶段注入高刷设置。onAttachedToWindow 是窗口已 attach 但
-    // 首帧绘制前的稳定时机，对 preferredDisplayModeId 生效足够早；比 onPostCreate
-    // 更可靠（onPostCreate 时部分 ROM 已锁定 mode）。
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         applyHighRefreshRate()
@@ -44,22 +41,10 @@ class MainActivity : FlutterActivity() {
         registerBackGestureInterceptor()
     }
 
-    // 固定帧率声明：Surface.setFrameRate(FIXED_SOURCE)。
-    //
-    // 背景（2026-08 实测，OnePlus/ColorOS 16）：VISORT 双指捏合缩放时刷新率不稳定——
-    // 开发者选项“全局显示屏幕刷新率”显示 1/30/120 跳变，系统相册则稳定 120。
-    // 原因：ColorOS 智能帧率根据 app 帧提交节奏动态切 display mode；VISORT 从未显式
-    // 声明渲染帧率（SurfaceFlinger layer 无 frameRate 字段），提交节奏一波动就降档，
-    // 形成低档/高档震荡。
-    // 修复：对渲染 surface 声明 FIXED_SOURCE 帧率 = 设备最高刷新率，明确告知系统
-    // “本 surface 按该帧率渲染”，display 保持高刷不随提交节奏降档（与系统相册一致）。
-    // 代价：app 前台时 display 始终高刷（LTPO 不降），耗电略增；用户已开全局高刷，可接受。
     private fun applyFixedFrameRate() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         // ⚠️ onAttachedToWindow 时机太早：Flutter embedding 的 FlutterSurfaceView 此时
         // 尚未创建（延迟 attach），findSurfaceView 返回 null → 永不注册 callback →
-        // setFrameRate 从不调用 → surface 无帧率声明 → ColorOS 回落 baseMode（60Hz），
-        // 仅触摸升频（单指滑动）能临时撑 120，双指缩放不触发 → 缩放掉 60 且粘滞。
         // 修复：post 到 decorView 队列末尾，此时 view 树已完整。
         window.decorView.post {
             val surfaceView = findSurfaceView(window.decorView)
@@ -69,7 +54,7 @@ class MainActivity : FlutterActivity() {
             holder.addCallback(object : SurfaceHolder.Callback {
                 override fun surfaceCreated(holder: SurfaceHolder) {
                     android.util.Log.d("VisortFPS", "surfaceCreated")
-                    declareFrameRate(holder)
+                    declareFrameRate(surfaceView)
                 }
 
                 override fun surfaceChanged(
@@ -78,8 +63,7 @@ class MainActivity : FlutterActivity() {
                     width: Int,
                     height: Int,
                 ) {
-                    // surface 尺寸/格式变化后 SF 可能重置 layer 帧率声明，重新声明一次。
-                    declareFrameRate(holder)
+                    declareFrameRate(surfaceView)
                 }
 
                 override fun surfaceDestroyed(holder: SurfaceHolder) {}
@@ -87,17 +71,15 @@ class MainActivity : FlutterActivity() {
             // post 执行时 surface 可能已创建（错过 surfaceCreated 回调）——立即声明一次。
             if (holder.surface.isValid) {
                 android.util.Log.d("VisortFPS", "surface already valid, declare now")
-                declareFrameRate(holder)
+                declareFrameRate(surfaceView)
             }
         }
     }
 
-    private fun declareFrameRate(holder: SurfaceHolder) {
+    private fun declareFrameRate(surfaceView: SurfaceView) {
+        val holder = surfaceView.holder
         val rate = pickHighestRefreshRate() ?: return
         try {
-            // ⚠️ FRAME_RATE_COMPATIBILITY_AT_LEAST 关键（2026-08 实测，ColorOS 16）：
-            // FIXED_SOURCE（ExactOrMultiple）允许声明帧率的约数（120→60/30），ColorOS 智能帧率
-            // 合法降档且不回升。AT_LEAST = display 帧率至少为声明值 → 锁死上限不降档。
             holder.surface.setFrameRate(
                 rate,
                 Surface.FRAME_RATE_COMPATIBILITY_AT_LEAST,
@@ -107,9 +89,26 @@ class MainActivity : FlutterActivity() {
         } catch (e: Throwable) {
             android.util.Log.w("VisortFPS", "setFrameRate failed: $e")
         }
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                val surfaceControl = surfaceView.getSurfaceControl()
+                if (surfaceControl != null) {
+                    val t = android.view.SurfaceControl.Transaction()
+                    t.setFrameRate(
+                        surfaceControl,
+                        rate,
+                        Surface.FRAME_RATE_COMPATIBILITY_AT_LEAST,
+                        Surface.CHANGE_FRAME_RATE_ALWAYS,
+                    )
+                    t.apply()
+                    android.util.Log.d("VisortFPS", "surfaceControl.setFrameRate ok")
+                }
+            }
+        } catch (e: Throwable) {
+            android.util.Log.w("VisortFPS", "surfaceControl.setFrameRate failed: $e")
+        }
     }
 
-    /** 设备支持的最高刷新率（同分辨率下最高的那个 mode 的刷新率）。 */
     @Suppress("DEPRECATION")
     private fun pickHighestRefreshRate(): Float? {
         val display: Display? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -176,16 +175,6 @@ class MainActivity : FlutterActivity() {
         )
     }
 
-    // 开启高刷新率（90/120Hz）。多层手段叠加，覆盖不同 OEM 的调度策略：
-    //
-    //   1) preferredDisplayModeId：标准 API。对系统默认 mode 为 60Hz 的设备能切到高刷。
-    //   2) setFrameRateBoostOnTouchEnabled(true) / setFrameRatePowerSavingsBalanced(true)：
-    //      OPPO/ColorOS、三星等 OEM 在 LayoutParams 上扩展的接口，请求触摸/滚动时升频到高刷。
-    //      （API 31+，低版本为 no-op。）
-    //
-    // 实测：仅 preferredDisplayModeId 在 ColorOS 上常被忽略，app surface 仍报告
-    // "0.00 Hz / NoPreference" 而被压在 60Hz；叠加 OEM 扩展后系统才放行 120Hz。
-    // 参考：flutter/flutter#62354（高刷支持）、#90639（部分 OEM 120Hz 不生效）。
     private fun applyHighRefreshRate() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
         // 取一次 attributes，所有改动后一次性回写，避免中途回写覆盖。
@@ -200,10 +189,13 @@ class MainActivity : FlutterActivity() {
             invokeOemExtension(lp, "setFrameRatePowerSavingsBalanced", false)
         }
 
+        // (3) 窗口级首选刷新率（API 21-30 语义，废弃但 ColorOS 仍读取）。
+        @Suppress("DEPRECATION")
+        lp.preferredRefreshRate = pickHighestRefreshRate() ?: lp.preferredRefreshRate
+
         window.attributes = lp
     }
 
-    /** 在同分辨率下挑刷新率最高的 display mode id（不同分辨率会改 viewport，不取）。 */
     @Suppress("DEPRECATION")
     private fun pickHighRefreshModeId(): Int? {
         val display: Display? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

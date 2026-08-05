@@ -2,13 +2,13 @@
 //
 // 展示所有相册（bucket），每行：
 //   左侧封面缩略图（该相册最新一张图）+ 相册名 + 总数 badge
-//   右侧 Checkbox（勾选作为"源相册"，传递回 setup 用于分类）
+//   右侧 Checkbox（勾选作为"源相册"，传递回 Home 用于分类）
 //   点缩略图/名称区 → 进入相册内浏览（AlbumScreen）
 //
 // 排序：AppBar 右侧 SortToggle，偏好持久化到 AppConfig。
 //
-// 与 SetupScreenAndroid 的关系：本屏是独立的"浏览/管理"入口，
-// Setup 的源相册勾选是另一套状态。两者复用 listBuckets 数据源但状态隔离。
+// 与 HomeScreenAndroid 的关系：本屏是独立的"浏览/管理"入口，
+// Home 的源相册勾选是另一套状态。两者复用 listBuckets 数据源但状态隔离。
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';

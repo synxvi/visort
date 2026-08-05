@@ -30,14 +30,66 @@ class _FakeMediaStoreChannel extends MediaStoreChannel {
   final List<MsBucket> _buckets;
   final Map<String, List<MsImageInfo>> _photosByBucket;
   final Set<String> _deletedIds = {};
+  final Set<String> _trashedIds = {};
+  final Set<String> _favoriteIds = {};
+  /// 模拟 ROM 误报：这些 id 即使 requestDelete 成功 exists 仍返回 true。
+  final Set<String> stickyIds = {};
   final List<String> scanCalls = []; // 记录每次 scanImages 的 afterCursor
+
+  /// 模拟 MediaStore 查询语义：普通查询排除已删除/已回收站项；
+  /// [trashedOnly] 时只返回回收站项。
+  /// stickyIds（删除未生效的图）不视为已删除。
+  Set<String> get _goneIds => _deletedIds.difference(stickyIds);
+
+  List<MsImageInfo> _visible(String bucketId, {bool trashedOnly = false}) {
+    final all = _photosByBucket[bucketId] ?? const <MsImageInfo>[];
+    return all
+        .where((p) => trashedOnly
+            ? _trashedIds.contains(p.id)
+            : !_goneIds.contains(p.id) && !_trashedIds.contains(p.id))
+        .toList();
+  }
 
   @override
   Future<List<MsBucket>> listBuckets({
     SortBy sortBy = SortBy.dateCreated,
     bool asc = false,
-  }) async =>
-      _buckets;
+  }) async {
+    // 对齐 Kotlin listBuckets：count 实时派生，cover = 该排序下每桶首张。
+    return _buckets.map((b) {
+      final photos = _visible(b.id);
+      final cover = photos.isEmpty
+          ? null
+          : _sortedForCover(photos, sortBy, asc).first.id;
+      return MsBucket(
+        id: b.id,
+        name: b.name,
+        count: photos.length,
+        dateCreatedMs: b.dateCreatedMs,
+        dateModifiedMs: b.dateModifiedMs,
+        coverId: cover,
+      );
+    }).toList();
+  }
+
+  List<MsImageInfo> _sortedForCover(
+      List<MsImageInfo> photos, SortBy sortBy, bool asc) {
+    final list = List<MsImageInfo>.of(photos);
+    int cmp(MsImageInfo a, MsImageInfo b) {
+      switch (sortBy) {
+        case SortBy.name:
+          return a.name.compareTo(b.name);
+        case SortBy.dateModified:
+          return a.dateModifiedMs.compareTo(b.dateModifiedMs);
+        case SortBy.dateCreated:
+        case SortBy.dateTrashed:
+          return a.dateAddedMs.compareTo(b.dateAddedMs);
+      }
+    }
+
+    list.sort((a, b) => asc ? cmp(a, b) : cmp(b, a));
+    return list;
+  }
 
   @override
   Future<MsScanPage> scanImages(
@@ -54,7 +106,9 @@ class _FakeMediaStoreChannel extends MediaStoreChannel {
     final all = (bucketIds.isEmpty
             ? _photosByBucket.values.expand((e) => e)
             : _photosByBucket[bucketIds.first] ?? const <MsImageInfo>[])
-        .where((p) => !_deletedIds.contains(p.id))
+        .where((p) => trashedOnly
+            ? _trashedIds.contains(p.id)
+            : !_goneIds.contains(p.id) && !_trashedIds.contains(p.id))
         .toList();
     // keyset：afterCursor 编码起始 index（测试简化为纯数字游标）
     final start = int.tryParse(afterCursor ?? '') ?? 0;
@@ -71,7 +125,30 @@ class _FakeMediaStoreChannel extends MediaStoreChannel {
   }
 
   @override
-  Future<bool> exists(String id) async => !_deletedIds.contains(id);
+  Future<bool> requestTrash(List<String> ids) async {
+    _trashedIds.addAll(ids);
+    return true;
+  }
+
+  @override
+  Future<bool> requestRestore(List<String> ids) async {
+    ids.forEach(_trashedIds.remove);
+    return true;
+  }
+
+  @override
+  Future<bool> requestFavorite(List<String> ids, bool favorite) async {
+    if (favorite) {
+      _favoriteIds.addAll(ids);
+    } else {
+      ids.forEach(_favoriteIds.remove);
+    }
+    return true;
+  }
+
+  @override
+  Future<bool> exists(String id) async =>
+      stickyIds.contains(id) || !_deletedIds.contains(id);
 }
 
 MsImageInfo _info(String id, {String bucket = 'b1', int added = 0}) =>
@@ -223,11 +300,11 @@ void main() {
       expect(st.buckets.first.count, 4, reason: 'bucket.count 应递减');
     });
 
-    test('deletePhoto 删封面时清空该相册 coverId', () async {
-      // 重建带封面的相册
+    test('deletePhoto 删封面后首页封面推进到下一张', () async {
+      // 重建带封面的相册（dateAdded 决定封面排序）
       final fake = _FakeMediaStoreChannel(
         [MsBucket(id: 'b3', name: 'X', count: 2, dateCreatedMs: 1, dateModifiedMs: 2, coverId: 'c1')],
-        {'b3': [_info('c1'), _info('c2')]},
+        {'b3': [_info('c1', added: 100), _info('c2', added: 90)]},
       );
       final c = ProviderContainer(overrides: [
         mediaStoreChannelProvider.overrideWithValue(fake),
@@ -240,7 +317,103 @@ void main() {
 
       await ctrl.deletePhoto('c1');
       final st = c.read(galleryControllerProvider);
-      expect(st.buckets.first.coverId, isNull, reason: '删封面应清空 coverId');
+      expect(st.buckets.first.coverId, 'c2', reason: '删封面后封面应推进到下一张');
+    });
+
+    test('trashPhoto 移入回收站后首页 count 递减', () async {
+      await controller.loadBuckets();
+      await controller.enterBucket('b1');
+
+      final err = await controller.trashPhoto('3');
+      expect(err, isNull);
+
+      final st = container.read(galleryControllerProvider);
+      expect(st.photos.any((p) => p.id == '3'), false);
+      expect(st.buckets.first.count, 4, reason: '回收站项应从普通查询排除，首页 count 递减');
+    });
+
+    test('restorePhoto 恢复后首页 count 回升', () async {
+      await controller.loadBuckets();
+      await controller.enterBucket('b1');
+      await controller.trashPhoto('3');
+      expect(container.read(galleryControllerProvider).buckets.first.count, 4);
+
+      final err = await controller.restorePhoto('3');
+      expect(err, isNull);
+
+      final st = container.read(galleryControllerProvider);
+      expect(st.buckets.first.count, 5, reason: '恢复后回收站排除失效，count 回升');
+    });
+  });
+
+  group('批量操作', () {
+    test('trashPhotos 批量移入回收站：本地移除 + count 批量递减', () async {
+      await controller.loadBuckets();
+      await controller.enterBucket('b1');
+
+      final err = await controller.trashPhotos(['3', '4']);
+      expect(err, isNull);
+
+      final st = container.read(galleryControllerProvider);
+      expect(st.photos.map((p) => p.id), ['1', '2', '5'],
+          reason: '批量回收后两张同时移除');
+      expect(st.buckets.first.count, 3, reason: 'count 应一次性减 2');
+    });
+
+    test('restorePhotos 批量恢复：count 回升', () async {
+      await controller.loadBuckets();
+      await controller.enterBucket('b1');
+      await controller.trashPhotos(['3', '4']);
+      expect(container.read(galleryControllerProvider).buckets.first.count, 3);
+
+      final err = await controller.restorePhotos(['3', '4']);
+      expect(err, isNull);
+
+      expect(container.read(galleryControllerProvider).buckets.first.count, 5,
+          reason: '批量恢复后回收站排除失效，count 回升');
+    });
+
+    test('deletePhotos 批量彻底删除：确认消失的移除 + count 递减', () async {
+      await controller.loadBuckets();
+      await controller.enterBucket('b1');
+
+      final err = await controller.deletePhotos(['3', '4']);
+      expect(err, isNull);
+
+      final st = container.read(galleryControllerProvider);
+      expect(st.photos.map((p) => p.id), ['1', '2', '5']);
+      expect(st.buckets.first.count, 3);
+    });
+
+    test('deletePhotos 部分残留（ROM 误报）：移除消失的，残留保留并返回失败', () async {
+      await controller.loadBuckets();
+      await controller.enterBucket('b1');
+      fakeChannel.stickyIds.add('4'); // 模拟 '4' 删除未生效
+
+      final err = await controller.deletePhotos(['3', '4']);
+      expect(err, 'delete_failed', reason: '有残留时应报告失败');
+
+      final st = container.read(galleryControllerProvider);
+      expect(st.photos.map((p) => p.id), ['1', '2', '4', '5'],
+          reason: '已确认消失的移除，残留的保留');
+      expect(st.buckets.first.count, 4);
+    });
+
+    test('setFavorites 批量设置收藏状态（乐观更新）', () async {
+      await controller.enterBucket('b1');
+
+      final err = await controller.setFavorites(['3', '4'], true);
+      expect(err, isNull);
+
+      var st = container.read(galleryControllerProvider);
+      expect(
+          st.photos.where((p) => p.id == '3' || p.id == '4')
+              .every((p) => p.isFavorite),
+          true);
+
+      await controller.setFavorites(['3', '4'], false);
+      st = container.read(galleryControllerProvider);
+      expect(st.photos.every((p) => !p.isFavorite), true);
     });
   });
 

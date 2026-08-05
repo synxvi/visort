@@ -26,7 +26,7 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
 
   @override
   Future<List<String>> pickDirectories() async {
-    // 返回所有相册 bucket id（UI 层 setup_screen 做勾选筛选）
+    // 返回所有相册 bucket id（UI 层 home_screen 做勾选筛选）
     final hasPerm = await _channel.hasPermission();
     if (!hasPerm) {
       final granted = await _channel.requestPermission();

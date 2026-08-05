@@ -5,7 +5,7 @@ const Map<String, String> stringsZh = {
   'app_title': '图片整理工具 v1.2',
   'lang_toggle': 'EN',
 
-  // ───────── Setup · 目录输入 ─────────
+  // ───────── Home · 目录输入 ─────────
   'source_dir': '源目录',
   'dest_parent': '目标父目录',
   'browse': '📂 浏览',
@@ -19,7 +19,7 @@ const Map<String, String> stringsZh = {
   'toggle_scan': '切换扫描方式',
   'start': '开始',
 
-  // ───────── Setup · Profile ─────────
+  // ───────── Home · Profile ─────────
   'profile_group': '配置组',
   'profile_new': '+ 新建',
   'profile_delete': '🗑 删除',
@@ -40,7 +40,7 @@ const Map<String, String> stringsZh = {
   'delete_profile_failed': '删除配置组失败',
   'profile_name_empty': '请提供配置组名称',
 
-  // ───────── Setup · 文件夹编辑器 ─────────
+  // ───────── Home · 文件夹编辑器 ─────────
   'target_subdirs_suffix': ' · 目标子目录',
   'add_folder': '新增文件夹',
   'dest_preview': '目标文件夹预览',
@@ -57,7 +57,7 @@ const Map<String, String> stringsZh = {
   'save_failed': '保存失败',
   'config_saved': '配置已保存',
 
-  // ───────── Setup · Action Keys ─────────
+  // ───────── Home · Action Keys ─────────
   'undo_label': '撤销',
   'delete_label': '删除',
   'skip_label': '跳过',
@@ -69,7 +69,7 @@ const Map<String, String> stringsZh = {
   'key_reserved': '「{0}」已被功能键占用，不可使用',
   'key_used_folder2': '「{0}」已被文件夹「{1}」使用',
 
-  // ───────── Setup · 扫描 ─────────
+  // ───────── Home · 扫描 ─────────
   'enter_source': '请输入源目录路径',
   'enter_dest': '请输入目标父目录路径',
   'enter_dest_parent': '请先填写目标父目录路径',
@@ -83,13 +83,13 @@ const Map<String, String> stringsZh = {
   'dir_not_exist': '目录不存在',
   'no_images': '该目录下未找到图片文件',
 
-  // ───────── Setup (Android, A2) ─────────
-  'setup_title_android': '整理图片',
-  'setup_hint_android': '选择一个目录，图片将分类到其中的子文件夹。',
+  // ───────── Home (Android, A2) ─────────
+  'home_title_android': '整理图片',
+  'home_hint_android': '选择一个目录，图片将分类到其中的子文件夹。',
   'pick_dir_android': '选择目录',
   'auth_revoked': '目录访问权限已被撤销，请重新选择。',
 
-  // ───────── Setup (Android MediaStore, A1') ─────────
+  // ───────── Home (Android MediaStore, A1') ─────────
   'select_albums': '选择相册',
   'select_albums_hint': '勾选一个或多个相册作为图片来源。',
   'no_album_selected': '请至少选择一个相册。',
@@ -102,7 +102,7 @@ const Map<String, String> stringsZh = {
   'retry': '重试',
   'cancel': '取消',
 
-  // ───────── Setup (Android 双模式分类) ─────────
+  // ───────── Home (Android 双模式分类) ─────────
   'mode_to_album': '相册间',
   'mode_to_newdir': '子目录',
   'source_albums': '源相册',
@@ -142,6 +142,15 @@ const Map<String, String> stringsZh = {
   'photo_details': '详情',
   'delete_photo': '删除',
   'delete_confirm': '确认删除这张图片？',
+
+  // ───────── 批量选择（相册内/收藏/回收站）─────────
+  'batch_select': '选择',
+  'batch_cancel': '取消',
+  'select_all': '全选',
+  'selected_n': '已选 {0} 张',
+  'batch_delete_confirm': '确认删除 {0} 张图片？',
+  'batch_restore_confirm': '确认恢复 {0} 张图片？',
+  'batch_delete_permanent_confirm': '确认彻底删除 {0} 张图片？此操作不可恢复。',
 
   // ───────── Sort ─────────
   'move_to': '移动到 →',
@@ -230,9 +239,7 @@ const Map<String, String> stringsZh = {
   // ───────── P1a · 回收站 ─────────
   'trash_title': '回收站',
   'trash_empty': '回收站为空',
-  'action_trash': '移到回收站',
   'action_restore': '恢复',
-  'confirm_trash': '移到回收站？',
   'trashed': '已移到回收站',
   'restored': '已恢复',
   'restore_failed': '恢复失败',
@@ -242,8 +249,6 @@ const Map<String, String> stringsZh = {
   'gallery_manage': '相册管理',
 
   // ───────── P1a · 回收站对话框 ─────────
-  'trash_item_title': '回收站选项',
-  'trash_confirm_desc': '可从回收站恢复。',
   'delete_permanently': '彻底删除',
   'delete_permanently_desc': '删除后无法恢复。',
   'restore_desc': '恢复到原相册。',

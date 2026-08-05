@@ -360,6 +360,8 @@ class GalleryController extends Notifier<GalleryState> {
 
   /// 退出相册，回到相册列表。退出前把当前网格数据存入桶快照，
   /// 同桶重进时秒出（对标系统相册内存缓存）。
+  /// 同时静默重查相册列表：删除/恢复后返回首页，count 与封面以
+  /// MediaStore 实时数据为准（兜底 mutation 后的重查，防时序竞争）。
   void exitBucket() {
     final bucketId = state.currentBucketId;
     if (bucketId != null && state.firstPageLoaded) {
@@ -377,6 +379,7 @@ class GalleryController extends Notifier<GalleryState> {
       nextCursor: null,
       firstPageLoaded: false,
     );
+    loadBuckets();
   }
 
   // ───────────────────────── 收藏（P1b）─────────────────────────
@@ -451,28 +454,37 @@ class GalleryController extends Notifier<GalleryState> {
     }
   }
 
-  /// 移入回收站单张（系统弹窗确认）。成功后从当前列表移除 + 清缓存。
+  /// 移入回收站单张（系统弹窗确认）。成功后从当前列表移除 + 清缓存，
+  /// 并重查相册列表（首页 count/封面跟随 MediaStore 实时数据——回收站项
+  /// 从普通查询排除，count 递减、封面自动推进）。
   Future<String?> trashPhoto(String id) async {
     try {
       await _channel.requestTrash([id]);
       evictImageCache(id);
+      // 先本地同步首页相册列表（count-1 + 封面推进），再移除 photos——
+      // 此时 state.photos 仍含该照片，可定位其所属相册（收藏视图亦可用）。
+      _applyBucketDelta(id, countDelta: -1);
       state = state.copyWith(
         photos: state.photos.where((p) => p.id != id).toList(),
       );
+      await loadBuckets();
       return null;
     } catch (e) {
       return e.toString();
     }
   }
 
-  /// 从回收站恢复单张。成功后从回收站列表移除 + 清缓存。
+  /// 从回收站恢复单张。成功后从回收站列表移除 + 清缓存 + 重查相册列表
+  /// （count 回升，恢复的图可能成为新封面）。
   Future<String?> restorePhoto(String id) async {
     try {
       await _channel.requestRestore([id]);
       evictImageCache(id);
+      _applyBucketDelta(id, countDelta: 1);
       state = state.copyWith(
         photos: state.photos.where((p) => p.id != id).toList(),
       );
+      await loadBuckets();
       return null;
     } catch (e) {
       return e.toString();
@@ -553,6 +565,45 @@ class GalleryController extends Notifier<GalleryState> {
 
   // ───────────────────────── 删除 ─────────────────────────
 
+  /// 删除/恢复后本地同步首页相册列表（count 增减、删除封面时推进到下一张）。
+  /// 必须在移除 state.photos 之前调用（需从 photos 定位照片所属相册，
+  /// 兼容收藏/回收站视图 currentBucketId 为 null 的场景）。
+  /// 不依赖 listBuckets 查询——ColorOS 查询过滤回收站不可靠，
+  /// 本地维护保证首页立即正确，loadBuckets 重查仅作权威校准。
+  void _applyBucketDelta(String photoId, {required int countDelta}) {
+    MsImageInfo? photo;
+    for (final p in state.photos) {
+      if (p.id == photoId) {
+        photo = p;
+        break;
+      }
+    }
+    final bucketId = photo?.bucketId ?? state.currentBucketId;
+    if (bucketId == null) return;
+    state = state.copyWith(
+      buckets: state.buckets.map((b) {
+        if (b.id != bucketId) return b;
+        final newCount = (b.count + countDelta).clamp(0, 1 << 31);
+        String? newCoverId = b.coverId;
+        if (countDelta < 0 && b.coverId == photoId) {
+          // 删的是封面：推进到该相册剩余第一张（state.photos 按排序原序）
+          final remaining = state.photos
+              .where((p) => p.bucketId == bucketId && p.id != photoId)
+              .toList();
+          newCoverId = remaining.isEmpty ? null : remaining.first.id;
+        }
+        return MsBucket(
+          id: b.id,
+          name: b.name,
+          count: newCount,
+          dateCreatedMs: b.dateCreatedMs,
+          dateModifiedMs: b.dateModifiedMs,
+          coverId: newCoverId,
+        );
+      }).toList(),
+    );
+  }
+
   /// 删除单张图片。成功后从内存列表移除并清理缩略图缓存。
   /// 返回 null 表示成功，否则返回错误信息。
   ///
@@ -570,26 +621,160 @@ class GalleryController extends Notifier<GalleryState> {
       }
       // 确认删除成功：清理该图的所有缓存（缩略图 + 全图）
       evictImageCache(id);
+      // 本地同步首页相册列表（count-1 + 封面推进）——删除可发生在回收站
+      // 视图（currentBucketId 为 null），用 state.photos 里该照片定位相册。
+      _applyBucketDelta(id, countDelta: -1);
       state = state.copyWith(
         photos: state.photos.where((p) => p.id != id).toList(),
-        // 同步更新 bucket 列表中对应相册的 count
-        buckets: state.buckets
-            .map((b) => b.id == state.currentBucketId
-                ? MsBucket(
-                    id: b.id,
-                    name: b.name,
-                    count: b.count > 0 ? b.count - 1 : 0,
-                    dateCreatedMs: b.dateCreatedMs,
-                    dateModifiedMs: b.dateModifiedMs,
-                    coverId: b.coverId == id ? null : b.coverId,
-                  )
-                : b)
-            .toList(),
       );
+      // 重查相册列表校准（count 递减 + 封面推进到下一张）。
+      await loadBuckets();
       return null;
     } catch (e) {
       return e.toString();
     }
+  }
+
+  // ───────────────────────── 批量操作 ─────────────────────────
+
+  /// 批量移入回收站（一次系统弹窗确认全部）。
+  /// 成功后本地移除全部 + 清缓存 + 重查相册列表。返回 null 成功，否则错误信息。
+  Future<String?> trashPhotos(List<String> ids) async {
+    if (ids.isEmpty) return null;
+    try {
+      await _channel.requestTrash(ids);
+      for (final id in ids) {
+        evictImageCache(id);
+      }
+      _applyBucketDeltaBatch(ids, countDelta: -1);
+      state = state.copyWith(
+        photos: state.photos.where((p) => !ids.contains(p.id)).toList(),
+      );
+      await loadBuckets();
+      return null;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  /// 批量从回收站恢复。成功后本地移除 + 清缓存 + 重查相册列表。
+  Future<String?> restorePhotos(List<String> ids) async {
+    if (ids.isEmpty) return null;
+    try {
+      await _channel.requestRestore(ids);
+      for (final id in ids) {
+        evictImageCache(id);
+      }
+      _applyBucketDeltaBatch(ids, countDelta: 1);
+      state = state.copyWith(
+        photos: state.photos.where((p) => !ids.contains(p.id)).toList(),
+      );
+      await loadBuckets();
+      return null;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  /// 批量彻底删除（回收站视图）。
+  /// requestDelete 后逐个 exists 二次确认（防御 ROM 误报）：确认已消失的
+  /// 本地移除；仍有残留的保留。全部残留时返回 delete_failed。
+  Future<String?> deletePhotos(List<String> ids) async {
+    if (ids.isEmpty) return null;
+    try {
+      await _channel.requestDelete(ids);
+      final gone = <String>[];
+      final stuck = <String>[];
+      for (final id in ids) {
+        if (await _channel.exists(id)) {
+          stuck.add(id);
+        } else {
+          gone.add(id);
+        }
+      }
+      if (gone.isEmpty) return 'delete_failed';
+      for (final id in gone) {
+        evictImageCache(id);
+      }
+      _applyBucketDeltaBatch(gone, countDelta: -1);
+      state = state.copyWith(
+        photos: state.photos.where((p) => !gone.contains(p.id)).toList(),
+      );
+      await loadBuckets();
+      return stuck.isEmpty ? null : 'delete_failed';
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  /// 批量设置收藏状态（乐观更新，失败回滚——批量取消收藏时全部原值一致，
+  /// 回滚为取反即可）。
+  Future<String?> setFavorites(List<String> ids, bool favorite) async {
+    if (ids.isEmpty) return null;
+    final idSet = ids.toSet();
+    state = state.copyWith(
+      photos: state.photos
+          .map((p) => idSet.contains(p.id) ? _copyWithFavorite(p, favorite) : p)
+          .toList(),
+    );
+    try {
+      await _channel.requestFavorite(ids, favorite);
+      return null;
+    } catch (e) {
+      // 回滚
+      state = state.copyWith(
+        photos: state.photos
+            .map((p) =>
+                idSet.contains(p.id) ? _copyWithFavorite(p, !favorite) : p)
+            .toList(),
+      );
+      return e.toString();
+    }
+  }
+
+  /// 批量删除/恢复后本地同步首页相册列表（按桶聚合 count 增减、删封面时
+  /// 从剩余照片推进到下一张）。必须在移除 state.photos 之前调用。
+  void _applyBucketDeltaBatch(List<String> ids, {required int countDelta}) {
+    if (ids.isEmpty) return;
+    final idSet = ids.toSet();
+    // 从 state.photos 定位每个 id 所属相册，按桶聚合 delta
+    final bucketDeltas = <String, int>{};
+    for (final p in state.photos) {
+      if (idSet.contains(p.id)) {
+        bucketDeltas[p.bucketId] =
+            (bucketDeltas[p.bucketId] ?? 0) + countDelta;
+      }
+    }
+    // 兜底：photos 里全找不到（罕见，observer 已移除）时退到当前桶
+    if (bucketDeltas.isEmpty && state.currentBucketId != null) {
+      bucketDeltas[state.currentBucketId!] = countDelta * ids.length;
+    }
+    if (bucketDeltas.isEmpty) return;
+    state = state.copyWith(
+      buckets: state.buckets.map((b) {
+        final delta = bucketDeltas[b.id];
+        if (delta == null) return b;
+        final newCount = (b.count + delta).clamp(0, 1 << 31);
+        String? newCoverId = b.coverId;
+        if (countDelta < 0 &&
+            b.coverId != null &&
+            idSet.contains(b.coverId)) {
+          // 删的是封面：推进到该相册剩余第一张（state.photos 按排序原序）
+          final remaining = state.photos
+              .where((p) => p.bucketId == b.id && !idSet.contains(p.id))
+              .toList();
+          newCoverId = remaining.isEmpty ? null : remaining.first.id;
+        }
+        return MsBucket(
+          id: b.id,
+          name: b.name,
+          count: newCount,
+          dateCreatedMs: b.dateCreatedMs,
+          dateModifiedMs: b.dateModifiedMs,
+          coverId: newCoverId,
+        );
+      }).toList(),
+    );
   }
 
   // ───────────────────────── ContentObserver 刷新 ─────────────────────────

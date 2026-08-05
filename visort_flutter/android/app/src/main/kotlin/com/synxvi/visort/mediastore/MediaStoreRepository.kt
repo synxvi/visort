@@ -70,6 +70,7 @@ class MediaStoreRepository(private val context: Context) {
             MediaStore.Images.Media.DATE_ADDED,
             MediaStore.Images.Media.DATE_MODIFIED,
             MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.IS_TRASHED,
         )
         // 构造 sortOrder：决定每个相册封面（首条）的排序基准
         val sortColumn = when (sortBy) {
@@ -79,49 +80,82 @@ class MediaStoreRepository(private val context: Context) {
         }
         val sortDir = if (asc) "ASC" else "DESC"
         try {
-            contentResolver.query(
-                collection, projection, null, null,
-                "$sortColumn $sortDir"
-            )?.use { cursor ->
-                val idxId = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_ID)
-                val idxName = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-                val idxCover = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-                val idxDateAdded = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
-                val idxDateModified = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
-                // 聚合：bucketId → (name, count, coverId, minDateAdded=创建, maxDateModified=修改)
-                // coverId 仅在 getOrPut 首次创建时记录（首条 = 该排序下第一张）
-                data class Agg(
-                    val name: String, var count: Int, val coverId: String?,
-                    var minDateAdded: Long = Long.MAX_VALUE, var maxDateModified: Long = 0L,
-                )
-                val agg = mutableMapOf<String, Agg>()
-                while (cursor.moveToNext()) {
-                    val bid = cursor.getString(idxId) ?: continue
-                    val bname = cursor.getString(idxName) ?: "根目录"
-                    val coverId = cursor.getString(idxCover)
-                    val dateAdded = if (cursor.isNull(idxDateAdded)) 0L else cursor.getLong(idxDateAdded) * 1000
-                    val dateModified = if (cursor.isNull(idxDateModified)) 0L else cursor.getLong(idxDateModified) * 1000
-                    val cur = agg.getOrPut(bid) { Agg(bname, 0, coverId) }
-                    cur.count++
-                    if (dateAdded > 0 && dateAdded < cur.minDateAdded) cur.minDateAdded = dateAdded
-                    if (dateModified > cur.maxDateModified) cur.maxDateModified = dateModified
+            // 与 scanImages 一致：R+ 用 Bundle query 显式排除回收站项。
+            // 旧式 selection 参数在 ColorOS 上对 MANAGE_MEDIA 应用不生效
+            // （默认查询含回收站项，导致删除后首页 count/封面不更新）。
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val bundle = android.os.Bundle().apply {
+                    putString(
+                        android.content.ContentResolver.QUERY_ARG_SQL_SELECTION,
+                        "${MediaStore.Images.Media.IS_TRASHED} = 0"
+                    )
+                    putString(
+                        android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER,
+                        "$sortColumn $sortDir"
+                    )
+                    // MANAGE_MEDIA app 默认查询含回收站项（MATCH_INCLUDE）——
+                    // 必须显式 MATCH_EXCLUDE 才可靠（与回收站视图 MATCH_INCLUDE 对称）。
+                    putInt(
+                        MediaStore.QUERY_ARG_MATCH_TRASHED,
+                        MediaStore.MATCH_EXCLUDE
+                    )
                 }
-                agg.forEach { (id, a) ->
-                    buckets.add(MsBucket(
-                        id = id, name = a.name, count = a.count,
-                        dateCreatedMs = if (a.minDateAdded == Long.MAX_VALUE) 0L else a.minDateAdded,
-                        dateModifiedMs = a.maxDateModified,
-                        coverId = a.coverId,
-                    ))
+                contentResolver.query(collection, projection, bundle, null)?.use { cursor ->
+                    aggregateBuckets(cursor, buckets)
                 }
-                // 按数量降序（符合相册 App 习惯：大相册在前）
-                buckets.sortByDescending { it.count }
+            } else {
+                contentResolver.query(
+                    collection, projection, null, null,
+                    "$sortColumn $sortDir"
+                )?.use { cursor ->
+                    aggregateBuckets(cursor, buckets)
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "listBuckets 异常: ${e.message}")
         }
         Log.i(TAG, "listBuckets: 共 ${buckets.size} 个相册（sortBy=$sortBy, asc=$asc）")
         return buckets
+    }
+
+    /** listBuckets 游标聚合（按 BUCKET_ID 分组：name/count/coverId/创建/修改时间）。 */
+    private fun aggregateBuckets(cursor: android.database.Cursor, buckets: MutableList<MsBucket>) {
+        val idxId = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_ID)
+        val idxName = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+        val idxCover = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+        val idxDateAdded = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+        val idxDateModified = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
+        // ColorOS 的 MATCH_TRASHED/selection 对 MANAGE_MEDIA app 不可靠，
+        // 代码级手动跳过回收站行（R+），保证 count/coverId 永远不含回收站项。
+        val idxTrash = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+            cursor.getColumnIndex(MediaStore.Images.Media.IS_TRASHED) else -1
+        data class Agg(
+            val name: String, var count: Int, val coverId: String?,
+            var minDateAdded: Long = Long.MAX_VALUE, var maxDateModified: Long = 0L,
+        )
+        val agg = mutableMapOf<String, Agg>()
+        while (cursor.moveToNext()) {
+            if (idxTrash >= 0 && cursor.getInt(idxTrash) == 1) continue
+            val bid = cursor.getString(idxId) ?: continue
+            val bname = cursor.getString(idxName) ?: "根目录"
+            val coverId = cursor.getString(idxCover)
+            val dateAdded = if (cursor.isNull(idxDateAdded)) 0L else cursor.getLong(idxDateAdded) * 1000
+            val dateModified = if (cursor.isNull(idxDateModified)) 0L else cursor.getLong(idxDateModified) * 1000
+            val cur = agg.getOrPut(bid) { Agg(bname, 0, coverId) }
+            cur.count++
+            if (dateAdded > 0 && dateAdded < cur.minDateAdded) cur.minDateAdded = dateAdded
+            if (dateModified > cur.maxDateModified) cur.maxDateModified = dateModified
+        }
+        agg.forEach { (id, a) ->
+            buckets.add(MsBucket(
+                id = id, name = a.name, count = a.count,
+                dateCreatedMs = if (a.minDateAdded == Long.MAX_VALUE) 0L else a.minDateAdded,
+                dateModifiedMs = a.maxDateModified,
+                coverId = a.coverId,
+            ))
+        }
+        // 按数量降序（符合相册 App 习惯：大相册在前）
+        buckets.sortByDescending { it.count }
     }
 
     // ──────────── 扫描图片（keyset 分页） ────────────
@@ -232,9 +266,13 @@ class MediaStoreRepository(private val context: Context) {
                     putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selArgs)
                 }
                 putString(android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sortOrder)
-                // 回收站视图需显式包含回收站项（默认 query 排除 IS_TRASHED=1）
-                if (trashedOnly && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+                // 回收站过滤：trashedOnly 显式包含回收站项（默认 query 排除 IS_TRASHED=1）；
+                // 普通视图显式排除（MANAGE_MEDIA app 默认包含，selection 在 ColorOS 上不可靠）
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    putInt(
+                        MediaStore.QUERY_ARG_MATCH_TRASHED,
+                        if (trashedOnly) MediaStore.MATCH_INCLUDE else MediaStore.MATCH_EXCLUDE
+                    )
                 }
             }
             contentResolver.query(collection, projection, queryBundle, null)?.use { cursor ->
@@ -264,6 +302,14 @@ class MediaStoreRepository(private val context: Context) {
                 // 是否存在第 limit+1 条（决定 hasMore）。
                 while (results.size < limit && cursor.moveToNext()) {
                     val id = cursor.getString(idxId) ?: continue
+                    // 手动过滤回收站行：ColorOS 的 MATCH_TRASHED/selection 对
+                    // MANAGE_MEDIA app 不可靠，代码级过滤保证普通视图永远
+                    // 不含回收站项（回收站视图 trashedOnly 时保留）。
+                    if (idxTrash >= 0 && !trashedOnly &&
+                        cursor.getInt(idxTrash) == 1
+                    ) {
+                        continue
+                    }
                     val name = cursor.getString(idxName) ?: continue
                     val size = if (cursor.isNull(idxSize)) 0L else cursor.getLong(idxSize)
                     val mime = cursor.getString(idxMime) ?: "image/*"

@@ -15,7 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
-import 'package:visort_flutter/features/setup/setup_controller.dart';
+import 'package:visort_flutter/features/home/home_controller.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 
 class FolderEditor extends ConsumerStatefulWidget {
@@ -125,7 +125,7 @@ class _FolderEditorState extends ConsumerState<FolderEditor> {
         label: (lCtrl?.text ?? f.label).trim(),
       );
     }
-    final err = await SetupController(ref).updateFolders(_templates);
+    final err = await HomeController(ref).updateFolders(_templates);
     if (err != null && mounted) {
       toast(context, t(ref, err));
     }
@@ -141,7 +141,7 @@ class _FolderEditorState extends ConsumerState<FolderEditor> {
       _labelControllers.clear();
     });
     // 立即持久化（无防抖）
-    await SetupController(ref).updateFolders(_templates);
+    await HomeController(ref).updateFolders(_templates);
   }
 
   Future<void> _removeAt(int idx) async {
@@ -150,12 +150,12 @@ class _FolderEditorState extends ConsumerState<FolderEditor> {
       _keyControllers.clear();
       _labelControllers.clear();
     });
-    await SetupController(ref).updateFolders(_templates);
+    await HomeController(ref).updateFolders(_templates);
   }
 
   void _addFolder() {
-    final setup = SetupController(ref);
-    final key = setup.allocateKey(_templates);
+    final home = HomeController(ref);
+    final key = home.allocateKey(_templates);
     setState(() {
       _templates.add(FolderTemplate(
           key: key, label: t(ref, 'category', [_templates.length + 1])));

@@ -1,7 +1,7 @@
 // Results 屏幕 —— 执行 RUN + 显示结果（对应前端 #screen-results + run-stream）
 //
 // 进入时自动触发 run_controller.run(session)，用 StreamBuilder 显示进度，
-// 完成后显示 4 项计数 + 错误明细，Continue 重置 session 回 Setup。
+// 完成后显示 4 项计数 + 错误明细，Continue 重置 session 回 Home。
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -188,10 +188,10 @@ class _DoneView extends ConsumerWidget {
                   width: double.infinity,
                   child: FilledButton(
                     onPressed: () {
-                      // 重置 session 回 Setup
+                      // 重置 session 回 Home
                       ref.read(sessionControllerProvider.notifier).reset();
                       Navigator.pushNamedAndRemoveUntil(
-                          context, AppRoutes.setup, (_) => false);
+                          context, AppRoutes.home, (_) => false);
                     },
                     child: Text(t(ref, 'continue_btn')),
                   ),

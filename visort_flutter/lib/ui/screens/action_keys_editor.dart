@@ -10,7 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
-import 'package:visort_flutter/features/setup/setup_controller.dart';
+import 'package:visort_flutter/features/home/home_controller.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 
 class ActionKeysEditor extends ConsumerStatefulWidget {
@@ -66,7 +66,7 @@ class _ActionKeysEditorState extends ConsumerState<ActionKeysEditor> {
       delete: _deleteCtrl.text.trim().toUpperCase(),
       skip: _skipCtrl.text.trim().toUpperCase(),
     );
-    final err = await SetupController(ref).updateActionKeys(ak);
+    final err = await HomeController(ref).updateActionKeys(ak);
     if (err != null && mounted) toast(context, t(ref, err));
   }
 

@@ -31,10 +31,10 @@ class SortScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(sessionControllerProvider);
 
-    // 空 session（未扫描直接进入）→ 回 Setup
+    // 空 session（未扫描直接进入）→ 回 Home
     if (session.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        Navigator.pushNamedAndRemoveUntil(context, AppRoutes.setup, (_) => false);
+        Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (_) => false);
       });
       return const Scaffold(body: SizedBox.shrink());
     }
@@ -54,7 +54,7 @@ class SortScreen extends ConsumerWidget {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.pushNamedAndRemoveUntil(
-              context, AppRoutes.setup, (_) => false),
+              context, AppRoutes.home, (_) => false),
         ),
         title: const _Logo(),
         actions: [

@@ -6,7 +6,7 @@
 //
 // 实现基于 showGeneralDialog（路由级 transition，ColorOS 不降帧），
 // transitionBuilder 内用弹簧 simulation 把线性 animation 映射成弹簧曲线。
-// 锚点展开：复用 setup_screen_android.dart 的 Matrix4 translate·scale·translate 技巧。
+// 锚点展开：复用 home_screen_android.dart 的 Matrix4 translate·scale·translate 技巧。
 
 import 'package:flutter/material.dart';
 

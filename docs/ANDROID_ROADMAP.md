@@ -20,7 +20,7 @@
 | 状态机 | `lib/features/session/session_controller.dart` | `decide(action)` / `undo()` / `run()` |
 | i18n | `lib/core/i18n/` | 94 键 en/zh，纯 Dart 字典，平台无关 |
 | 主题 | `lib/core/theme/` | app_colors / app_theme / noise_overlay，平台无关 |
-| 控制器 | `lib/features/{scan,review,run,setup}/` | 与平台无关 |
+| 控制器 | `lib/features/{scan,review,run,home}/` | 与平台无关 |
 | 单测 | `test/` | 44 测试全过，均针对桌面 FS 与纯 Dart 逻辑 |
 | 安卓壳工程 | `android/` | 标准 Flutter 生成，`MainActivity.kt` 仅 5 行模板 |
 

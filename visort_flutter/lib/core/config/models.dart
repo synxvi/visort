@@ -23,7 +23,7 @@ enum SortBy {
   dateTrashed,
 }
 
-/// 分类模式（安卓端 Setup 选择）。
+/// 分类模式（安卓端 Home 选择）。
 ///   - toAlbum  : 移动到「已有相册」（改 RELATIVE_PATH 到目标 bucket）
 ///   - toNewDir : 在指定父目录下新建子目录归类（桌面端传统模式）
 enum ClassifyMode {
@@ -31,7 +31,7 @@ enum ClassifyMode {
   toNewDir,
 }
 
-/// 首页（Setup 源相册区）相册列表布局。
+/// 首页（Home 源相册区）相册列表布局。
 enum HomeLayout { list, grid }
 
 /// 文件夹模板：快捷键 + 显示名（不含路径）。
@@ -234,9 +234,9 @@ class AppConfig {
     this.albumSortAsc = true,
     this.photoSortBy = SortBy.dateCreated,
     this.photoSortAsc = false,
-    this.homeLayout = HomeLayout.list,
-    this.homeGridColumns = 3,
-    this.photoGridColumns = 3,
+    this.homeLayout = HomeLayout.grid,
+    this.homeGridColumns = 4,
+    this.photoGridColumns = 4,
   });
 
   /// 所有 Profile（name → Profile）。
@@ -262,7 +262,7 @@ class AppConfig {
   final SortBy photoSortBy;
   final bool photoSortAsc;
 
-  /// 首页（Setup 源相册区）布局：列表 / 网格。
+  /// 首页（Home 源相册区）布局：列表 / 网格。
   final HomeLayout homeLayout;
 
   /// 首页网格列数（3 或 4）。
@@ -384,12 +384,12 @@ class AppConfig {
       photoSortAsc:
           (json['photo_sort_asc'] ?? json['photoSortAsc'] as bool?) ?? false,
       homeLayout: _parseHomeLayout(
-          json['home_layout'] ?? json['homeLayout'], HomeLayout.list),
+          json['home_layout'] ?? json['homeLayout'], HomeLayout.grid),
       homeGridColumns:
-          (json['home_grid_columns'] ?? json['homeGridColumns'] as int?) ?? 3,
+          (json['home_grid_columns'] ?? json['homeGridColumns'] as int?) ?? 4,
       photoGridColumns:
           (json['photo_grid_columns'] ?? json['photoGridColumns'] as int?) ??
-              3,
+              4,
     );
   }
 }

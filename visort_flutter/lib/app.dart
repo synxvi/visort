@@ -38,7 +38,7 @@ class VisortApp extends ConsumerWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      initialRoute: AppRoutes.setup,
+      initialRoute: AppRoutes.home,
       onGenerateRoute: onGenerateRoute,
       // 记录当前活动路由名，供 builder 判断是否套噪点
       navigatorObservers: [RouteNameObserver()],

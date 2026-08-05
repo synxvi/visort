@@ -33,7 +33,7 @@ Future<void> pushAlbumGrow(
   return Navigator.of(context).push(PageRouteBuilder<void>(
     transitionDuration: const Duration(milliseconds: 250),
     reverseTransitionDuration: const Duration(milliseconds: 180),
-    // pop 返回动画期间底下页面（Setup/Gallery）参与合成并可见
+    // pop 返回动画期间底下页面（Home/Gallery）参与合成并可见
     opaque: false,
     pageBuilder: (_, _, _) => AlbumScreen(
       bucketId: args['bucketId']?.toString() ?? '',

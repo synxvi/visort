@@ -1,4 +1,4 @@
-// Setup 控制器 —— Profile 管理 + 文件夹编辑 + 快捷键编辑
+// Home 控制器 —— Profile 管理 + 文件夹编辑 + 快捷键编辑
 //
 // 对应 Python 版:
 //   - profile switch/create/delete（app.py:862-947）
@@ -13,8 +13,8 @@ import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/config/profiles_service.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 
-class SetupController {
-  SetupController(this._ref);
+class HomeController {
+  HomeController(this._ref);
   final WidgetRef _ref;
 
   AppConfig get _config => _ref.read(configProvider);

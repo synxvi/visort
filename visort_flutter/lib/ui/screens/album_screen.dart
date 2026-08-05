@@ -22,6 +22,8 @@ import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/ui/router.dart';
 import 'package:visort_flutter/shared/widgets/scroll_drag_handle.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
+import 'package:visort_flutter/shared/widgets/spring_popup.dart';
+import 'package:visort_flutter/shared/widgets/toast.dart';
 
 import 'album_common.dart';
 import 'photo_viewer.dart';
@@ -68,6 +70,30 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// 飞行层终点：当前照片所在 cell 的屏幕位置（翻页时滚动网格到该行后计算）。
   Rect? _flightEndRect;
 
+  // ── 批量选择模式：长按 cell 进入，勾选后底部操作栏执行批量操作 ──
+  bool _selectMode = false;
+  final Set<String> _selectedIds = {};
+
+  void _enterSelectMode(String id) {
+    setState(() {
+      _selectMode = true;
+      _selectedIds.add(id);
+    });
+  }
+
+  void _exitSelectMode() {
+    setState(() {
+      _selectMode = false;
+      _selectedIds.clear();
+    });
+  }
+
+  void _toggleSelect(String id) {
+    setState(() {
+      if (!_selectedIds.remove(id)) _selectedIds.add(id);
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -89,6 +115,9 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   void dispose() {
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
+    // 退出相册：保存桶快照（同桶重进秒出）+ 重查相册列表（返回首页刷新
+    // count/封面，删除/恢复后不残留旧数据）。
+    ref.read(galleryControllerProvider.notifier).exitBucket();
     super.dispose();
   }
 
@@ -103,40 +132,78 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   @override
   Widget build(BuildContext context) {
     final gallery = ref.watch(galleryControllerProvider);
-    return Scaffold(
+    // 勾选态拦截返回：系统返回/返回箭头先取消勾选态，不退出页面
+    // （对标系统相册；再按一次才真正退出）。
+    return PopScope(
+      canPop: !_selectMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _selectMode) _exitSelectMode();
+      },
+      child: Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.text,
         // 标题紧贴返回箭头（默认 titleSpacing 16 会显得相册名离箭头太远）
         titleSpacing: 0,
-        title: Text(
-          widget.trashedOnly
-              ? t(ref, 'trash_title')
-              : (widget.favoritesOnly
-                  ? t(ref, 'favorites_title')
-                  : (widget.bucketName ?? t(ref, 'gallery_title'))),
-          style: TextStyle(
-            fontFamily: 'Space Mono', height: 1.2,
-            fontFamilyFallback: AppFonts.cjkFallback,
-            fontWeight: FontWeight.w700,
-            fontSize: 16,
-          ),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: [
-          SortToggle(
-            sortBy: gallery.effectivePhotoSortBy,
-            asc: gallery.photoSortAsc,
-            // 回收站视图额外提供「按删除日期」
-            showDateTrashed: widget.trashedOnly,
-            onChanged: (by, asc) =>
-                ref.read(galleryControllerProvider.notifier).setPhotoSort(by, asc),
-          ),
-        ],
+        title: _selectMode
+            ? Text(
+                t(ref, 'selected_n', [_selectedIds.length]),
+                style: TextStyle(
+                  fontFamily: 'Space Mono', height: 1.2,
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                ),
+              )
+            : Text(
+                widget.trashedOnly
+                    ? t(ref, 'trash_title')
+                    : (widget.favoritesOnly
+                        ? t(ref, 'favorites_title')
+                        : (widget.bucketName ?? t(ref, 'gallery_title'))),
+                style: TextStyle(
+                  fontFamily: 'Space Mono', height: 1.2,
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+        actions: _selectMode
+            ? [
+                IconButton(
+                  icon: const Icon(Icons.select_all),
+                  tooltip: t(ref, 'select_all'),
+                  onPressed: () => setState(() {
+                    final photos =
+                        ref.read(galleryControllerProvider).photos;
+                    _selectedIds.addAll(photos.map((p) => p.id));
+                  }),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  tooltip: t(ref, 'batch_cancel'),
+                  onPressed: _exitSelectMode,
+                ),
+              ]
+            : [
+                SortToggle(
+                  sortBy: gallery.effectivePhotoSortBy,
+                  asc: gallery.photoSortAsc,
+                  // 回收站视图额外提供「按删除日期」
+                  showDateTrashed: widget.trashedOnly,
+                  onChanged: (by, asc) => ref
+                      .read(galleryControllerProvider.notifier)
+                      .setPhotoSort(by, asc),
+                ),
+              ],
       ),
       body: SafeArea(child: _buildBody(gallery)),
+      // 批量选择模式：底部操作栏（按视图模式提供不同批量操作）
+      bottomNavigationBar: _selectMode ? _buildBatchBar(gallery) : null,
+      ),
     );
   }
 
@@ -210,8 +277,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             return _PhotoCell(
               info: info,
               thumbSize: thumbSize,
-              onTap: (cellRect) =>
-                  _openViewer(context, gallery, photos, i, cellRect),
+              selectMode: _selectMode,
+              selected: _selectedIds.contains(info.id),
+              onTap: (cellRect) => _selectMode
+                  ? _toggleSelect(info.id)
+                  : _openViewer(context, gallery, photos, i, cellRect),
+              onLongPress:
+                  _selectMode ? null : () => _enterSelectMode(info.id),
             );
           },
         ),
@@ -230,6 +302,230 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         ),
       ],
     );
+  }
+
+  /// 批量选择模式的底部操作栏：按视图模式提供不同操作。
+  /// 普通相册：批量删除（移入回收站）；收藏：取消收藏 + 删除；回收站：恢复 + 彻底删除。
+  Widget _buildBatchBar(GalleryState gallery) {
+    final enabled = _selectedIds.isNotEmpty;
+    Widget op(IconData icon, String label, Color color, VoidCallback? onTap) =>
+        Expanded(
+          child: TextButton.icon(
+            onPressed: enabled ? onTap : null,
+            icon: Icon(icon, size: 18),
+            label: Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12)),
+            style: TextButton.styleFrom(foregroundColor: color),
+          ),
+        );
+    final ops = widget.trashedOnly
+        ? [
+            op(Icons.restore, t(ref, 'action_restore'), AppColors.accent,
+                _runBatchRestore),
+            op(Icons.delete_forever, t(ref, 'delete_permanently'),
+                AppColors.danger, _runBatchDelete),
+          ]
+        : widget.favoritesOnly
+            ? [
+                op(Icons.favorite_border, t(ref, 'action_unfavorite'),
+                    AppColors.accent, _runBatchUnfavorite),
+                op(Icons.delete_outline, t(ref, 'delete_photo'),
+                    AppColors.danger, _runBatchTrash),
+              ]
+            : [
+                op(Icons.favorite_border, t(ref, 'action_favorite'),
+                    AppColors.accent, _runBatchFavorite),
+                op(Icons.delete_outline, t(ref, 'delete_photo'),
+                    AppColors.danger, _runBatchTrash),
+              ];
+    return SafeArea(
+      child: Container(
+        color: AppColors.surface,
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(children: ops),
+      ),
+    );
+  }
+
+  /// 当前仍存在于列表中的选中 id（observer/外部变更可能已移除部分）。
+  List<String> _currentSelectedIds() {
+    final photos = ref.read(galleryControllerProvider).photos;
+    return _selectedIds.where((id) => photos.any((p) => p.id == id)).toList();
+  }
+
+  /// 批量移入回收站（普通相册/收藏视图的「批量删除」）。
+  Future<void> _runBatchTrash() async {
+    final ids = _currentSelectedIds();
+    if (ids.isEmpty) {
+      _exitSelectMode();
+      return;
+    }
+    final confirmed = await showCenterDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text(t(ref, 'batch_delete_confirm', [ids.length]),
+            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 15)),
+        actions: [
+          Row(
+            children: [
+              Expanded(
+                child: TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: Text(t(ref, 'cancel'),
+                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.danger,
+                      foregroundColor: AppColors.bg),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: Text(t(ref, 'confirm')),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final err = await ref
+        .read(galleryControllerProvider.notifier)
+        .trashPhotos(ids);
+    if (!mounted) return;
+    _exitSelectMode();
+    toast(context, err == null ? t(ref, 'trashed') : t(ref, 'trash_unsupported'));
+  }
+
+  /// 批量从回收站恢复。
+  Future<void> _runBatchRestore() async {
+    final ids = _currentSelectedIds();
+    if (ids.isEmpty) {
+      _exitSelectMode();
+      return;
+    }
+    final confirmed = await showCenterDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text(t(ref, 'batch_restore_confirm', [ids.length]),
+            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 15)),
+        actions: [
+          Row(
+            children: [
+              Expanded(
+                child: TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: Text(t(ref, 'cancel'),
+                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.accent,
+                      foregroundColor: AppColors.bg),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: Text(t(ref, 'confirm')),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final err = await ref
+        .read(galleryControllerProvider.notifier)
+        .restorePhotos(ids);
+    if (!mounted) return;
+    _exitSelectMode();
+    toast(context, err == null ? t(ref, 'restored') : t(ref, 'restore_failed'));
+  }
+
+  /// 批量彻底删除（回收站视图）。
+  Future<void> _runBatchDelete() async {
+    final ids = _currentSelectedIds();
+    if (ids.isEmpty) {
+      _exitSelectMode();
+      return;
+    }
+    final confirmed = await showCenterDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text(t(ref, 'delete_permanently'),
+            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 15)),
+        content: Text(t(ref, 'batch_delete_permanent_confirm', [ids.length]),
+            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)),
+        actions: [
+          Row(
+            children: [
+              Expanded(
+                child: TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: Text(t(ref, 'cancel'),
+                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.danger,
+                      foregroundColor: AppColors.bg),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: Text(t(ref, 'confirm')),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final err = await ref
+        .read(galleryControllerProvider.notifier)
+        .deletePhotos(ids);
+    if (!mounted) return;
+    _exitSelectMode();
+    toast(context, err == null ? t(ref, 'deleted') : t(ref, 'delete_failed'));
+  }
+
+  /// 批量收藏（普通相册；与单张收藏切换一致不弹窗，乐观更新）。
+  Future<void> _runBatchFavorite() async {
+    final ids = _currentSelectedIds();
+    if (ids.isEmpty) {
+      _exitSelectMode();
+      return;
+    }
+    final err = await ref
+        .read(galleryControllerProvider.notifier)
+        .setFavorites(ids, true);
+    if (!mounted) return;
+    _exitSelectMode();
+    toast(context, err == null ? t(ref, 'favorited') : t(ref, 'favorite_failed'));
+  }
+
+  /// 批量取消收藏（收藏视图；与单张收藏切换一致不弹窗，乐观更新）。
+  Future<void> _runBatchUnfavorite() async {
+    final ids = _currentSelectedIds();
+    if (ids.isEmpty) {
+      _exitSelectMode();
+      return;
+    }
+    final err = await ref
+        .read(galleryControllerProvider.notifier)
+        .setFavorites(ids, false);
+    if (!mounted) return;
+    _exitSelectMode();
+    toast(context, err == null ? t(ref, 'unfavorited') : t(ref, 'favorite_failed'));
   }
 
   /// 打开大图浏览器：用 PageRouteBuilder 的 transitionsBuilder 实现
@@ -450,11 +746,18 @@ class _PhotoCell extends StatelessWidget {
     required this.info,
     required this.onTap,
     required this.thumbSize,
+    this.selectMode = false,
+    this.selected = false,
+    this.onLongPress,
   });
   final MsImageInfo info;
   final ValueChanged<Rect?> onTap;
   /// 缩略图像素尺寸（cell 逻辑宽 × dpr，物理对齐，替代固定 300）。
   final int thumbSize;
+  /// 批量选择模式：点击切换勾选而非打开 viewer；显示右上角勾选圈。
+  final bool selectMode;
+  final bool selected;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -468,32 +771,61 @@ class _PhotoCell extends StatelessWidget {
         debugPrint('[Flight] onTap box=$box rect=$rect');
         onTap(rect);
       },
-      child: Image(
-        image: buildThumbnailProvider(ref,
-            size: thumbSize, dateModifiedMs: info.dateModifiedMs),
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        // 两级渐进（对标系统相册 xqip/EXIF 占位 → 清晰替换）：
-        // 清晰层加载中先显示小尺寸层（Kotlin 侧 ≤128px 优先 EXIF 内嵌缩略图，
-        // ~5ms 秒显，替代纯灰底等待），清晰层完成直切。磁盘缓存命中时
-        // 两层近同步完成,无感。
-        loadingBuilder: (ctx, child, progress) {
-          if (progress == null) return child;
-          return ColoredBox(
-            color: AppColors.surface,
-            child: Image(
-              image: buildThumbnailProvider(ref,
-                  size: kThumbnailPlaceholderSize,
-                  dateModifiedMs: info.dateModifiedMs),
-              fit: BoxFit.cover,
-              gaplessPlayback: true,
-              errorBuilder: (_, _, _) =>
-                  const ColoredBox(color: AppColors.surface),
+      onLongPress: onLongPress,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Image(
+            image: buildThumbnailProvider(ref,
+                size: thumbSize, dateModifiedMs: info.dateModifiedMs),
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            // 两级渐进（对标系统相册 xqip/EXIF 占位 → 清晰替换）：
+            // 清晰层加载中先显示小尺寸层（Kotlin 侧 ≤128px 优先 EXIF 内嵌缩略图，
+            // ~5ms 秒显，替代纯灰底等待），清晰层完成直切。磁盘缓存命中时
+            // 两层近同步完成,无感。
+            loadingBuilder: (ctx, child, progress) {
+              if (progress == null) return child;
+              return ColoredBox(
+                color: AppColors.surface,
+                child: Image(
+                  image: buildThumbnailProvider(ref,
+                      size: kThumbnailPlaceholderSize,
+                      dateModifiedMs: info.dateModifiedMs),
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) =>
+                      const ColoredBox(color: AppColors.surface),
+                ),
+              );
+            },
+            errorBuilder: (_, _, _) =>
+                const ColoredBox(color: AppColors.surface),
+          ),
+          // 批量选择模式的勾选圈：右上角，选中实心 accent + 对勾，未选空心
+          if (selectMode)
+            Positioned(
+              top: 6,
+              right: 6,
+              child: Container(
+                width: 20,
+                height: 20,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: selected
+                      ? AppColors.accent
+                      : AppColors.bg.withValues(alpha: 0.6),
+                  border: Border.all(
+                    color: selected ? AppColors.accent : Colors.white70,
+                    width: 1.5,
+                  ),
+                ),
+                child: selected
+                    ? const Icon(Icons.check, size: 14, color: AppColors.bg)
+                    : null,
+              ),
             ),
-          );
-        },
-        errorBuilder: (_, _, _) =>
-            const ColoredBox(color: AppColors.surface),
+        ],
       ),
     );
   }
