@@ -18,12 +18,12 @@ import com.synxvi.visort.mediastore.MediaStorePlugin
 class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        // 注册 MediaStore MethodChannel + EventChannel plugin（sortr/mediastore）
+        // 注册 MediaStore MethodChannel + EventChannel plugin（visort/mediastore）
         flutterEngine.plugins.add(MediaStorePlugin())
         // SAF plugin 已移除（MediaStore 取代）。非媒体文件场景如需恢复，需重新引入 saf 包。
         // 「回桌面」通道：首页（根路由）右滑返回时 Dart 调 moveTaskToBack，
         // 等效 Home 键（task 保留后台，不 finish——finish 会从最近任务移除应用）。
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "sortr/app")
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "visort/app")
             .setMethodCallHandler { call, result ->
                 if (call.method == "moveTaskToBack") {
                     runOnUiThread { moveTaskToBack(true) }
@@ -46,9 +46,9 @@ class MainActivity : FlutterActivity() {
 
     // 固定帧率声明：Surface.setFrameRate(FIXED_SOURCE)。
     //
-    // 背景（2026-08 实测，OnePlus/ColorOS 16）：SORTR 双指捏合缩放时刷新率不稳定——
+    // 背景（2026-08 实测，OnePlus/ColorOS 16）：VISORT 双指捏合缩放时刷新率不稳定——
     // 开发者选项“全局显示屏幕刷新率”显示 1/30/120 跳变，系统相册则稳定 120。
-    // 原因：ColorOS 智能帧率根据 app 帧提交节奏动态切 display mode；SORTR 从未显式
+    // 原因：ColorOS 智能帧率根据 app 帧提交节奏动态切 display mode；VISORT 从未显式
     // 声明渲染帧率（SurfaceFlinger layer 无 frameRate 字段），提交节奏一波动就降档，
     // 形成低档/高档震荡。
     // 修复：对渲染 surface 声明 FIXED_SOURCE 帧率 = 设备最高刷新率，明确告知系统
@@ -94,7 +94,7 @@ class MainActivity : FlutterActivity() {
             )
         } catch (e: Throwable) {
             // 个别 OEM 实现差异——忽略，回退系统默认策略
-            android.util.Log.w("SortrFPS", "setFrameRate failed: $e")
+            android.util.Log.w("VisortFPS", "setFrameRate failed: $e")
         }
     }
 

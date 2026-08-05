@@ -495,7 +495,7 @@ class MediaStoreRepository(private val context: Context) {
     /// 本方法 native 端只解码 targetWidth 附近像素(inSampleSize 下采样,
     /// 不解全 1200 万像素),JPEG 95 高质量压缩后交 Dart decode 小图——
     /// 解码量 12MP → ~3MP,相机大图全图解码 ~250ms → ~80-100ms,质量从原图解码保证清晰。
-    /// (系统相册走私有 native libcodec 区域解码;sortr 用标准 BitmapFactory
+    /// (系统相册走私有 native libcodec 区域解码;visort 用标准 BitmapFactory
     ///  + inSampleSize 下采样,同样只解目标尺寸像素,够用。)
     fun readSampledImage(id: String, targetWidth: Int): Map<String, Any> {
         val longId = id.toLongOrNull() ?: throw MsError.InvalidArg("非法图片 id: $id")
@@ -558,7 +558,7 @@ class MediaStoreRepository(private val context: Context) {
     /// API <29 不支持 loadThumbnail，返回空数组 —— Dart 侧检测到空回退 readBytes 全图下采样。
     ///
     /// 磁盘缩略图缓存（对标系统相册 mem→disk 两级缓存）：首次 loadThumbnail + 编码后
-    /// 落盘 {cacheDir}/sortr_thumb/{width}x{height}/{id}.jpg，二次进入零解码直出；
+    /// 落盘 {cacheDir}/visort_thumb/{width}x{height}/{id}.jpg，二次进入零解码直出；
     /// [dateModifiedMs]（源图 DATE_MODIFIED 毫秒）非空时用文件 mtime 校验源图是否
     /// 编辑过——编辑后 mtime < 新 dateModified → 自动失效重取，零额外查询。
     /// 容量上限 [MAX_THUMBNAIL_CACHE_BYTES]，超出按 mtime 删最旧。
@@ -696,7 +696,7 @@ class MediaStoreRepository(private val context: Context) {
 
     /// 缩略图磁盘缓存目录（app cache，系统可清）。
     private val thumbnailCacheDir: File by lazy {
-        File(context.cacheDir, "sortr_thumb").apply { mkdirs() }
+        File(context.cacheDir, "visort_thumb").apply { mkdirs() }
     }
 
     companion object {

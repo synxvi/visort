@@ -1,6 +1,6 @@
-# sortr_flutter
+# visort_flutter
 
-**SORTR** 的 Flutter 重写版——键盘驱动的图片 / 相册整理应用，同时是一个现代相册浏览器。
+**VISORT** 的 Flutter 重写版——键盘驱动的图片 / 相册整理应用，同时是一个现代相册浏览器。
 
 > 仓库根目录的 [`AGENTS.md`](../AGENTS.md) 是权威的架构与开发指南；本文件仅作快速上手。
 > 完整架构决策见 [`docs/ANDROID_ROADMAP.md`](../docs/ANDROID_ROADMAP.md)。

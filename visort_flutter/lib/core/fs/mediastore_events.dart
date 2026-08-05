@@ -1,4 +1,4 @@
-// MediaStore 变更事件流 —— 对接 Kotlin 侧 EventChannel（sortr/mediastore-events）
+// MediaStore 变更事件流 —— 对接 Kotlin 侧 EventChannel（visort/mediastore-events）
 //
 // Kotlin 端 ContentObserver 监听 MediaStore.Images 变化，图库增删/扫描完成时
 // 通过 EventChannel 推送「结构化事件」（P1c）：{type, id?, bucketId?}。
@@ -12,7 +12,7 @@
 
 import 'package:flutter/services.dart';
 
-const _kEventsChannel = 'sortr/mediastore-events';
+const _kEventsChannel = 'visort/mediastore-events';
 
 /// 变更事件类型。
 enum MsChangeType { refresh, insert, update, delete }

@@ -26,8 +26,8 @@ import java.util.concurrent.Executors
 // ───────────────────────── MediaStore MethodChannel 入口 ─────────────────────────
 //
 // 对接 Dart 侧 AndroidMediaStoreFileSystem。
-// channel: "sortr/mediastore"
-// events channel: "sortr/mediastore-events"（ContentObserver 变更通知）
+// channel: "visort/mediastore"
+// events channel: "visort/mediastore-events"（ContentObserver 变更通知）
 //
 // 方法：
 //   listBuckets()               → 列出所有相册（id/name/count）
@@ -50,8 +50,8 @@ import java.util.concurrent.Executors
 //   3. RequestPermissionsResultListener 处理权限请求回调
 //   4. EventChannel + ContentObserver：图库增删时主动通知 Dart 端刷新
 
-private const val CHANNEL = "sortr/mediastore"
-private const val EVENTS_CHANNEL = "sortr/mediastore-events"
+private const val CHANNEL = "visort/mediastore"
+private const val EVENTS_CHANNEL = "visort/mediastore-events"
 private const val TAG = "MsPlugin"
 
 private const val REQUEST_DELETE = 0x4D53 // "MS"

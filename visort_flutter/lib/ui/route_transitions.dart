@@ -33,13 +33,13 @@ Route<T> couiSlideRoute<T>({
       final width = MediaQuery.sizeOf(ctx).width;
 
       // ① 进入/退出（animation 驱动本路由）：
-      //    push: x 从 +30% 宽度 → 0（一加用 100%，sortr 用 30% 更紧凑，
+      //    push: x 从 +30% 宽度 → 0（一加用 100%，visort 用 30% 更紧凑，
       //    避免深色背景下大位移像"飞入"）。
       final enterT = AppCurves.slideEnter.transform(animation.value);
       final enterX = (1 - enterT) * 0.3 * width;
 
       // ② 被推/被拉回（secondaryAnimation 驱动本路由，当新路由压在上面时）：
-      //    左移 -8% + alpha 1→0.5 暗化（一加 -30%/0.5，sortr 用 -8% 更克制）。
+      //    左移 -8% + alpha 1→0.5 暗化（一加 -30%/0.5，visort 用 -8% 更克制）。
       final exitT = AppCurves.slideExit.transform(secondary.value);
       final exitX = -exitT * 0.08 * width;
       final exitAlpha = 1 - 0.5 * AppCurves.couiEase.transform(secondary.value);

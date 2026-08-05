@@ -1,6 +1,6 @@
 <div align="center">
 
-# SORTR
+# VISORT
 
 **Keyboard-Driven Image & Album Organizer** — Desktop + Android
 
@@ -16,9 +16,9 @@ Browse photos one by one, sort them into folders with a single keypress. Nothing
 
 ---
 
-## Why SORTR?
+## Why VISORT?
 
-Hundreds of photos piling up in one folder? SORTR lets you sort them as fast as you can react — eyes on the image, one key per decision. A few minutes to archive hundreds of photos into the right places.
+Hundreds of photos piling up in one folder? VISORT lets you sort them as fast as you can react — eyes on the image, one key per decision. A few minutes to archive hundreds of photos into the right places.
 
 **Core principle: every operation is staged first, executed only on confirmation.** No accidental deletes, no accidental moves.
 

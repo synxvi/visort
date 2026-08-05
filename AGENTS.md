@@ -6,7 +6,7 @@
 
 ## Project Overview
 
-**SORTR** is a keyboard-driven desktop + mobile image organizer. It scans directories recursively, presents images one-by-one, and lets users sort each into configurable folders via single-key shortcuts. **Core invariant: all operations are staged in memory and only executed when the user explicitly confirms "Run"** — no file moves or deletes happen until then.
+**VISORT** is a keyboard-driven desktop + mobile image organizer. It scans directories recursively, presents images one-by-one, and lets users sort each into configurable folders via single-key shortcuts. **Core invariant: all operations are staged in memory and only executed when the user explicitly confirms "Run"** — no file moves or deletes happen until then.
 
 Workflow: **Setup → Sort → Review → Results**. Android adds a Gallery/Album browser for MediaStore albums.
 
@@ -50,7 +50,7 @@ Provider styles are deliberately mixed:
 `FileSystemRepository` (`core/fs/file_system_repository.dart`) is the platform-agnostic contract (`pickDirectories`, `scanImages`, `move`/`moveBatch`, `delete`/`deleteBatch`, `readMeta`, `exists`, `joinPath`, `readBytes`). Implementations:
 
 - **`DesktopFileSystem`** (`core/fs/desktop_file_system.dart`) — `dart:io` + `file_picker`; conflict rename appends `_1`/`_2`; cross-device move falls back to copy+delete.
-- **`AndroidMediaStoreFileSystem`** (`core/fs/android_mediastore_file_system.dart`) — active Android path, talks to a Kotlin `MediaStore` plugin over the `'sortr/mediastore'` MethodChannel.
+- **`AndroidMediaStoreFileSystem`** (`core/fs/android_mediastore_file_system.dart`) — active Android path, talks to a Kotlin `MediaStore` plugin over the `'visort/mediastore'` MethodChannel.
 
 > **Two data paths (do not merge).** Classification flows through `FileSystemRepository` → `AndroidMediaStoreFileSystem` (model: `ImageRef`). Album browsing (`GalleryController`) talks to `MediaStoreChannel` **directly** (model: `MsImageInfo`), bypassing the repository — it needs a richer model (dates/size/MIME) than `ImageRef` offers. This is a deliberate long-term split; do not force album into `FileSystemRepository`. See `docs/ANDROID_ROADMAP.md` §7.2. (`AndroidSafFileSystem` was removed in v2 — MediaStore is the sole Android image path; SAF code is gone, not just deprecated.)
 
@@ -147,13 +147,13 @@ python tools/generate_icons.py          # regenerates Android mipmap + adaptive 
 | File | Role |
 |---|---|
 | `visort_flutter/lib/main.dart` | Entry; platform-forked init, builds/seeds `ProviderContainer` |
-| `visort_flutter/lib/app.dart` | Root `SortrApp` `MaterialApp`, theme, locale, noise overlay |
+| `visort_flutter/lib/app.dart` | Root `VisortApp` `MaterialApp`, theme, locale, noise overlay |
 | `visort_flutter/lib/ui/router.dart` | Named routes, setup platform-fork, navigator key |
 | `visort_flutter/lib/features/session/session_controller.dart` | **Core decision state machine** (`decide`/`undo`/`initFromScan`) |
 | `visort_flutter/lib/features/session/session_models.dart` | `SessionState`, `Decision`, `DecisionAction`, `kRootDestKey='__root__'` |
 | `visort_flutter/lib/features/run/run_controller.dart` | Streaming execute (`Stream<RunProgress>`), MediaStore batching |
 | `visort_flutter/lib/core/config/models.dart` | All `@immutable` config models + manual JSON codec |
-| `visort_flutter/lib/core/config/profiles_service.dart` | Persistence (`shared_preferences['sortr_config']`), validation, `computeDestinationFolders` |
+| `visort_flutter/lib/core/config/profiles_service.dart` | Persistence (`shared_preferences['visort_config']`), validation, `computeDestinationFolders` |
 | `visort_flutter/lib/core/i18n/i18n.dart` | `tr`/`t` + **global providers** (`configProvider`, `profilesServiceProvider`, `currentLanguageProvider`) |
 | `visort_flutter/lib/core/fs/file_system_repository.dart` | Platform-agnostic FS contract + `imageExtensions` (18 formats) |
 | `visort_flutter/lib/core/fs/fs_provider.dart` | Platform fork → `AndroidMediaStoreFileSystem` / `DesktopFileSystem` |

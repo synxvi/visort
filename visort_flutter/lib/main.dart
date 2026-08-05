@@ -60,7 +60,7 @@ Future<void> main() async {
 
   runApp(UncontrolledProviderScope(
     container: container,
-    child: const SortrApp(),
+    child: const VisortApp(),
   ));
 
   // 临时 FPS 统计（排查 30 帧问题用，定位后移除）：用真实时间窗统计

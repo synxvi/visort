@@ -19,7 +19,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'models.dart';
 
 /// shared_preferences 中存储 AppConfig JSON 的 key。
-const _kPrefKey = 'sortr_config';
+const _kPrefKey = 'visort_config';
 
 /// 文件夹描述符：模板 + 完整路径（供 Session 决策时拿到 destPath）。
 @immutable

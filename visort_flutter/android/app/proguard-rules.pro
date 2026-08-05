@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────
-# SORTR Flutter —— R8 / ProGuard keep 规则
+# VISORT Flutter —— R8 / ProGuard keep 规则
 # ─────────────────────────────────────────────────────────────
 # 配合 app/build.gradle.kts 的 isMinifyEnabled=true 使用。
 # 本应用自定义插件通过 MainActivity.configureFlutterEngine() 直接

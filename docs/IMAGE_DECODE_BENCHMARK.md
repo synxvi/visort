@@ -1,10 +1,10 @@
 # 图片解码管线:对标系统相册的优化记录
 
-> 记录 sortr 安卓 viewer 图片解码优化的调研与实施。逆向对标:一加 13 系统相册 `com.coloros.gallery3d`。
+> 记录 visort 安卓 viewer 图片解码优化的调研与实施。逆向对标:一加 13 系统相册 `com.coloros.gallery3d`。
 
 ## 1. 背景
 
-sortr viewer 打开图片有 250ms 缩放(飞行)动画。若解码在动画期内没完成,viewer 显现后会继续垫 300px 模糊缩略图直到清晰图就绪——表现为「模糊全屏帧很久」。目标:让清晰图在动画结束瞬间就位。
+visort viewer 打开图片有 250ms 缩放(飞行)动画。若解码在动画期内没完成,viewer 显现后会继续垫 300px 模糊缩略图直到清晰图就绪——表现为「模糊全屏帧很久」。目标:让清晰图在动画结束瞬间就位。
 
 ## 2. 系统相册解码逆向(对标基准)
 
@@ -31,11 +31,11 @@ sortr viewer 打开图片有 250ms 缩放(飞行)动画。若解码在动画期�
 
 打开动画容器 `PhotoAnimatedReplacementView` 不解码(只是 View 替换壳 + spring/alpha)。真正显示图的是 `SkImageView`(画 TileDrawable)。打开瞬间通过资源服务后台协程解码到 ~1152px;首帧可能先画已缓存的列表缩略图承接,1152 就位后渐进到 2048(type 9)+ 原图瓦片。状态机 `FirstFrameRenderingStatus`(THUMBNAIL_READY→CONTENT_READY→ALL_READY)驱动首帧上报。
 
-## 3. sortr 根因:JPEG 中转链
+## 3. visort 根因:JPEG 中转链
 
-sortr 原链路(native decode → compress JPEG → dart 再 decode)比系统相册多两步 codec + 跨界字节拷贝:
+visort 原链路(native decode → compress JPEG → dart 再 decode)比系统相册多两步 codec + 跨界字节拷贝:
 
-| 步骤 | sortr(原)| 系统相册 |
+| 步骤 | visort(原)| 系统相册 |
 |---|---|---|
 | 1 | BitmapFactory 解 JPEG | BitmapFactory 解 JPEG(相同)|
 | 2 | **compress JPEG 95 再编码**(~30-50ms)| 无 |
@@ -64,11 +64,11 @@ sortr 原链路(native decode → compress JPEG → dart 再 decode)比系统相
 - 性价比:P0 已拿根因 ~80%,P2 增量主要是省 raw 拷贝(~4MB),但改动与风险远大于 P0。仅当 P0 后仍感知卡顿且定位到是 raw 拷贝/GPU 上传瓶颈时再做。
 
 ### P3 放大 RegionDecoder 瓦片 — ⏸ 未实施
-- 对标 `GalleryTileRegionDecoder`(`nativeDecodeRegion` + 1024px TileDrawable)。替掉 sortr `_hdTriggered` 的 readBytes 全图(后者放大时又走一遍跨界全图链)。
+- 对标 `GalleryTileRegionDecoder`(`nativeDecodeRegion` + 1024px TileDrawable)。替掉 visort `_hdTriggered` 的 readBytes 全图(后者放大时又走一遍跨界全图链)。
 - 简化版(视口单块)平移体验差;完整瓦片系统(瓦片池 + 视口调度 + LRU)大工程。放大是低频操作,P0/P1 后暂缓,作单独专题。
 
 ### P4 inBitmap Bitmap 池复用 — ⏸ 未实施
-- 对标 `a.java:179`(Options 池)、`b49.java:465`(inBitmap)。sortr Kotlin 侧每次 new,可加池减 GC。收益小、改动小。
+- 对标 `a.java:179`(Options 池)、`b49.java:465`(inBitmap)。visort Kotlin 侧每次 new,可加池减 GC。收益小、改动小。
 
 ## 5. 反编译产物与阅读方式
 

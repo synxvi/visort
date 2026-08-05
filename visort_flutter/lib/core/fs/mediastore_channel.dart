@@ -1,6 +1,6 @@
 // MediaStore MethodChannel 客户端 —— Dart 侧对 Kotlin MediaStorePlugin 的薄封装
 //
-// channel: sortr/mediastore
+// channel: visort/mediastore
 // 对接 MediaStore.Images.Media，实现相册列表/扫描/读取/批量删除。
 // 取代 A0-A3 的 saf_channel.dart（SAF 方案）。
 //
@@ -12,7 +12,7 @@
 import 'package:flutter/services.dart';
 import 'package:visort_flutter/core/config/models.dart';
 
-const _kChannel = 'sortr/mediastore';
+const _kChannel = 'visort/mediastore';
 
 /// MethodChannel 单例（整个 app 共享一个 channel，底层无状态）。
 final MethodChannel msMethodChannel = const MethodChannel(_kChannel);
@@ -141,7 +141,7 @@ class MsScanPage {
 
 /// MediaStore MethodChannel 客户端。
 ///
-/// 默认走 `sortr/mediastore` channel；测试/解耦时可注入自定义 channel
+/// 默认走 `visort/mediastore` channel；测试/解耦时可注入自定义 channel
 /// （GalleryController 经 Provider 注入，便于 fake）。构造函数保持 const——
 /// 默认 channel 用 const MethodChannel 内联，使 `const MediaStoreChannel()` 合法。
 class MediaStoreChannel {

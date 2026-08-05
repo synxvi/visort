@@ -446,12 +446,12 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
     // 检测相册内排序是否变化（从相册返回时封面需更新）
     _maybeRefreshCovers();
     // 首页（根路由）右滑/返回：等效 Home 键回桌面（task 保留后台，不 finish）。
-    // 需要 MainActivity 的 sortr/app channel 配合 moveTaskToBack。
+    // 需要 MainActivity 的 visort/app channel 配合 moveTaskToBack。
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) {
-          const MethodChannel('sortr/app').invokeMethod('moveTaskToBack');
+          const MethodChannel('visort/app').invokeMethod('moveTaskToBack');
         }
       },
       child: Scaffold(
@@ -955,7 +955,7 @@ class _SetupScreenAndroidState extends ConsumerState<SetupScreenAndroid>
   /// 实时持久化 toNewDir 编辑（父目录 + 子目录）到 config：内存即时更新，
   /// 磁盘 save 防抖 400ms（避免每个按键都写 SharedPreferences）。
   /// 空父目录存 null、子目录存原始 label（含空串）→ 重启恢复后输入框为空、
-  /// 显示灰色 hint（Sortr / folder N），与未编辑状态一致。
+  /// 显示灰色 hint（Visort / folder N），与未编辑状态一致。
   void _persistNewDir() {
     final config = ref.read(configProvider);
     final oldProfile = config.activeProfileData;

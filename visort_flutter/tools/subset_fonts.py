@@ -18,7 +18,7 @@ Flutter 引擎在启动时会把它全量注册到 FontCollection，是安卓冷
 
 用法：
     pip install fonttools brotli zopfli
-    cd sortr_flutter
+    cd visort_flutter
     python tools/subset_fonts.py
 
 可重复执行：每次会用原始 .full.ttf 作为输入（首次运行会自动备份）。

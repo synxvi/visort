@@ -13,7 +13,7 @@ void main() {
   late DesktopFileSystem fs;
 
   setUp(() async {
-    tempDir = await Directory.systemTemp.createTemp('sortr_test_');
+    tempDir = await Directory.systemTemp.createTemp('visort_test_');
     fs = DesktopFileSystem();
   });
 

@@ -1,16 +1,16 @@
-# SORTR 相册功能增强调研报告
+# VISORT 相册功能增强调研报告
 
 > 调研日期：2026-07-31
 > 目的：为安卓相册功能增强寻找技术栈相近的开源项目，评估可复用代码与可借鉴设计。
-> 本项目基线：Flutter + Riverpod ^2.6.1 + 自建 Kotlin MediaStore channel（MethodChannel `sortr/mediastore` + EventChannel `sortr/mediastore-events`，ContentObserver 300ms 防抖），keyset 游标分页，MsImageInfo 内存模型。
+> 本项目基线：Flutter + Riverpod ^2.6.1 + 自建 Kotlin MediaStore channel（MethodChannel `visort/mediastore` + EventChannel `visort/mediastore-events`，ContentObserver 300ms 防抖），keyset 游标分页，MsImageInfo 内存模型。
 
 ---
 
 ## 0. 候选筛选
 
-针对 SORTR 技术栈（Flutter + Android Kotlin + MediaStore + 自建 channel）筛选 3 个最接近的开源项目：
+针对 VISORT 技术栈（Flutter + Android Kotlin + MediaStore + 自建 channel）筛选 3 个最接近的开源项目：
 
-| 仓库 | ⭐ | 许可证 | 定位 | 与 SORTR 契合 | 核心价值 |
+| 仓库 | ⭐ | 许可证 | 定位 | 与 VISORT 契合 | 核心价值 |
 |---|---|---|---|---|---|
 | [`fluttercandies/flutter_photo_manager`](https://github.com/fluttercandies/flutter_photo_manager) | 769 | Apache-2.0 | 相册管理**底层插件**（封装 MediaStore） | **高**（技术栈同构） | Kotlin MediaStore 现成实现，回收站/收藏/EXIF 可直接移植 |
 | [`fluttercandies/flutter_wechat_assets_picker`](https://github.com/fluttercandies/flutter_wechat_assets_picker) | 1651 | Apache-2.0 | 微信风格相册 **UI/picker** | 中（UI/交互层） | 相册 UI 模式、滑动多选、全屏预览手势 |
@@ -22,7 +22,7 @@
 
 ## 1. photo_manager —— 复用核心（Kotlin 可直接移植）
 
-技术栈与 SORTR 几乎同构（Flutter + Kotlin MethodChannel + MediaStore + 后台线程查询）。它是 SORTR 自建 channel 的「成熟工业版」。
+技术栈与 VISORT 几乎同构（Flutter + Kotlin MethodChannel + MediaStore + 后台线程查询）。它是 VISORT 自建 channel 的「成熟工业版」。
 
 ### 1.1 相册功能实现要点
 
@@ -41,18 +41,18 @@
 1. **回收站**：`moveToTrashInApi30`/`restoreFromTrashInApi30` + `logQuery(includeTrashed=true)`(`QUERY_ARG_MATCH_TRASHED=MATCH_INCLUDE`) + 投影 `IS_TRASHED`。
 2. **收藏**：`favoriteAsset`(`createFavoriteRequest`) + 投影 `IS_FAVORITE`。
 3. **EXIF/GPS**：`getExif`/`getLatLong`。
-4. **移动升级**：`moveToPathWithPermission`(createWriteRequest→update)——把 SORTR 移动升级为系统级 consent。
+4. **移动升级**：`moveToPathWithPermission`(createWriteRequest→update)——把 VISORT 移动升级为系统级 consent。
 5. **健壮性**：`ActivityResultListener` + requestCode + RecoverableSecurityException 队列；`isVolumeNotFound` + 空 MatrixCursor 降级。
 
 ### 1.3 仅借鉴模式（不引入依赖）
 
-- Glide 缩略图的 `.signature(modifiedDate)` 失效键 + `Priority.LOW` 批量预热——但**不建议引入 Glide**（SORTR 已用系统 `loadThumbnail`）。
+- Glide 缩略图的 `.signature(modifiedDate)` 失效键 + `Priority.LOW` 批量预热——但**不建议引入 Glide**（VISORT 已用系统 `loadThumbnail`）。
 - ContentObserver 的 insert/update/delete 分类启发式。
 - `requestCacheAssetsThumbnail` 的预热-取消生命周期。
 
 ### 1.4 ⚠️ 关键结论
 
-保持 SORTR 的 **keyset 游标分页**。photo_manager 的 `OFFSET` 在并发插入/删除时会重复/跳页，SORTR 方案更优，勿回退。
+保持 VISORT 的 **keyset 游标分页**。photo_manager 的 `OFFSET` 在并发插入/删除时会重复/跳页，VISORT 方案更优，勿回退。
 
 ---
 
@@ -70,19 +70,19 @@
 
 ### 2.2 全屏预览（→ `PhotoViewer`）
 
-`AssetPickerViewerBuilderDelegate` + `image_page_builder`：`ExtendedImageGesturePageView` 水平翻页 + 双击 1↔3 Tween 缩放动画 + `GestureConfig(minScale:1,maxScale:3)`。**无下滑关闭**——SORTR 的 `InteractiveViewer` 已覆盖缩放/双击，下滑关闭需自行补。
+`AssetPickerViewerBuilderDelegate` + `image_page_builder`：`ExtendedImageGesturePageView` 水平翻页 + 双击 1↔3 Tween 缩放动画 + `GestureConfig(minScale:1,maxScale:3)`。**无下滑关闭**——VISORT 的 `InteractiveViewer` 已覆盖缩放/双击，下滑关闭需自行补。
 
 ### 2.3 provider→Riverpod 对应
 
-`ChangeNotifier`→`Notifier`，`Selector`→`select()`，「selectedDescriptions 重建键」技巧→Riverpod `select()`。状态核心 `AssetPickerProvider` 对应 SORTR `GalleryController`。
+`ChangeNotifier`→`Notifier`，`Selector`→`select()`，「selectedDescriptions 重建键」技巧→Riverpod `select()`。状态核心 `AssetPickerProvider` 对应 VISORT `GalleryController`。
 
 ---
 
 ## 3. aves —— 功能标杆 + 架构启发
 
-Flutter + Kotlin 双端专业级安卓相册与元数据 explorer（5,012⭐）。作者声明不接 PR，但 BSD-3 允许参考与代码移植。依赖**自有 SQLite 索引层**（SORTR 当前无）。
+Flutter + Kotlin 双端专业级安卓相册与元数据 explorer（5,012⭐）。作者声明不接 PR，但 BSD-3 允许参考与代码移植。依赖**自有 SQLite 索引层**（VISORT 当前无）。
 
-### 3.1 MediaStore channel 架构（对比 SORTR 的最大价值点）
+### 3.1 MediaStore channel 架构（对比 VISORT 的最大价值点）
 
 `android/.../channel/` 按「语义 × 方向」三类拆分：
 
@@ -98,8 +98,8 @@ Flutter + Kotlin 双端专业级安卓相册与元数据 explorer（5,012⭐）�
    - `getEntries(knownEntries={contentId→dateModifiedMillis})`：native 端跳过「已知且未变」的条目，只流式回新增/变更项。
    - API30+ 用 `MediaStore.getGeneration()` + `getChangedUris(sinceGeneration)` 做 generation 增量。
    - `checkObsoleteContentIds`/`checkObsoletePaths` 精确判定删除项。
-   - 比 SORTR 当前 ContentObserver 触发的**全量重查**省大量 CPU/IO。
-2. **元数据提取库选型**：`MetadataFetchHandler`(1557 行) 用 `metadata-extractor` + `ExifInterface` + Adobe `XMPCore` + `mp4parser`，`getAllMetadata` 返回 `Map<目录,Map<tag,desc>>`——直接契合 SORTR `photo_details_sheet`。
+   - 比 VISORT 当前 ContentObserver 触发的**全量重查**省大量 CPU/IO。
+2. **元数据提取库选型**：`MetadataFetchHandler`(1557 行) 用 `metadata-extractor` + `ExifInterface` + Adobe `XMPCore` + `mp4parser`，`getAllMetadata` 返回 `Map<目录,Map<tag,desc>>`——直接契合 VISORT `photo_details_sheet`。
 
 ### 3.3 自有 SQLite 索引层（为搜索/统计铺路）
 
@@ -107,7 +107,7 @@ Flutter + Kotlin 双端专业级安卓相册与元数据 explorer（5,012⭐）�
 
 ### 3.4 其它功能全景
 
-- 双 Flutter 引擎 + WorkManager 后台扫描（`AnalysisWorker` 新建独立后台引擎 + SQLite 通信，App 关闭仍可扫描）——复杂度高，建议 SORTR 暂缓。
+- 双 Flutter 引擎 + WorkManager 后台扫描（`AnalysisWorker` 新建独立后台引擎 + SQLite 通信，App 关闭仍可扫描）——复杂度高，建议 VISORT 暂缓。
 - 富 Entry 模型 `AvesEntry`：`bestDate` 三级回退(catalog→dateTaken→dateModified)、`isRotated`/`displaySize`/`displayAspectRatio`、`stackedEntries`(连拍/raw+jpg 堆叠)。
 - 搜索 `collection_search_delegate.dart` + `GlobalSearchHandler`；统计 `stats_page.dart`；筛选 `model/filters/*`；视频 `MediaSessionHandler`+`videoPlayback`。
 
@@ -146,9 +146,9 @@ Flutter + Kotlin 双端专业级安卓相册与元数据 explorer（5,012⭐）�
 
 ## 6. 重要提醒
 
-1. **保持 keyset 分页**——photo_manager 的 OFFSET 在并发写入时错位，SORTR 现有方案更优，勿回退。
+1. **保持 keyset 分页**——photo_manager 的 OFFSET 在并发写入时错位，VISORT 现有方案更优，勿回退。
 2. **本项目的缩略图通道已存在**：`gallery_screen.dart`/`album_screen.dart` 经 `_AndroidThumbnailProvider`→`readThumbnail`→系统 `loadThumbnail`(API29+)。P2 缩略图增强方向是**预热 + 磁盘缓存**，不是「加缩略图通道」，也不要引入 Glide（系统 loadThumbnail 原生路径更快）。
-3. **不要整包依赖 photo_manager**——会破坏 SORTR「自建轻量 channel + 双数据通路（分类/相册分离）」设计，且拖入 Glide 重依赖。摘抄式移植即可。
+3. **不要整包依赖 photo_manager**——会破坏 VISORT「自建轻量 channel + 双数据通路（分类/相册分离）」设计，且拖入 Glide 重依赖。摘抄式移植即可。
 
 ---
 

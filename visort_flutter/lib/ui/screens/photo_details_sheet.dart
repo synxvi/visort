@@ -148,7 +148,7 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 10),
-          // 位置:sortr 无反地理编码与地图,显示原始经纬度;无 GPS 给占位。
+          // 位置:visort 无反地理编码与地图,显示原始经纬度;无 GPS 给占位。
           Row(
             children: [
               const Icon(Icons.place_outlined, color: AppColors.muted, size: 15),

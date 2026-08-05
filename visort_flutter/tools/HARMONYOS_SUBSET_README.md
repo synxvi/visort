@@ -28,7 +28,7 @@ pip install fonttools brotli zopfli
 ### 执行
 
 ```bash
-cd sortr_flutter
+cd visort_flutter
 python tools/subset_fonts.py
 ```
 
@@ -47,7 +47,7 @@ HarmonyOS Sans SC 完整字体（约 8MB/字重）下载：
 - 官方：https://developer.harmonyos.com/cn/design/resource/ （搜索 "HarmonyOS Sans"）
 - GitHub 镜像：https://github.com/harmonyos-fonts
 
-下载后将 `HarmonyOS_Sans_SC_Regular.ttf` 与 `HarmonyOS_Sans_SC_Bold.ttf` 放入 `sortr_flutter/.font-source/`，**重命名为 `*.full.ttf`**（即 `HarmonyOS_Sans_SC_Regular.ttf.full.ttf`），再运行脚本。
+下载后将 `HarmonyOS_Sans_SC_Regular.ttf` 与 `HarmonyOS_Sans_SC_Bold.ttf` 放入 `visort_flutter/.font-source/`，**重命名为 `*.full.ttf`**（即 `HarmonyOS_Sans_SC_Regular.ttf.full.ttf`），再运行脚本。
 
 ## 字体策略决策记录
 

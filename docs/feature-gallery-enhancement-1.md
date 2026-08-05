@@ -1,5 +1,5 @@
 ---
-goal: SORTR 相册功能增强（P0 元数据展示 / P1 回收站·收藏·ContentObserver 增量化）
+goal: VISORT 相册功能增强（P0 元数据展示 / P1 回收站·收藏·ContentObserver 增量化）
 version: '1.0'
 date_created: 2026-07-31
 owner: synxvi
@@ -118,7 +118,7 @@ tags: [feature, android, gallery, mediastore, kotlin]
 
 ## 5. Files
 
-**Kotlin（`android/app/src/main/kotlin/com/sortr/visort_flutter/mediastore/`）**：
+**Kotlin（`android/app/src/main/kotlin/com/visort/visort_flutter/mediastore/`）**：
 - `MediaStoreModels.kt` — `MsImageInfo` 加 `isTrashed/isFavorite`；`MsError` 加 5 个错误类型。
 - `MediaStoreRepository.kt` — `scanImages` 投影 + selection（trashed 排除）；新增 `getMetadata`/`requestTrash`/`requestRestore`/`requestFavorite`/`scanTrashed`。
 - `MediaStorePlugin.kt` — `onMethodCall` 加 5 个 case；`onActivityResult` 加 3 个 requestCode 分支；`ContentObserver.onChange` 取 uri；`MediaChangeStreamHandler.notifyChanged` 分类。

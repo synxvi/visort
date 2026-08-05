@@ -146,7 +146,7 @@ class Profile {
 
   // 区分 copyWith 的「未传 newDirParent」与「显式传 null（清空父目录）」。
   // 默认 `?? this.newDirParent` 会让 null 失效（fallback 回旧值），导致清空
-  // 父目录后持久化的仍是旧值、重启又恢复旧值（而非 Sortr 占位）。
+  // 父目录后持久化的仍是旧值、重启又恢复旧值（而非 Visort 占位）。
   static const _newDirParentSentinel = Object();
 
   Profile copyWith({

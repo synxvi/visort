@@ -89,12 +89,12 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.sortr" "\0"
+            VALUE "CompanyName", "com.synxvi.visort" "\0"
             VALUE "FileDescription", "Visort" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "Visort" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.sortr. All rights reserved." "\0"
-            VALUE "OriginalFilename", "sortr_flutter.exe" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 com.synxvi.visort. All rights reserved." "\0"
+            VALUE "OriginalFilename", "visort_flutter.exe" "\0"
             VALUE "ProductName", "Visort" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END

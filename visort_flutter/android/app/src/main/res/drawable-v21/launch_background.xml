@@ -2,7 +2,7 @@
 <!-- 启动屏背景（API 21+）。
      底色固定为应用深色，不跟随系统 ?colorBackground（亮色模式下仍是深色）。 -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="@color/sortr_launch_bg" />
+    <item android:drawable="@color/visort_launch_bg" />
 
     <!-- 如需启动 logo，可在此插入 bitmap：
     <item>

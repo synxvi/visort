@@ -18,8 +18,8 @@ const _noiseDisabledRoutes = {
   AppRoutes.photoViewer,
 };
 
-class SortrApp extends ConsumerWidget {
-  const SortrApp({super.key});
+class VisortApp extends ConsumerWidget {
+  const VisortApp({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

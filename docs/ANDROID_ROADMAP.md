@@ -1,4 +1,4 @@
-# SORTR 安卓开发路线图
+# VISORT 安卓开发路线图
 
 > 本文档记录安卓端 MVP 开发的全部决策共识。基于 Windows 端（W1–W7 已交付）的共享业务逻辑，
 > 为安卓端 A0–A4 里程碑提供基准。每条决策均经过 grill-me 对齐流程确认。
@@ -31,7 +31,7 @@
 3. **`pubspec.yaml` 零安卓相关依赖**——`file_picker ^8.1.0` 在安卓上有持久化缺陷，不用于目录选择
 4. **`MainActivity.kt` 无 MethodChannel 注册**
 5. **`main.dart` 的 `window_manager` 初始化仅靠 try/catch 静默吞错**——安卓端是死代码路径
-6. **`applicationId` 为 `com.sortr.visort_flutter`**——不规范，待重命名
+6. **`applicationId` 为 `com.visort.visort_flutter`**——不规范，待重命名
 
 ---
 
@@ -76,9 +76,9 @@
 | # | 决策 | 理由 |
 |---|---|---|
 | 11 | **SDK**：minSdk=26 / targetSdk=36 / compileSdk=36 | SAF 在 API 26+ 行为一致、持久化权限可靠、覆盖 ~95% 设备、零上架迁移成本 |
-| 12 | **Kotlin 组织**：三层分包 `com.sortr.visort_flutter.saf`：`SafPlugin`（MethodChannel 入口）/ `SafRepository`（ContentResolver+DocumentsContract）/ `SafModels`（data class） | 职责清晰、可测、与 Dart 侧 controller/repository 风格对称 |
+| 12 | **Kotlin 组织**：三层分包 `com.visort.visort_flutter.saf`：`SafPlugin`（MethodChannel 入口）/ `SafRepository`（ContentResolver+DocumentsContract）/ `SafModels`（data class） | 职责清晰、可测、与 Dart 侧 controller/repository 风格对称 |
 | 13 | **入口分叉**：`main.dart` 用 `Platform.isXxx` 显式分叉，`window_manager` 归 `isWindows`，安卓分支新增 `setupAndroid()` | 语义明确、依赖按需加载、为 A1 预留据点 |
-| 14 | **Manifest**：零权限声明（无 `READ_EXTERNAL_STORAGE` / `MANAGE_EXTERNAL_STORAGE` / `POST_NOTIFICATIONS`）+ `applicationId` 改为 `com.sortr.app` | 纯 SAF 零权限摩擦；appId 规范化为将来上架准备 |
+| 14 | **Manifest**：零权限声明（无 `READ_EXTERNAL_STORAGE` / `MANAGE_EXTERNAL_STORAGE` / `POST_NOTIFICATIONS`）+ `applicationId` 改为 `com.visort.app` | 纯 SAF 零权限摩擦；appId 规范化为将来上架准备 |
 
 ### 工程 / 流程
 
@@ -102,7 +102,7 @@
 
 **范围**：
 - Kotlin 侧新增 `saf` 包三层骨架
-- `SafPlugin` 注册 MethodChannel `sortr/saf`，实现 3 个方法：
+- `SafPlugin` 注册 MethodChannel `visort/saf`，实现 3 个方法：
   - `pickDirectory()` → 启动 `ACTION_OPEN_DOCUMENT_TREE`，调 `takePersistableUriPermission`，返回 tree URI 字符串
   - `scanImages(treeUri)` → `DocumentsContract.buildChildDocumentsUriUsingTree` 递归 + `contentResolver.query` 按 `image/*` 过滤，返回 `List<Map>` （name/docId/size/mime）
   - `persistedUriPermissions` → 列出当前持久化授权，验证重启后保留
@@ -211,7 +211,7 @@
 - OEM 兼容性：若作者机型为 MIUI/ColorOS 等，重点测 SAF 行为
 - 补 `visort_flutter/README.md` 安卓构建说明
 - 更新根 `README.md` 技术栈章节（当前仍写 Flask，需补 Flutter）
-- 修复 `applicationId` 为 `com.sortr.app`（Kotlin package 路径可选保留 `com.sortr.visort_flutter`，Gradle 允许不一致）
+- 修复 `applicationId` 为 `com.visort.app`（Kotlin package 路径可选保留 `com.visort.visort_flutter`，Gradle 允许不一致）
 
 **验收标准**：
 - ✅ 作者真机连续整理 100+ 张图片无崩溃、无 OOM、无明显卡顿
@@ -252,14 +252,14 @@ dependencies:
 
 ```xml
 <!-- 零权限声明，纯 SAF 不需要任何 runtime permission -->
-<!-- applicationId 改为 com.sortr.app（在 build.gradle.kts 中改） -->
+<!-- applicationId 改为 com.visort.app（在 build.gradle.kts 中改） -->
 ```
 
 ### build.gradle.kts 变更
 
 ```kotlin
 defaultConfig {
-    applicationId = "com.sortr.app"  // 原 com.sortr.visort_flutter
+    applicationId = "com.visort.app"  // 原 com.visort.visort_flutter
     minSdk = 26                       // 原 flutter.minSdkVersion
     targetSdk = 36                    // 原 flutter.targetSdkVersion
     // compileSdk 跟随 flutter.compileSdkVersion（建议显式锁 36）
@@ -361,7 +361,7 @@ A4 真机实测（OnePlus PJZ110 / ColorOS / Android 16）暴露了 SAF 方案�
 | # | 决策 | 理由 |
 |---|---|---|
 | 19 | **分页**：keyset 游标法（`afterCursor` = 上一页末条的 sortValue+\|+id），取代 offset | offset 在删除/新增后会错位（重复或跳过）；keyset 天然免疫，是相册 App 标准做法 |
-| 20 | **ContentObserver 实时刷新**：Kotlin 注册 `MediaStore.Images.Media.EXTERNAL_CONTENT_URI` observer，经 EventChannel（`sortr/mediastore-events`）推 Dart，300ms 防抖，静默刷新 | 系统相册都是实时的；其他 app 拍新照/删图时本 app 自动更新列表 |
+| 20 | **ContentObserver 实时刷新**：Kotlin 注册 `MediaStore.Images.Media.EXTERNAL_CONTENT_URI` observer，经 EventChannel（`visort/mediastore-events`）推 Dart，300ms 防抖，静默刷新 | 系统相册都是实时的；其他 app 拍新照/删图时本 app 自动更新列表 |
 | 21 | **MediaStoreChannel 可注入**：`mediaStoreChannelProvider`（Provider），GalleryController 经 ref.read 取得；测试 override 注入 fake | 解除相册逻辑的测试盲区（v1 相册零单测） |
 | 22 | **查询全后台线程**：Kotlin 侧 listBuckets/scanImages/readMeta/exists/getBucketRelativePath 全部走 `ioExecutor`（4 线程池）+ mainHandler 回传 | listBuckets 是全表扫描+内存聚合，上万张时主线程卡 100ms+ 掉帧 |
 | 23 | **ImageRef.displayName**：新增可选字段，安卓从 DISPLAY_NAME 带入；UI 统一用 `label` getter（优先 displayName 回退 name） | 安卓下 `name` 取 relativePath 末段 = _ID 数字，不可读；sort 屏顶部/详情需真实文件名 |

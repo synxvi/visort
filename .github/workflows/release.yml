@@ -35,11 +35,11 @@ jobs:
           cache: true
 
       - name: Install dependencies
-        working-directory: sortr_flutter
+        working-directory: visort_flutter
         run: flutter pub get
 
       - name: Build APK (split per ABI)
-        working-directory: sortr_flutter
+        working-directory: visort_flutter
         # 产出 arm64-v8a / armeabi-v7a / universal 三个分包。
         # settings.gradle.kts 的国内镜像在 CI runner 上公网可达，无需改 Gradle 配置。
         run: flutter build apk --release --split-per-abi
@@ -48,7 +48,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-apks
-          path: sortr_flutter/build/app/outputs/flutter-apk/*.apk
+          path: visort_flutter/build/app/outputs/flutter-apk/*.apk
           if-no-files-found: error
 
   build-windows:
@@ -66,24 +66,24 @@ jobs:
           cache: true
 
       - name: Install dependencies
-        working-directory: sortr_flutter
+        working-directory: visort_flutter
         run: flutter pub get
 
       - name: Build Windows
-        working-directory: sortr_flutter
+        working-directory: visort_flutter
         run: flutter build windows --release
 
       - name: Package Windows build
         # Flutter 产物是一组 exe + dll + data 目录，打包成单个 zip 便于分发。
         shell: pwsh
         run: |
-          Compress-Archive -Path sortr_flutter/build/windows/x64/runner/Release/* -DestinationPath sortr-windows.zip
+          Compress-Archive -Path visort_flutter/build/windows/x64/runner/Release/* -DestinationPath visort-windows.zip
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: sortr-windows.zip
+          path: visort-windows.zip
           if-no-files-found: error
 
   release:
