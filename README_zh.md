@@ -29,7 +29,7 @@
 | **Windows 桌面** | 稳定 · 功能完整 | 键盘驱动分类，窗口状态持久化 |
 | **Android** | 活跃开发中 | MediaStore 相册浏览 + 整理；相册体验为当前开发重心 |
 
-代码库是 [`sortr_flutter/`](sortr_flutter/) 下的 **Flutter 应用**，移植自早期的 Python / Flask 实现（已移除）。
+代码库是 [`visort_flutter/`](visort_flutter/) 下的 **Flutter 应用**，移植自早期的 Python / Flask 实现（已移除）。
 
 ## 功能
 
@@ -48,7 +48,7 @@
 
 ```bash
 git clone https://github.com/synxvi/visort.git
-cd visort/sortr_flutter
+cd visort/visort_flutter
 flutter pub get
 flutter run -d windows        # Windows 桌面
 flutter run -d android        # 安卓真机 / 模拟器
@@ -92,7 +92,7 @@ flutter build apk --release       # → build/app/outputs/flutter-apk/
 
 - [`AGENTS.md`](AGENTS.md) — 权威的架构与开发指南
 - [`docs/ANDROID_ROADMAP.md`](docs/ANDROID_ROADMAP.md) — 安卓端口决策（A0–A4、SAF→MediaStore、v2 相册定型）
-- [`sortr_flutter/README.md`](sortr_flutter/README.md) — Flutter 应用快速上手
+- [`visort_flutter/README.md`](visort_flutter/README.md) — Flutter 应用快速上手
 
 ## 许可证
 

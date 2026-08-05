@@ -4,7 +4,7 @@
 
 ## 项目一句话
 
-**SORTR** —— 键盘驱动的桌面 + 移动图片 / 相册整理工具。活动代码库是 Flutter 应用（`sortr_flutter/`，目标 Windows 桌面 + Android）；根目录的 `app.py` / `index.html` 是仍随版本发布的历史 Python / Flask 实现。
+**SORTR** —— 键盘驱动的桌面 + 移动图片 / 相册整理工具。活动代码库是 Flutter 应用（`visort_flutter/`，目标 Windows 桌面 + Android）；根目录的 `app.py` / `index.html` 是仍随版本发布的历史 Python / Flask 实现。
 
 **核心不变量**：所有移动 / 删除操作先暂存于内存，仅在用户确认 "Run" 后执行。
 

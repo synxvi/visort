@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-> Guidance for AI assistants working in this repo. **The Flutter app in `sortr_flutter/` is the sole codebase** (Windows desktop + Android). The legacy Python/Flask implementation (`app.py`, `index.html`, PyInstaller) has been removed; the Flutter app is a verified port of that prior implementation.
+> Guidance for AI assistants working in this repo. **The Flutter app in `visort_flutter/` is the sole codebase** (Windows desktop + Android). The legacy Python/Flask implementation (`app.py`, `index.html`, PyInstaller) has been removed; the Flutter app is a verified port of that prior implementation.
 
 ⚠️ **Doc currency:** `CLAUDE.md` redirects here. `readme.md` / `README_zh.md` cover the Flutter app. The current architecture docs are this file and `docs/ANDROID_ROADMAP.md`. Trust this file and the code otherwise.
 
@@ -10,12 +10,12 @@
 
 Workflow: **Setup → Sort → Review → Results**. Android adds a Gallery/Album browser for MediaStore albums.
 
-- **Flutter app** (`sortr_flutter/`) targeting **Windows desktop** (feature-complete) and **Android**. It is a verified port of a prior Python/Flask implementation (v1.2.0, since removed). The Android port (milestones A0–A4 + the SAF→MediaStore pivot) is delivered and validated on real hardware; the **album/gallery experience is the current development focus** (v2, `docs/ANDROID_ROADMAP.md` §7) — core album architecture (keyset cursor pagination, ContentObserver live refresh, injectable `MediaStoreChannel`, `GalleryController` unit tests) is in place and features continue to iterate.
+- **Flutter app** (`visort_flutter/`) targeting **Windows desktop** (feature-complete) and **Android**. It is a verified port of a prior Python/Flask implementation (v1.2.0, since removed). The Android port (milestones A0–A4 + the SAF→MediaStore pivot) is delivered and validated on real hardware; the **album/gallery experience is the current development focus** (v2, `docs/ANDROID_ROADMAP.md` §7) — core album architecture (keyset cursor pagination, ContentObserver live refresh, injectable `MediaStoreChannel`, `GalleryController` unit tests) is in place and features continue to iterate.
 
 ## Architecture & Data Flow
 
 ### Workflow & navigation (Flutter)
-Plain Flutter `Navigator` named routes (no `go_router`) defined in `sortr_flutter/lib/ui/router.dart`:
+Plain Flutter `Navigator` named routes (no `go_router`) defined in `visort_flutter/lib/ui/router.dart`:
 
 ```
 setup(/) ──Start/scan──▶ sort ──Review──▶ review ──Run──▶ results ──Continue──▶ setup
@@ -67,7 +67,7 @@ Provider styles are deliberately mixed:
 ## Key Directories
 
 ```
-sortr_flutter/
+visort_flutter/
 ├─ lib/
 │  ├─ main.dart, app.dart          # bootstrap + root MaterialApp
 │  ├─ core/
@@ -88,7 +88,7 @@ sortr_flutter/
 │  │  ├─ screens/                  # setup/sort/review/results/gallery/album + photo_viewer/photo_details_sheet + editors
 │  │  └─ adaptive/                 # WindowsKeyboardHandler
 │  └─ shared/widgets/             # Kbd/DecisionBadge, toast, ProfileDropdown, SortToggle, LoadingOverlay
-├─ android/app/src/main/kotlin/com/sortr/sortr_flutter/
+├─ android/app/src/main/kotlin/com/sortr/visort_flutter/
 │  └─ mediastore/                  # MediaStore MethodChannel + EventChannel plugin (ContentObserver); registered in MainActivity
 ├─ windows/                        # CMake desktop runner (C++17, /W4 /WX)
 ├─ tools/                          # subset_fonts.py (HarmonyOS CJK font subsetter)
@@ -99,7 +99,7 @@ docs/ANDROID_ROADMAP.md   # Flutter Android port decisions (A0–A4)
 
 ## Development Commands
 
-All Flutter commands run from `sortr_flutter/`:
+All Flutter commands run from `visort_flutter/`:
 
 ```bash
 flutter pub get                 # resolve deps (run first)
@@ -113,12 +113,12 @@ flutter build apk --split-per-abi
 flutter build windows --release # Windows .exe bundle
 ```
 
-Build output: `sortr_flutter/build/` (APKs at `build/app/outputs/flutter-apk/`; Windows exe at `build/windows/x64/runner/Release/sortr_flutter.exe`).
+Build output: `visort_flutter/build/` (APKs at `build/app/outputs/flutter-apk/`; Windows exe at `build/windows/x64/runner/Release/visort_flutter.exe`).
 
 Font subsetting (Android cold-start optimization, run when i18n strings change):
 
 ```bash
-cd sortr_flutter
+cd visort_flutter
 pip install fonttools brotli zopfli
 python tools/subset_fonts.py           # subsets HarmonyOS Sans SC; idempotent
 ```
@@ -138,18 +138,18 @@ python tools/subset_fonts.py           # subsets HarmonyOS Sans SC; idempotent
 
 | File | Role |
 |---|---|
-| `sortr_flutter/lib/main.dart` | Entry; platform-forked init, builds/seeds `ProviderContainer` |
-| `sortr_flutter/lib/app.dart` | Root `SortrApp` `MaterialApp`, theme, locale, noise overlay |
-| `sortr_flutter/lib/ui/router.dart` | Named routes, setup platform-fork, navigator key |
-| `sortr_flutter/lib/features/session/session_controller.dart` | **Core decision state machine** (`decide`/`undo`/`initFromScan`) |
-| `sortr_flutter/lib/features/session/session_models.dart` | `SessionState`, `Decision`, `DecisionAction`, `kRootDestKey='__root__'` |
-| `sortr_flutter/lib/features/run/run_controller.dart` | Streaming execute (`Stream<RunProgress>`), MediaStore batching |
-| `sortr_flutter/lib/core/config/models.dart` | All `@immutable` config models + manual JSON codec |
-| `sortr_flutter/lib/core/config/profiles_service.dart` | Persistence (`shared_preferences['sortr_config']`), validation, `computeDestinationFolders` |
-| `sortr_flutter/lib/core/i18n/i18n.dart` | `tr`/`t` + **global providers** (`configProvider`, `profilesServiceProvider`, `currentLanguageProvider`) |
-| `sortr_flutter/lib/core/fs/file_system_repository.dart` | Platform-agnostic FS contract + `imageExtensions` (18 formats) |
-| `sortr_flutter/lib/core/fs/fs_provider.dart` | Platform fork → `AndroidMediaStoreFileSystem` / `DesktopFileSystem` |
-| `sortr_flutter/android/.../MainActivity.kt` | Registers the MediaStore plugin (MethodChannel + EventChannel); SAF plugin removed in v2 |
+| `visort_flutter/lib/main.dart` | Entry; platform-forked init, builds/seeds `ProviderContainer` |
+| `visort_flutter/lib/app.dart` | Root `SortrApp` `MaterialApp`, theme, locale, noise overlay |
+| `visort_flutter/lib/ui/router.dart` | Named routes, setup platform-fork, navigator key |
+| `visort_flutter/lib/features/session/session_controller.dart` | **Core decision state machine** (`decide`/`undo`/`initFromScan`) |
+| `visort_flutter/lib/features/session/session_models.dart` | `SessionState`, `Decision`, `DecisionAction`, `kRootDestKey='__root__'` |
+| `visort_flutter/lib/features/run/run_controller.dart` | Streaming execute (`Stream<RunProgress>`), MediaStore batching |
+| `visort_flutter/lib/core/config/models.dart` | All `@immutable` config models + manual JSON codec |
+| `visort_flutter/lib/core/config/profiles_service.dart` | Persistence (`shared_preferences['sortr_config']`), validation, `computeDestinationFolders` |
+| `visort_flutter/lib/core/i18n/i18n.dart` | `tr`/`t` + **global providers** (`configProvider`, `profilesServiceProvider`, `currentLanguageProvider`) |
+| `visort_flutter/lib/core/fs/file_system_repository.dart` | Platform-agnostic FS contract + `imageExtensions` (18 formats) |
+| `visort_flutter/lib/core/fs/fs_provider.dart` | Platform fork → `AndroidMediaStoreFileSystem` / `DesktopFileSystem` |
+| `visort_flutter/android/.../MainActivity.kt` | Registers the MediaStore plugin (MethodChannel + EventChannel); SAF plugin removed in v2 |
 | `docs/ANDROID_ROADMAP.md` | Android port decisions, SAF→MediaStore pivot |
 
 **Supported image formats (18):** `.jpg .jpeg .png .gif .bmp .webp .tiff .tif .svg .ico .heic .heif .raw .cr2 .nef .arw .dng .avif`
@@ -159,13 +159,13 @@ python tools/subset_fonts.py           # subsets HarmonyOS Sans SC; idempotent
 - **Flutter ≥ 3.44.0** (Dart ≥ 3.12.0; `pubspec.yaml` lower bound `sdk: ^3.10.4`). Resolved floor from `pubspec.lock`.
 - **Android toolchain:** JDK 17, AGP 8.11.1, Kotlin 2.2.20, Gradle 8.14.
 - **Windows desktop:** CMake ≥ 3.14, MSVC C++17 (`/W4 /WX` warnings-as-errors).
-- **Android package:** `com.sortr.sortr_flutter`. SDK versions use Flutter toolchain defaults (not pinned in `build.gradle.kts`). Impeller enabled.
+- **Android package:** `com.sortr.visort_flutter`. SDK versions use Flutter toolchain defaults (not pinned in `build.gradle.kts`). Impeller enabled.
 - **Signing:** ⚠️ Release currently signs with **debug keys** (no production keystore / `key.properties` committed). Works for local `--release` builds; a real keystore is required for Play Store upload.
 - **Python (tooling only):** Used solely by `tools/subset_fonts.py` (CJK font subsetting). Python 3.11 + `fonttools`/`brotli`/`zopfli`.
 
 ## Testing & QA
 
-**Flutter** — `flutter test` from `sortr_flutter/`. Five files, **52 cases, all pure-Dart unit tests** (no widget/integration/golden tests). Tests guard platform-agnostic logic (config, session state machine, run flow, desktop FS) plus the **album (gallery) controller** (v2):
+**Flutter** — `flutter test` from `visort_flutter/`. Five files, **52 cases, all pure-Dart unit tests** (no widget/integration/golden tests). Tests guard platform-agnostic logic (config, session state machine, run flow, desktop FS) plus the **album (gallery) controller** (v2):
 
 | Test file | Covers | Cases |
 |---|---|---|

@@ -31,7 +31,7 @@
 3. **`pubspec.yaml` 零安卓相关依赖**——`file_picker ^8.1.0` 在安卓上有持久化缺陷，不用于目录选择
 4. **`MainActivity.kt` 无 MethodChannel 注册**
 5. **`main.dart` 的 `window_manager` 初始化仅靠 try/catch 静默吞错**——安卓端是死代码路径
-6. **`applicationId` 为 `com.sortr.sortr_flutter`**——不规范，待重命名
+6. **`applicationId` 为 `com.sortr.visort_flutter`**——不规范，待重命名
 
 ---
 
@@ -76,7 +76,7 @@
 | # | 决策 | 理由 |
 |---|---|---|
 | 11 | **SDK**：minSdk=26 / targetSdk=36 / compileSdk=36 | SAF 在 API 26+ 行为一致、持久化权限可靠、覆盖 ~95% 设备、零上架迁移成本 |
-| 12 | **Kotlin 组织**：三层分包 `com.sortr.sortr_flutter.saf`：`SafPlugin`（MethodChannel 入口）/ `SafRepository`（ContentResolver+DocumentsContract）/ `SafModels`（data class） | 职责清晰、可测、与 Dart 侧 controller/repository 风格对称 |
+| 12 | **Kotlin 组织**：三层分包 `com.sortr.visort_flutter.saf`：`SafPlugin`（MethodChannel 入口）/ `SafRepository`（ContentResolver+DocumentsContract）/ `SafModels`（data class） | 职责清晰、可测、与 Dart 侧 controller/repository 风格对称 |
 | 13 | **入口分叉**：`main.dart` 用 `Platform.isXxx` 显式分叉，`window_manager` 归 `isWindows`，安卓分支新增 `setupAndroid()` | 语义明确、依赖按需加载、为 A1 预留据点 |
 | 14 | **Manifest**：零权限声明（无 `READ_EXTERNAL_STORAGE` / `MANAGE_EXTERNAL_STORAGE` / `POST_NOTIFICATIONS`）+ `applicationId` 改为 `com.sortr.app` | 纯 SAF 零权限摩擦；appId 规范化为将来上架准备 |
 
@@ -209,9 +209,9 @@
   - scanImages 大目录（>1000 张）耗时
 - 必选手势：左滑上一张、右滑跳过、下拉撤销
 - OEM 兼容性：若作者机型为 MIUI/ColorOS 等，重点测 SAF 行为
-- 补 `sortr_flutter/README.md` 安卓构建说明
+- 补 `visort_flutter/README.md` 安卓构建说明
 - 更新根 `README.md` 技术栈章节（当前仍写 Flask，需补 Flutter）
-- 修复 `applicationId` 为 `com.sortr.app`（Kotlin package 路径可选保留 `com.sortr.sortr_flutter`，Gradle 允许不一致）
+- 修复 `applicationId` 为 `com.sortr.app`（Kotlin package 路径可选保留 `com.sortr.visort_flutter`，Gradle 允许不一致）
 
 **验收标准**：
 - ✅ 作者真机连续整理 100+ 张图片无崩溃、无 OOM、无明显卡顿
@@ -259,7 +259,7 @@ dependencies:
 
 ```kotlin
 defaultConfig {
-    applicationId = "com.sortr.app"  // 原 com.sortr.sortr_flutter
+    applicationId = "com.sortr.app"  // 原 com.sortr.visort_flutter
     minSdk = 26                       // 原 flutter.minSdkVersion
     targetSdk = 36                    // 原 flutter.targetSdkVersion
     // compileSdk 跟随 flutter.compileSdkVersion（建议显式锁 36）
@@ -371,7 +371,7 @@ A4 真机实测（OnePlus PJZ110 / ColorOS / Android 16）暴露了 SAF 方案�
 ### 7.4 文件结构（v2 现状）
 
 ```
-sortr_flutter/
+visort_flutter/
 ├─ lib/
 │  ├─ core/fs/
 │  │  ├─ file_system_repository.dart   # 契约（分类通路）

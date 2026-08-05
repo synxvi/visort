@@ -29,7 +29,7 @@ Hundreds of photos piling up in one folder? SORTR lets you sort them as fast as 
 | **Windows desktop** | Stable · feature-complete | Keyboard-driven sorting, window-state persistence |
 | **Android** | Active development | MediaStore album browser + sorter; the album/gallery experience is the current focus |
 
-The codebase is the **Flutter app** in [`sortr_flutter/`](sortr_flutter/), a verified port of a prior Python/Flask implementation (since removed).
+The codebase is the **Flutter app** in [`visort_flutter/`](visort_flutter/), a verified port of a prior Python/Flask implementation (since removed).
 
 ## Features
 
@@ -48,7 +48,7 @@ Requires [Flutter ≥ 3.44](https://flutter.dev) (Dart ≥ 3.12).
 
 ```bash
 git clone https://github.com/synxvi/visort.git
-cd visort/sortr_flutter
+cd visort/visort_flutter
 flutter pub get
 flutter run -d windows        # Windows desktop
 flutter run -d android        # Android device/emulator
@@ -92,7 +92,7 @@ Setup → Sort → Review → Run
 
 - [`AGENTS.md`](AGENTS.md) — authoritative architecture & development guide
 - [`docs/ANDROID_ROADMAP.md`](docs/ANDROID_ROADMAP.md) — Android port decisions (A0–A4, SAF→MediaStore, v2 album)
-- [`sortr_flutter/README.md`](sortr_flutter/README.md) — Flutter app quick-start
+- [`visort_flutter/README.md`](visort_flutter/README.md) — Flutter app quick-start
 
 ## License
 

@@ -118,12 +118,12 @@ tags: [feature, android, gallery, mediastore, kotlin]
 
 ## 5. Files
 
-**Kotlin（`android/app/src/main/kotlin/com/sortr/sortr_flutter/mediastore/`）**：
+**Kotlin（`android/app/src/main/kotlin/com/sortr/visort_flutter/mediastore/`）**：
 - `MediaStoreModels.kt` — `MsImageInfo` 加 `isTrashed/isFavorite`；`MsError` 加 5 个错误类型。
 - `MediaStoreRepository.kt` — `scanImages` 投影 + selection（trashed 排除）；新增 `getMetadata`/`requestTrash`/`requestRestore`/`requestFavorite`/`scanTrashed`。
 - `MediaStorePlugin.kt` — `onMethodCall` 加 5 个 case；`onActivityResult` 加 3 个 requestCode 分支；`ContentObserver.onChange` 取 uri；`MediaChangeStreamHandler.notifyChanged` 分类。
 
-**Dart（`sortr_flutter/lib/`）**：
+**Dart（`visort_flutter/lib/`）**：
 - `core/fs/mediastore_channel.dart` — `MsImageInfo` 加字段；`MediaStoreChannel` 加 `getMetadata`/`requestTrash`/`requestRestore`/`requestFavorite`/`scanTrashed`。
 - `core/fs/mediastore_events.dart` — `MsChangeType`/`MsChangeEvent`；`mediaStoreChanges()` 返回 `Stream<MsChangeEvent>`。
 - `features/gallery/gallery_controller.dart` — `toggleFavorite`/`trashPhoto`/`loadTrashed`；observer 增量分支。
