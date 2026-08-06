@@ -21,6 +21,7 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/features/session/session_models.dart';
 import 'package:visort_flutter/shared/widgets/kbd_badge.dart';
+import 'package:visort_flutter/shared/widgets/middle_ellipsis_text.dart';
 import 'package:visort_flutter/ui/adaptive/windows_keyboard_handler.dart';
 import 'package:visort_flutter/ui/router.dart';
 
@@ -43,29 +44,30 @@ class SortScreen extends ConsumerWidget {
     final useAndroidLayout = Platform.isAndroid;
     final scaffold = Scaffold(
       // 安卓端：全屏沉浸——图片铺满物理屏幕在正中央居中，
-      // AppBar 与底栏作为透明浮层叠加，不挤占图片空间。
+      // 顶部信息栏与底部操作栏作为透明浮层叠加。
+      // 桌面端保持实色 AppBar header。
       extendBodyBehindAppBar: useAndroidLayout,
-      appBar: AppBar(
-        // 安卓端 AppBar 透明叠加在图片之上；桌面端保持实色 header。
-        backgroundColor:
-            useAndroidLayout ? Colors.transparent : AppColors.headerBg,
-        forceMaterialTransparency: useAndroidLayout,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pushNamedAndRemoveUntil(
-              context, AppRoutes.home, (_) => false),
-        ),
-        title: const _Logo(),
-        actions: [
-          TextButton(
-            onPressed: () => setLanguage(ref,
-                ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh'),
-            child: Text(
-                ref.read(currentLanguageProvider) == 'zh' ? '中文' : 'EN'),
-          ),
-        ],
-      ),
+      appBar: useAndroidLayout
+          ? null
+          : AppBar(
+              backgroundColor: AppColors.headerBg,
+              elevation: 0,
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => Navigator.pushNamedAndRemoveUntil(
+                    context, AppRoutes.home, (_) => false),
+              ),
+              title: const _Logo(),
+              actions: [
+                TextButton(
+                  onPressed: () => setLanguage(ref,
+                      ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh'),
+                  child: Text(ref.read(currentLanguageProvider) == 'zh'
+                      ? '中文'
+                      : 'EN'),
+                ),
+              ],
+            ),
       body: useAndroidLayout
           ? _buildAndroidLayout(session)
           : _buildDesktopLayout(session),
@@ -89,6 +91,13 @@ class SortScreen extends ConsumerWidget {
       children: [
         // 底层：图片本体，铺满全屏，在物理屏幕正中央居中
         _FullscreenImage(session: session),
+        // 顶层：顶部图片信息浮层（第一行与返回按钮对齐，背景透明露出页面黑色）
+        const Positioned(
+          left: 0,
+          right: 0,
+          top: 0,
+          child: _AndroidTopInfo(),
+        ),
         // 顶层：底部操作栏（Positioned 在底，自带底部 inset 避让手势条）
         Positioned(
           left: 0,
@@ -283,7 +292,6 @@ class _FullscreenImage extends ConsumerStatefulWidget {
 }
 
 class _FullscreenImageState extends ConsumerState<_FullscreenImage> {
-  ImageMeta? _meta;
   bool _loadError = false;
   String? _currentImgId;
 
@@ -295,8 +303,7 @@ class _FullscreenImageState extends ConsumerState<_FullscreenImage> {
     if (newId != _currentImgId) {
       _currentImgId = newId;
       _loadError = false;
-      _meta = null;
-      _loadMeta(img);
+      _precacheNext(img);
     }
   }
 
@@ -305,21 +312,17 @@ class _FullscreenImageState extends ConsumerState<_FullscreenImage> {
     super.initState();
     final img = widget.session.currentImage;
     _currentImgId = img?.id;
-    _loadMeta(img);
+    _precacheNext(img);
   }
 
-  void _loadMeta(ImageRef? img) async {
+  /// 预加载下一张图片（meta 读取已移至 _AndroidTopInfo，此处仅负责 precache）。
+  void _precacheNext(ImageRef? img) {
     if (img == null) return;
-    final fs = ref.read(fileSystemRepositoryProvider);
-    try {
-      final meta = await fs.readMeta(img);
-      if (mounted) setState(() => _meta = meta);
-      final session = ref.read(sessionControllerProvider);
-      if (session.hasNext) {
-        final next = session.images[session.currentIndex + 1];
-        if (mounted) precacheNextImage(context, next);
-      }
-    } catch (_) {}
+    final session = ref.read(sessionControllerProvider);
+    if (session.hasNext) {
+      final next = session.images[session.currentIndex + 1];
+      precacheNextImage(context, next);
+    }
   }
 
   @override
@@ -344,116 +347,158 @@ class _FullscreenImageState extends ConsumerState<_FullscreenImage> {
       );
     }
 
-    // 顶部 inset：避开状态栏 + AppBar 高度，让文件名浮层落在 AppBar 下方。
-    final topInset = MediaQuery.viewPaddingOf(context).top;
-    // AppBar 标准高度 56；用 SliverAppBar 可变高度较复杂，这里用固定值足够。
-    const appBarHeight = 56.0;
+    // 图片区约束在顶栏底部 ↔ 底栏顶部之间的预览区内，避免高图溢出到顶栏
+    // 造成切换时"瞬间变大→被遮盖"的闪烁。
+    // 顶栏高度 = topInset + 56(返回按钮行) + ~24(大小日期行) ≈ topInset + 80
+    // 底栏高度 ≈ 124（文件夹行52 + 操作行44 + padding/border + bottomInset）
+    final mq = MediaQuery.of(context);
+    final topPad = mq.viewPadding.top + 80;
+    final bottomPad = mq.viewPadding.bottom + 124;
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        // 图片本体：铺满全屏，物理居中
-        _loadError
-            ? Center(
-                child: Text(t(ref, 'preview_na'),
-                    style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)))
-            : Image(
-                image: buildImageProvider(img),
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-                errorBuilder: (ctx, error, stack) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (mounted) setState(() => _loadError = true);
-                  });
-                  return const SizedBox.shrink();
-                },
-              ),
-        // 顶部文件名 + 进度浮层（避开状态栏 + AppBar）
-        Positioned(
-          left: 0,
-          right: 0,
-          top: topInset + appBarHeight + 8,
-          child: IgnorePointer(
-            child: _TopInfoOverlay(
-              name: img.label,
-              progress: '${session.currentIndex + 1} / ${session.totalCount}',
-              meta: _meta == null
-                  ? null
-                  : [
-                      _meta!.sizeLabel,
-                      '${t(ref, 'created')}${_meta!.createdLabel}',
-                      '${t(ref, 'modified')}${_meta!.modifiedLabel}',
-                    ],
-            ),
-          ),
-        ),
-      ],
+    return Padding(
+      padding: EdgeInsets.only(top: topPad, bottom: bottomPad),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          _loadError
+              ? Center(
+                  child: Text(t(ref, 'preview_na'),
+                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)))
+              // 全图：保证清晰度 + 动图(GIF)可播放。预览区 padding 已约束图片
+              // 不溢出到顶栏，配合 gaplessPlayback + precacheNext 消除切换闪烁。
+              : Image(
+                  image: buildImageProvider(img),
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  errorBuilder: (ctx, error, stack) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) setState(() => _loadError = true);
+                    });
+                    return const SizedBox.shrink();
+                  },
+                ),
+        ],
+      ),
     );
   }
 }
 
-/// 顶部信息浮层：文件名 + 进度 + 元信息，半透明胶囊，不拦截触摸。
-class _TopInfoOverlay extends StatelessWidget {
-  const _TopInfoOverlay({required this.name, required this.progress, this.meta});
-  final String name;
-  final String progress;
-  final List<String>? meta;
+/// 安卓端顶部信息（放在 AppBar.actions，右对齐）。
+///
+/// 显示文件名 + 进度（第一行）和元信息 size/created/modified（第二行）。
+/// 自身 ref.watch session + 加载 meta，独立于 _FullscreenImage。
+/// 背景用主题 surface 半透明胶囊，与界面配色一致（不再用纯黑）。
+class _AndroidTopInfo extends ConsumerStatefulWidget {
+  const _AndroidTopInfo();
+
+  @override
+  ConsumerState<_AndroidTopInfo> createState() => _AndroidTopInfoState();
+}
+
+class _AndroidTopInfoState extends ConsumerState<_AndroidTopInfo> {
+  ImageMeta? _meta;
+  String? _currentImgId;
+
+  void _loadMeta(ImageRef? img) async {
+    if (img == null) return;
+    final fs = ref.read(fileSystemRepositoryProvider);
+    try {
+      final meta = await fs.readMeta(img);
+      if (mounted) setState(() => _meta = meta);
+    } catch (_) {}
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.45),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
+    final session = ref.watch(sessionControllerProvider);
+    final img = session.currentImage;
+    // build 里检测图片切换：session 变化必然触发 build（ref.watch 保证），
+    // 在此比较 id 即可可靠捕获切换，不依赖 ref.listen/didUpdateWidget。
+    final newId = img?.id;
+    if (newId != _currentImgId) {
+      _currentImgId = newId;
+      _meta = null;
+      _loadMeta(img);
+    }
+    final name = img?.label ?? '';
+    final progress = session.totalCount > 0
+        ? '${session.currentIndex + 1} / ${session.totalCount}'
+        : '';
+    // 第二行：大小 + 修改日期（安卓端 MediaStore 仅提供 modifiedMs；不显示前缀文字）。
+    final sizeLabel = _meta?.sizeLabel ?? '';
+    final dateLabel = _meta?.modifiedLabel ?? '';
+    final secondLine = [sizeLabel, dateLabel]
+        .where((s) => s.isNotEmpty && s != '-')
+        .join('  ');
+
+    final topInset = MediaQuery.viewPaddingOf(context).top;
+    return Container(
+      decoration: const BoxDecoration(color: AppColors.bg),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Padding(
+            padding: EdgeInsets.only(top: topInset),
+            child: SizedBox(
+              height: 56,
+              child: Row(
                 children: [
-                  Flexible(
-                    child: Text(name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                  // 返回按钮（与 photo_viewer 顶部完全一致）
+                  IconButton(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+                    icon: const Icon(Icons.arrow_back, color: AppColors.text),
+                    tooltip: t(ref, 'back'),
+                    onPressed: () => Navigator.pushNamedAndRemoveUntil(
+                        context, AppRoutes.home, (_) => false),
+                  ),
+                  // 图片名称（中段省略保留扩展名）
+                  // Expanded 占满空间把序号推到最右；内部 ConstrainedBox 收窄
+                  // 实际文字宽度（左对齐），让省略号提前出现、不紧贴序号。
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 180),
+                        child: MiddleEllipsisText(
+                          name,
+                          style: const TextStyle(
+                            color: AppColors.text,
+                            fontSize: 13,
                             fontFamily: 'Space Mono', height: 1.2,
                             fontFamilyFallback: AppFonts.cjkFallback,
-                            fontSize: 12,
-                            color: AppColors.text)),
+                          ),
+                          padding: const EdgeInsets.only(right: 12),
+                        ),
+                      ),
+                    ),
                   ),
-                  const SizedBox(width: 10),
-                  Text(progress,
-                      style: const TextStyle(
+                  // 序号（与 photo_viewer 一致）
+                  Padding(
+                    padding: const EdgeInsets.only(right: 16),
+                    child: Text(progress,
+                        style: TextStyle(
+                          color: AppColors.text.withValues(alpha: 0.7),
+                          fontSize: 13,
                           fontFamily: 'Space Mono', height: 1.2,
-                          fontFamilyFallback: AppFonts.cjkFallback,
-                          fontSize: 12,
-                          color: AppColors.muted)),
+                        )),
+                  ),
                 ],
               ),
-              if (meta != null && meta!.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 2,
-                  children: meta!
-                      .map((m) => Text(m,
-                          style: const TextStyle(
-                              fontFamily: 'Space Mono', height: 1.2,
-                              fontFamilyFallback: AppFonts.cjkFallback,
-                              fontSize: 10,
-                              color: AppColors.muted)))
-                      .toList(),
-                ),
-              ],
-            ],
+            ),
           ),
-        ),
+          // 顶栏外：大小 + 创建日期，贴着顶栏右对齐
+          if (secondLine.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(right: 16, bottom: 4),
+              child: Text(secondLine,
+                  style: const TextStyle(
+                      fontFamily: 'Space Mono', height: 1.2,
+                      fontFamilyFallback: AppFonts.cjkFallback,
+                      fontSize: 10,
+                      color: AppColors.muted)),
+            ),
+        ],
       ),
     );
   }
@@ -488,7 +533,18 @@ class _SortPanel extends ConsumerWidget {
         children: [
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
-            child: Text(t(ref, 'move_to'),
+            child: Text(
+                // 追加目标父目录全路径前缀（如 “X:\image\”），便于用户确认落点。
+                () {
+                  final parent = session.destinationParent;
+                  final base = t(ref, 'move_to');
+                  if (parent.isEmpty) return base;
+                  final sep = parent.contains('\\') ? '\\' : '/';
+                  final tail = parent.endsWith('\\') || parent.endsWith('/')
+                      ? parent
+                      : '$parent$sep';
+                  return '$base $tail';
+                }(),
                 style: const TextStyle(
                     fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                     fontSize: 11,
@@ -871,17 +927,18 @@ class _Logo extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text('SORT',
-            style: TextStyle(
-                fontFamily: 'Syne', fontFamilyFallback: AppFonts.cjkFallback,
-                fontWeight: FontWeight.w800,
-                fontSize: 22)),
-        Text('R',
+        // V 用主题绿(accent),ISORT 白色 —— VISORT logo。
+        Text('V',
             style: TextStyle(
                 fontFamily: 'Syne', fontFamilyFallback: AppFonts.cjkFallback,
                 fontWeight: FontWeight.w800,
                 fontSize: 22,
                 color: AppColors.accent)),
+        Text('ISORT',
+            style: TextStyle(
+                fontFamily: 'Syne', fontFamilyFallback: AppFonts.cjkFallback,
+                fontWeight: FontWeight.w800,
+                fontSize: 22)),
       ],
     );
   }

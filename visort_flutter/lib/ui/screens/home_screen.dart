@@ -209,17 +209,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text('SORT',
-            style: TextStyle(
-                fontFamily: AppFonts.syne,
-                fontWeight: FontWeight.w800,
-                fontSize: 22)),
-        Text('R',
+        Text('V',
             style: TextStyle(
                 fontFamily: AppFonts.syne,
                 fontWeight: FontWeight.w800,
                 fontSize: 22,
                 color: AppColors.accent)),
+        Text('ISORT',
+            style: TextStyle(
+                fontFamily: AppFonts.syne,
+                fontWeight: FontWeight.w800,
+                fontSize: 22)),
       ],
     );
   }
