@@ -27,6 +27,7 @@ import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/router.dart';
+import 'package:visort_flutter/ui/router_android.dart';
 import 'album_flight.dart';
 
 class HomeScreenAndroid extends ConsumerStatefulWidget {
@@ -340,10 +341,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   /// 右上角 3 点菜单：收藏 / 回收站快捷入口（相册浏览走首页列表直接点）。
   Future<void> _onMenuSelected(String value) async {
     if (value == 'favorites') {
-      await Navigator.pushNamed(context, AppRoutes.album,
+      await Navigator.pushNamed(context, AlbumRoutes.album,
           arguments: const {'favoritesOnly': true});
     } else if (value == 'trash') {
-      await Navigator.pushNamed(context, AppRoutes.album,
+      await Navigator.pushNamed(context, AlbumRoutes.album,
           arguments: const {'trashedOnly': true});
     } else if (value == 'settings') {
       Navigator.pushNamed(context, AppRoutes.settings);
@@ -1141,7 +1142,8 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       int idx, String value, Animation<double> animation) {
     return SizeTransition(
       sizeFactor: animation,
-      alignment: Alignment.topCenter,
+      // SizeTransition 无 alignment 参数：垂直轴 -1.0 = 顶部对齐
+      axisAlignment: -1.0,
       child: FadeTransition(
         opacity: animation,
         child: Padding(
@@ -1625,7 +1627,7 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
           coverAlignment:
               albumCoverAlignment(rect, MediaQuery.sizeOf(context)));
     } else {
-      await Navigator.pushNamed(context, AppRoutes.album, arguments: args);
+      await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
     }
     // 从相册返回：刷新封面/数量（相册内可能删除了图片/改了排序）
     widget.onAlbumReturned?.call();
