@@ -19,7 +19,7 @@ import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
-import 'package:visort_flutter/ui/router.dart';
+import 'package:visort_flutter/ui/router_android.dart';
 import 'package:visort_flutter/shared/widgets/scroll_drag_handle.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
@@ -742,7 +742,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         onIndexChanged: _onViewerIndexChanged,
         transition: anim,
       ),
-      settings: const RouteSettings(name: AppRoutes.photoViewer),
+      settings: const RouteSettings(name: AlbumRoutes.photoViewer),
       fullscreenDialog: true,
     ));
   }

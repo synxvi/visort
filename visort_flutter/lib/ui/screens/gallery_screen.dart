@@ -19,7 +19,7 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/shared/widgets/press_scale.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
-import 'package:visort_flutter/ui/router.dart';
+import 'package:visort_flutter/ui/router_android.dart';
 import 'album_flight.dart';
 
 class GalleryScreen extends ConsumerStatefulWidget {
@@ -136,7 +136,7 @@ class _FavoritesTile extends ConsumerWidget {
       ),
       trailing:
           const Icon(Icons.chevron_right, color: AppColors.muted, size: 20),
-      onTap: () => Navigator.pushNamed(context, AppRoutes.album,
+      onTap: () => Navigator.pushNamed(context, AlbumRoutes.album,
           arguments: const {'favoritesOnly': true}),
     );
   }
@@ -170,7 +170,7 @@ class _TrashTile extends ConsumerWidget {
       ),
       trailing:
           const Icon(Icons.chevron_right, color: AppColors.muted, size: 20),
-      onTap: () => Navigator.pushNamed(context, AppRoutes.album,
+      onTap: () => Navigator.pushNamed(context, AlbumRoutes.album,
           arguments: const {'trashedOnly': true}),
     );
   }
@@ -206,7 +206,7 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
           coverAlignment:
               albumCoverAlignment(rect, MediaQuery.sizeOf(context)));
     } else {
-      Navigator.pushNamed(context, AppRoutes.album, arguments: args);
+      Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
     }
   }
 

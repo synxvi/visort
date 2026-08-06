@@ -18,11 +18,11 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_animations.dart';
 import 'album_screen.dart';
-import '../router.dart';
+import '../router_android.dart';
 
 /// 网格由小变大进入相册。
 ///
-/// [args]：与 AppRoutes.album 的 pushNamed arguments 相同
+/// [args]：与 AlbumRoutes.album 的 pushNamed arguments 相同
 /// （bucketId/bucketName/bucketCount/favoritesOnly/trashedOnly）。
 /// [coverAlignment]：缩放锚点（点击的封面位置，网格从此处放大到全屏）。
 Future<void> pushAlbumGrow(
@@ -66,7 +66,7 @@ Future<void> pushAlbumGrow(
         ],
       );
     },
-    settings: const RouteSettings(name: AppRoutes.album),
+    settings: const RouteSettings(name: AlbumRoutes.album),
   ));
 }
 

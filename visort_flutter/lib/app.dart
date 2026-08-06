@@ -1,5 +1,7 @@
 // 应用根 Widget —— 接入主题、语言、噪点、路由
 
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,15 +10,13 @@ import 'core/i18n/i18n.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/noise_overlay.dart';
 import 'ui/router.dart';
+import 'ui/router_android.dart';
 
-/// 噪点 overlay 不套用的路由（相册浏览相关）。
-/// 这些页面有大面积滚动列表/全屏看图，每帧全屏 alpha 合成会拖慢渲染；
-/// 且「看照片」时颗粒质感无意义，故绕过。见 currentRouteName 说明。
-const _noiseDisabledRoutes = {
-  AppRoutes.gallery,
-  AppRoutes.album,
-  AppRoutes.photoViewer,
-};
+/// 噪点 overlay 不套用的路由名集合（平台分叉）。
+/// - 安卓：相册浏览链（gallery/album/photoViewer）有大面积滚动列表/全屏看图，
+///   每帧全屏 alpha 合成会拖慢渲染；且「看照片」时颗粒质感无意义，故绕过。
+/// - 桌面：无相册浏览功能，恒启用噪点。
+final _noiseDisabledRoutes = Platform.isAndroid ? albumNoiseDisabledRoutes : const <String>{};
 
 class VisortApp extends ConsumerWidget {
   const VisortApp({super.key});
