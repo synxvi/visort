@@ -40,12 +40,15 @@ class AlbumScreen extends ConsumerStatefulWidget {
 
   final String bucketId;
   final String? bucketName;
+
   /// 该相册的图片总数（来自 MediaStore bucket.count，稳定不变）。
   /// 供滚动拖拽手柄做精确进度定位——不随分页 loadMore 变化，故手柄不跳。
   /// null 时手柄回退到「已加载内容内定位」。
   final int? bucketCount;
+
   /// 跨相册收藏视图（P1b）：true 时忽略 bucketId，扫描所有 IS_FAVORITE=1。
   final bool favoritesOnly;
+
   /// 跨相册回收站视图（P1a）：true 时扫描所有 IS_TRASHED=1。
   final bool trashedOnly;
 
@@ -65,10 +68,16 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// 向前滑→贴顶部；翻回原位→恢复打开时的网格视口。
   int _openViewerIndex = 0;
   double _openScrollOffset = 0;
+
   /// 飞行层图：跟随当前照片（翻页后返回动画缩回的是当前照片，不是初始那张）。
   late Widget _flightImage;
+
   /// 飞行层终点：当前照片所在 cell 的屏幕位置（翻页时滚动网格到该行后计算）。
   Rect? _flightEndRect;
+
+  /// 飞行层当前照片宽高比：Transform 缩放精确算 cell→全屏 缩放比（避免竖图溢出）。
+  /// _buildFlightImage 每次换图时刷新。
+  double? _flightImgAspect;
 
   // ── 批量选择模式：长按 cell 进入，勾选后底部操作栏执行批量操作 ──
   bool _selectMode = false;
@@ -106,7 +115,9 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       } else if (widget.trashedOnly) {
         ref.read(galleryControllerProvider.notifier).enterTrash();
       } else {
-        ref.read(galleryControllerProvider.notifier).enterBucket(widget.bucketId);
+        ref
+            .read(galleryControllerProvider.notifier)
+            .enterBucket(widget.bucketId);
       }
     });
   }
@@ -140,69 +151,70 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         if (!didPop && _selectMode) _exitSelectMode();
       },
       child: Scaffold(
-      backgroundColor: AppColors.bg,
-      appBar: AppBar(
-        backgroundColor: AppColors.surface,
-        foregroundColor: AppColors.text,
-        // 标题紧贴返回箭头（默认 titleSpacing 16 会显得相册名离箭头太远）
-        titleSpacing: 0,
-        title: _selectMode
-            ? Text(
-                t(ref, 'selected_n', [_selectedIds.length]),
-                style: TextStyle(
-                  fontFamily: 'Space Mono', height: 1.2,
-                  fontFamilyFallback: AppFonts.cjkFallback,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
+        backgroundColor: AppColors.bg,
+        appBar: AppBar(
+          backgroundColor: AppColors.surface,
+          foregroundColor: AppColors.text,
+          // 标题紧贴返回箭头（默认 titleSpacing 16 会显得相册名离箭头太远）
+          titleSpacing: 0,
+          title: _selectMode
+              ? Text(
+                  t(ref, 'selected_n', [_selectedIds.length]),
+                  style: TextStyle(
+                    fontFamily: 'Space Mono',
+                    height: 1.2,
+                    fontFamilyFallback: AppFonts.cjkFallback,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                  ),
+                )
+              : Text(
+                  widget.trashedOnly
+                      ? t(ref, 'trash_title')
+                      : (widget.favoritesOnly
+                            ? t(ref, 'favorites_title')
+                            : (widget.bucketName ?? t(ref, 'gallery_title'))),
+                  style: TextStyle(
+                    fontFamily: 'Space Mono',
+                    height: 1.2,
+                    fontFamilyFallback: AppFonts.cjkFallback,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              )
-            : Text(
-                widget.trashedOnly
-                    ? t(ref, 'trash_title')
-                    : (widget.favoritesOnly
-                        ? t(ref, 'favorites_title')
-                        : (widget.bucketName ?? t(ref, 'gallery_title'))),
-                style: TextStyle(
-                  fontFamily: 'Space Mono', height: 1.2,
-                  fontFamilyFallback: AppFonts.cjkFallback,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-        actions: _selectMode
-            ? [
-                IconButton(
-                  icon: const Icon(Icons.select_all),
-                  tooltip: t(ref, 'select_all'),
-                  onPressed: () => setState(() {
-                    final photos =
-                        ref.read(galleryControllerProvider).photos;
-                    _selectedIds.addAll(photos.map((p) => p.id));
-                  }),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  tooltip: t(ref, 'batch_cancel'),
-                  onPressed: _exitSelectMode,
-                ),
-              ]
-            : [
-                SortToggle(
-                  sortBy: gallery.effectivePhotoSortBy,
-                  asc: gallery.photoSortAsc,
-                  // 回收站视图额外提供「按删除日期」
-                  showDateTrashed: widget.trashedOnly,
-                  onChanged: (by, asc) => ref
-                      .read(galleryControllerProvider.notifier)
-                      .setPhotoSort(by, asc),
-                ),
-              ],
-      ),
-      body: SafeArea(child: _buildBody(gallery)),
-      // 批量选择模式：底部操作栏（按视图模式提供不同批量操作）
-      bottomNavigationBar: _selectMode ? _buildBatchBar(gallery) : null,
+          actions: _selectMode
+              ? [
+                  IconButton(
+                    icon: const Icon(Icons.select_all),
+                    tooltip: t(ref, 'select_all'),
+                    onPressed: () => setState(() {
+                      final photos = ref.read(galleryControllerProvider).photos;
+                      _selectedIds.addAll(photos.map((p) => p.id));
+                    }),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    tooltip: t(ref, 'batch_cancel'),
+                    onPressed: _exitSelectMode,
+                  ),
+                ]
+              : [
+                  SortToggle(
+                    sortBy: gallery.effectivePhotoSortBy,
+                    asc: gallery.photoSortAsc,
+                    // 回收站视图额外提供「按删除日期」
+                    showDateTrashed: widget.trashedOnly,
+                    onChanged: (by, asc) => ref
+                        .read(galleryControllerProvider.notifier)
+                        .setPhotoSort(by, asc),
+                  ),
+                ],
+        ),
+        body: SafeArea(child: _buildBody(gallery)),
+        // 批量选择模式：底部操作栏（按视图模式提供不同批量操作）
+        bottomNavigationBar: _selectMode ? _buildBatchBar(gallery) : null,
       ),
     );
   }
@@ -218,11 +230,22 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.error_outline, size: 40, color: AppColors.danger),
+              const Icon(
+                Icons.error_outline,
+                size: 40,
+                color: AppColors.danger,
+              ),
               const SizedBox(height: 12),
-              SelectableText(gallery.error!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.danger, fontSize: 12)),
+              SelectableText(
+                gallery.error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontFamily: 'Space Mono',
+                  fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                  color: AppColors.danger,
+                  fontSize: 12,
+                ),
+              ),
               const SizedBox(height: 16),
               OutlinedButton(
                 onPressed: () => ref
@@ -252,8 +275,16 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         return _ThumbGridPlaceholder(cols: cols);
       }
       return Center(
-          child: Text(t(ref, 'album_empty'),
-              style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)));
+        child: Text(
+          t(ref, 'album_empty'),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+            color: AppColors.muted,
+            fontSize: 13,
+          ),
+        ),
+      );
     }
     return Stack(
       children: [
@@ -282,8 +313,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
               onTap: (cellRect) => _selectMode
                   ? _toggleSelect(info.id)
                   : _openViewer(context, gallery, photos, i, cellRect),
-              onLongPress:
-                  _selectMode ? null : () => _enterSelectMode(info.id),
+              onLongPress: _selectMode ? null : () => _enterSelectMode(info.id),
             );
           },
         ),
@@ -313,33 +343,59 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           child: TextButton.icon(
             onPressed: enabled ? onTap : null,
             icon: Icon(icon, size: 18),
-            label: Text(label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12)),
+            label: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12),
+            ),
             style: TextButton.styleFrom(foregroundColor: color),
           ),
         );
     final ops = widget.trashedOnly
         ? [
-            op(Icons.restore, t(ref, 'action_restore'), AppColors.accent,
-                _runBatchRestore),
-            op(Icons.delete_forever, t(ref, 'delete_permanently'),
-                AppColors.danger, _runBatchDelete),
+            op(
+              Icons.restore,
+              t(ref, 'action_restore'),
+              AppColors.accent,
+              _runBatchRestore,
+            ),
+            op(
+              Icons.delete_forever,
+              t(ref, 'delete_permanently'),
+              AppColors.danger,
+              _runBatchDelete,
+            ),
           ]
         : widget.favoritesOnly
-            ? [
-                op(Icons.favorite_border, t(ref, 'action_unfavorite'),
-                    AppColors.accent, _runBatchUnfavorite),
-                op(Icons.delete_outline, t(ref, 'delete_photo'),
-                    AppColors.danger, _runBatchTrash),
-              ]
-            : [
-                op(Icons.favorite_border, t(ref, 'action_favorite'),
-                    AppColors.accent, _runBatchFavorite),
-                op(Icons.delete_outline, t(ref, 'delete_photo'),
-                    AppColors.danger, _runBatchTrash),
-              ];
+        ? [
+            op(
+              Icons.favorite_border,
+              t(ref, 'action_unfavorite'),
+              AppColors.accent,
+              _runBatchUnfavorite,
+            ),
+            op(
+              Icons.delete_outline,
+              t(ref, 'delete_photo'),
+              AppColors.danger,
+              _runBatchTrash,
+            ),
+          ]
+        : [
+            op(
+              Icons.favorite_border,
+              t(ref, 'action_favorite'),
+              AppColors.accent,
+              _runBatchFavorite,
+            ),
+            op(
+              Icons.delete_outline,
+              t(ref, 'delete_photo'),
+              AppColors.danger,
+              _runBatchTrash,
+            ),
+          ];
     return SafeArea(
       child: Container(
         color: AppColors.surface,
@@ -366,24 +422,38 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        title: Text(t(ref, 'batch_delete_confirm', [ids.length]),
-            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 15)),
+        title: Text(
+          t(ref, 'batch_delete_confirm', [ids.length]),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+            color: AppColors.text,
+            fontSize: 15,
+          ),
+        ),
         actions: [
           Row(
             children: [
               Expanded(
                 child: TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: Text(t(ref, 'cancel'),
-                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)),
+                  child: Text(
+                    t(ref, 'cancel'),
+                    style: const TextStyle(
+                      fontFamily: 'Space Mono',
+                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                      color: AppColors.muted,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: FilledButton(
                   style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.danger,
-                      foregroundColor: AppColors.bg),
+                    backgroundColor: AppColors.danger,
+                    foregroundColor: AppColors.bg,
+                  ),
                   onPressed: () => Navigator.pop(ctx, true),
                   child: Text(t(ref, 'confirm')),
                 ),
@@ -399,7 +469,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         .trashPhotos(ids);
     if (!mounted) return;
     _exitSelectMode();
-    toast(context, err == null ? t(ref, 'trashed') : t(ref, 'trash_unsupported'));
+    toast(
+      context,
+      err == null ? t(ref, 'trashed') : t(ref, 'trash_unsupported'),
+    );
   }
 
   /// 批量从回收站恢复。
@@ -413,24 +486,38 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        title: Text(t(ref, 'batch_restore_confirm', [ids.length]),
-            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 15)),
+        title: Text(
+          t(ref, 'batch_restore_confirm', [ids.length]),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+            color: AppColors.text,
+            fontSize: 15,
+          ),
+        ),
         actions: [
           Row(
             children: [
               Expanded(
                 child: TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: Text(t(ref, 'cancel'),
-                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)),
+                  child: Text(
+                    t(ref, 'cancel'),
+                    style: const TextStyle(
+                      fontFamily: 'Space Mono',
+                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                      color: AppColors.muted,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: FilledButton(
                   style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.accent,
-                      foregroundColor: AppColors.bg),
+                    backgroundColor: AppColors.accent,
+                    foregroundColor: AppColors.bg,
+                  ),
                   onPressed: () => Navigator.pop(ctx, true),
                   child: Text(t(ref, 'confirm')),
                 ),
@@ -460,26 +547,47 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        title: Text(t(ref, 'delete_permanently'),
-            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 15)),
-        content: Text(t(ref, 'batch_delete_permanent_confirm', [ids.length]),
-            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)),
+        title: Text(
+          t(ref, 'delete_permanently'),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+            color: AppColors.text,
+            fontSize: 15,
+          ),
+        ),
+        content: Text(
+          t(ref, 'batch_delete_permanent_confirm', [ids.length]),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+            color: AppColors.muted,
+            fontSize: 13,
+          ),
+        ),
         actions: [
           Row(
             children: [
               Expanded(
                 child: TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: Text(t(ref, 'cancel'),
-                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)),
+                  child: Text(
+                    t(ref, 'cancel'),
+                    style: const TextStyle(
+                      fontFamily: 'Space Mono',
+                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                      color: AppColors.muted,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: FilledButton(
                   style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.danger,
-                      foregroundColor: AppColors.bg),
+                    backgroundColor: AppColors.danger,
+                    foregroundColor: AppColors.bg,
+                  ),
                   onPressed: () => Navigator.pop(ctx, true),
                   child: Text(t(ref, 'confirm')),
                 ),
@@ -510,7 +618,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         .setFavorites(ids, true);
     if (!mounted) return;
     _exitSelectMode();
-    toast(context, err == null ? t(ref, 'favorited') : t(ref, 'favorite_failed'));
+    toast(
+      context,
+      err == null ? t(ref, 'favorited') : t(ref, 'favorite_failed'),
+    );
   }
 
   /// 批量取消收藏（收藏视图；与单张收藏切换一致不弹窗，乐观更新）。
@@ -525,7 +636,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         .setFavorites(ids, false);
     if (!mounted) return;
     _exitSelectMode();
-    toast(context, err == null ? t(ref, 'unfavorited') : t(ref, 'favorite_failed'));
+    toast(
+      context,
+      err == null ? t(ref, 'unfavorited') : t(ref, 'favorite_failed'),
+    );
   }
 
   /// 打开大图浏览器：用 PageRouteBuilder 的 transitionsBuilder 实现
@@ -540,28 +654,37 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// 250ms 内 loadThumbnail 加载不完 → 飞行层空白 → 灰屏且无缩放效果。
   /// errorBuilder 用灰块兜底：即使加载失败也有可见内容在放大（诊断+兜底）。
   Widget _buildFlightImage(MsImageInfo info) {
-    final imgRef =
-        imageRefFromMediaStoreId(info.id, extension: extOf(info.name));
+    final imgRef = imageRefFromMediaStoreId(
+      info.id,
+      extension: extOf(info.name),
+    );
+    // 记录宽高比，供 transitionsBuilder 算 Transform 缩放比（contain 全程缩放，
+    // 避免方形 cell↔竖屏全屏 的 contain 方向跳变重影）。
+    _flightImgAspect = (info.width > 0 && info.height > 0)
+        ? info.width / info.height
+        : null;
     // 两级飞行层：300 缩略图（网格缓存，push 立即可见）+ 下采样原图
     // （与 viewer 用同一 computeViewerTargetWidth → pop 时命中 viewer 已加载
     // 的缓存，返回动画清晰；push 期间解码完则无缝覆盖 300，没完也有 300 兜
     // 底不灰屏）。之前只挂 300 → pop 时 viewer 原图已就绪却被 300 盖住、
     // 返回发虚（用户反馈"图已加载出来不该再模糊"）。
-    final tw = computeViewerTargetWidth(MediaQuery.sizeOf(context).width *
-        MediaQuery.devicePixelRatioOf(context));
+    // 两级飞行层：300 缩略图（网格缓存，push 立即可见）+ 下采样原图（1152，动画
+    // 期清晰）。1152 解码完用 gaplessPlayback 覆盖 300，没完则 300 兜底不模糊。
+    final tw = computeViewerTargetWidth(
+      MediaQuery.sizeOf(context).width * MediaQuery.devicePixelRatioOf(context),
+    );
     return Stack(
       fit: StackFit.expand,
       children: [
         Image(
           image: buildThumbnailProvider(imgRef, size: 300),
-          fit: BoxFit.contain,
+          fit: BoxFit.cover,
           gaplessPlayback: true,
-          errorBuilder: (_, _, _) =>
-              const ColoredBox(color: Color(0xFF2A2A2A)),
+          errorBuilder: (_, _, _) => const ColoredBox(color: Color(0xFF2A2A2A)),
         ),
         Image(
           image: buildImageProvider(imgRef, targetWidth: tw),
-          fit: BoxFit.contain,
+          fit: BoxFit.cover,
           gaplessPlayback: true,
           errorBuilder: (_, _, _) => const SizedBox.shrink(),
         ),
@@ -606,8 +729,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       // 贴顶：目标行成为视口第一行
       target = row * rowExtent;
     }
-    _scrollCtrl
-        .jumpTo(target.clamp(0.0, _scrollCtrl.position.maxScrollExtent));
+    _scrollCtrl.jumpTo(target.clamp(0.0, _scrollCtrl.position.maxScrollExtent));
   }
 
   /// 计算网格中某 index cell 的屏幕位置。
@@ -623,10 +745,9 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     final rowExtent = cellW + 3;
     final row = index ~/ cols;
     final col = index % cols;
-    final topLeft = gridBox.localToGlobal(Offset(
-      4 + col * (cellW + 3),
-      4 + row * rowExtent - _scrollCtrl.offset,
-    ));
+    final topLeft = gridBox.localToGlobal(
+      Offset(4 + col * (cellW + 3), 4 + row * rowExtent - _scrollCtrl.offset),
+    );
     return topLeft & Size(cellW, cellW);
   }
 
@@ -638,113 +759,138 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     Rect? cellRect,
   ) {
     final info = photos[index];
-    final imgRef =
-        imageRefFromMediaStoreId(info.id, extension: extOf(info.name));
-    // 预解码 2880 原图（native readSampledImage，~92ms）：点击瞬间发起，与 push
-    // 飞行动画并发——动画期间 viewer 被 Opacity 0 隐藏，2880 在后台解码。250ms 动画
-    // 期内解完则缩放结束瞬间即高清（t=1 仍垫 300 与飞行末帧衔接无跳变，1~2 帧后
-    // 2880 命中缓存覆盖 300）。不 await，不阻塞 push。
-    // 不预载 768：768 层已移除——loadThumbnail(~50ms) 比 readSampledImage(~92ms) 快，
-    // 保留它会抢先生成造成多一次闪现；直接 300→2880 更干脆。
-    precacheImage(
-        buildImageProvider(imgRef,
-            targetWidth: computeViewerTargetWidth(
-                MediaQuery.sizeOf(context).width *
-                    MediaQuery.devicePixelRatioOf(context))),
-        context);
+    // 不预解码 2880：precacheImage 在 push 同帧发起大图解码+纹理上传，
+    // 与飞行动画抢 raster 线程。本诊断版移除，验证动画期纹理上传是否为掉帧根因。
+    // final imgRef =
+    //     imageRefFromMediaStoreId(info.id, extension: extOf(info.name));
+    // precacheImage(
+    //     buildImageProvider(imgRef,
+    //         targetWidth: computeViewerTargetWidth(
+    //             MediaQuery.sizeOf(context).width *
+    //                 MediaQuery.devicePixelRatioOf(context))),
+    //     context);
     // 飞行层初始状态：当前照片 + 点击 cell 位置。
     // 翻页后由 [_onViewerIndexChanged] 更新——返回动画跟随当前照片。
     _openViewerIndex = index;
     _openScrollOffset = _scrollCtrl.hasClients ? _scrollCtrl.offset : 0;
     _flightImage = _buildFlightImage(info);
     _flightEndRect = cellRect;
-    Navigator.of(context).push(PageRouteBuilder(
-      transitionDuration: const Duration(milliseconds: 250),
-      reverseTransitionDuration: const Duration(milliseconds: 180),
-      // ⚠️ opaque: false —— pop 返回动画期间底下 album 网格参与合成并可见
-      // （COUI 式返回：viewer 淡出 + 飞行层缩回时网格全程在底下，动画结束
-      // 无"黑→网格瞬现"）。push 期网格被下方恒黑垫底层盖住，观感不变；
-      // 代价是动画期间多一层网格合成（180~250ms，Impeller 下可接受）。
-      opaque: false,
-      // route animation 驱动 rect 缩放：
-      // push（anim 0→1）：图从 cellRect 线性放大到全屏 contain；
-      // pop（anim 1→0）：图从全屏缩回**当前照片**的 cell 位置（翻页后更新）。
-      // child = PhotoViewer 页面（在飞行层下方）。
-      transitionsBuilder: (ctx, anim, _, child) {
-        debugPrint(
-            '[Flight] t=${anim.value.toStringAsFixed(2)} status=${anim.status} endRect=$_flightEndRect');
-        final size = MediaQuery.sizeOf(ctx);
-        // 终点与 viewer 图区域一致（PageView 页 Padding(horizontal:4)）。
-        final fullRect = Rect.fromLTWH(4, 0, size.width - 8, size.height);
-        // COUIMoveEase 替代原 linear：强 ease-out，图"冲"到全屏而非匀速滑入。
-        // 原 linear 已验证可用但略机械；couiMoveEase 更贴近一加手感。
-        final t = AppCurves.couiMoveEase.transform(anim.value);
-        final endRect = _flightEndRect;
-        final rect = Rect.lerp(endRect ?? fullRect, fullRect, t)!;
-        // ⚠️ showFlight 必须用 status 判断（不能用 anim.value < 1）：
-        // completed 后 transitionsBuilder 不再 rebuild，若黑底留在树里会
-        // 永远盖住 viewer。pop 触发时 status 变 reverse → 飞行层重新出现。
-        final showFlight =
-            endRect != null && anim.status != AnimationStatus.completed;
-        // push 时 viewer 完全隐藏,让飞行层独占缩放动画——否则 viewer 的满屏
-        // 清晰图(_openViewer 里 precache 预加载的 2880)会随 t 淡入,与飞行
-        // 缩略图重叠成"底下垫满屏图 + 缩放动画"的双图观感。pop 时仍随 t 淡出
-        // (与返回手势衔接)。t=1 飞行层移除瞬间 viewer 显现,其 300 垫底与飞行
-        // 末帧(300 满屏 contain)同布局,无跳变。
-        final isReverse = anim.status == AnimationStatus.reverse;
-        final viewerOpacity = isReverse ? t : (showFlight ? 0.0 : 1.0);
-        // 飞行层渐显渐隐：起点/终点 15% 内淡入淡出（避免 push 突兀出现 /
-        // pop 缩回瞬间消失）。
-        final baseBlack = (t / 0.15).clamp(0.0, 1.0);
-        // 黑遮罩仅 push 期使用：viewer 半透明（t<1）时盖住底层，viewer 完全
-        // 可见（t=1）时 black=0，showFlight 移除瞬间（completed）chrome 顶/底栏
-        // 不会从"被黑盖住"突变到可见。（旧逻辑末段加深到 0.95 再整层移除 → 闪烁）
-        // ⚠️ pop 返回时 black=0：配合 opaque:false 让底下相册网格全程可见
-        // （COUI 式返回），viewer 淡出 + 飞行层缩回时网格透出，动画结束
-        // 无"黑→网格瞬现"。
-        final black = isReverse ? 0.0 : (1.0 - t).clamp(0.0, 1.0) * 0.95;
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            // ⚠️ 垫底（仅 push 期）：纯黑（= viewer Scaffold 背景），**恒不透明**——
-            // push 期 viewer 隐藏、飞行层 contain 留白透出本层；t=1 飞行层移除、
-            // viewer 显现，留白从「垫底」交接到「viewer 背景」，二者同色避免
-            // 灰→黑跳变闪烁（原 #0F0F0F 与 viewer 纯黑差 15 → 图片上下留白闪灰）。
-            // pop 返回时移除本层——opaque:false 下底层网格参与合成，viewer 淡出
-            // 即露出网格；保留本层会把网格重新盖死（又变回"瞬现"）。
-            if (!isReverse) const ColoredBox(color: Colors.black),
-            // viewer 页面：push 隐藏飞行层独占缩放;pop 走 viewerOpacity(t)淡出。
-            Opacity(opacity: viewerOpacity, child: child),
-            if (showFlight) ...[
-              if (black > 0)
-                ColoredBox(color: Colors.black.withValues(alpha: black)),
-              // ⚠️ Positioned 必须直接作为 Stack 的 child！之前在 Opacity 里
-              // （Opacity→Positioned），release 下不报错但定位不生效、图尺寸
-              // 为 0 → 飞行层不可见 → “无缩放”（多版灰屏的根因）。
-              // 渐隐用 Positioned 内部的 Opacity 实现。
-              Positioned.fromRect(
-                rect: rect,
-                child: Opacity(opacity: baseBlack, child: _flightImage),
-              ),
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 300),
+        reverseTransitionDuration: const Duration(milliseconds: 200),
+        // ⚠️ opaque: false —— pop 返回动画期间底下 album 网格参与合成并可见
+        // （COUI 式返回：viewer 淡出 + 飞行层缩回时网格全程在底下，动画结束
+        // 无"黑→网格瞬现"）。push 期网格被下方恒黑垫底层盖住，观感不变；
+        // 代价是动画期间多一层网格合成（180~250ms，Impeller 下可接受）。
+        opaque: false,
+        // route animation 驱动 rect 缩放：
+        // push（anim 0→1）：图从 cellRect 线性放大到全屏 contain；
+        // pop（anim 1→0）：图从全屏缩回**当前照片**的 cell 位置（翻页后更新）。
+        // child = PhotoViewer 页面（在飞行层下方）。
+        transitionsBuilder: (ctx, anim, _, child) {
+          // 移除每帧 debugPrint（release 下非空操作，throttle buffer 满
+          // flush logcat 会阻塞主 isolate）。
+          final size = MediaQuery.sizeOf(ctx);
+          // 终点 = 全屏 contain 区域（与 viewer 图区域一致：图延伸到栏后，由栏
+          // overlay 盖住）。栏黑底不参与淡入（见 photo_viewer _insertBars），故
+          // 飞行层图进栏区域、completed 切换均不闪。
+          final fullRect = Rect.fromLTWH(4, 0, size.width - 8, size.height);
+          // COUIMoveEase 替代原 linear：强 ease-out，图"冲"到全屏而非匀速滑入。
+          // 原 linear 已验证可用但略机械；couiMoveEase 更贴近一加手感。
+          final t = AppCurves.couiMoveEase.transform(anim.value);
+          final endRect = _flightEndRect;
+          // 飞行层：图 cover 填满渲染矩形（无 contain 留白方向跳变重影），渲染矩形
+          // 从 cellRect 线性插值到 containFullRect（图在全屏的实际占位）。
+          // t=0 cover cellRect = 缩略图（填满，无缝）；t=1 cover containFullRect
+          // （矩形比例=图，cover 无裁剪）= viewer contain → completed/返回终点/过程都不跳。
+          final imgA = _flightImgAspect;
+          Rect targetRect;
+          if (imgA != null && imgA > 0) {
+            final vpA = fullRect.width / fullRect.height;
+            double fullImgW, fullImgH;
+            if (imgA < vpA) {
+              // 图比 rect 更高 → 按高缩（高满，左右留白）
+              fullImgH = fullRect.height;
+              fullImgW = fullRect.height * imgA;
+            } else {
+              // 图比 rect 更宽 → 按宽缩（宽满，上下留白）
+              fullImgW = fullRect.width;
+              fullImgH = fullRect.width / imgA;
+            }
+            targetRect = Rect.fromCenter(
+              center: fullRect.center,
+              width: fullImgW,
+              height: fullImgH,
+            );
+          } else {
+            targetRect = fullRect;
+          }
+          final rect = Rect.lerp(endRect ?? targetRect, targetRect, t)!;
+          // ⚠️ showFlight 必须用 status 判断（不能用 anim.value < 1）：
+          // completed 后 transitionsBuilder 不再 rebuild，若黑底留在树里会
+          // 永远盖住 viewer。pop 触发时 status 变 reverse → 飞行层重新出现。
+          final showFlight =
+              endRect != null && anim.status != AnimationStatus.completed;
+          // push 与 pop 都让 viewer 隐藏、飞行层独占缩放：push 时若 viewer 可见，
+          // 其满屏图会与飞行缩略图重叠成"底下垫图 + 缩放"的双图观感；pop 时若 viewer
+          // 随 t 淡出，飞行层缩回过程中后面会叠着 viewer 全屏原图，衔接生硬（用户
+          // 反馈"两层图"）。故两种方向都 viewerOpacity=0，仅 completed 后 viewer 显现。
+          final isReverse = anim.status == AnimationStatus.reverse;
+          final viewerOpacity = showFlight ? 0.0 : 1.0;
+          // 飞行层渐显渐隐：起点/终点 15% 内淡入淡出（避免 push 突兀出现 /
+          // pop 缩回瞬间消失）。
+          final baseBlack = (t / 0.15).clamp(0.0, 1.0);
+          // 黑遮罩仅 push 期使用：viewer 半透明（t<1）时盖住底层，viewer 完全
+          // 可见（t=1）时 black=0，showFlight 移除瞬间（completed）chrome 顶/底栏
+          // 不会从"被黑盖住"突变到可见。（旧逻辑末段加深到 0.95 再整层移除 → 闪烁）
+          // ⚠️ pop 返回时 black=0：配合 opaque:false 让底下相册网格全程可见
+          // （COUI 式返回），viewer 淡出 + 飞行层缩回时网格透出，动画结束
+          // 无"黑→网格瞬现"。
+          final black = isReverse ? 0.0 : (1.0 - t).clamp(0.0, 1.0) * 0.95;
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              // ⚠️ 垫底（仅 push 期）：纯黑（= viewer Scaffold 背景），**恒不透明**——
+              // push 期 viewer 隐藏、飞行层 contain 留白透出本层；t=1 飞行层移除、
+              // viewer 显现，留白从「垫底」交接到「viewer 背景」，二者同色避免
+              // 灰→黑跳变闪烁（原 #0F0F0F 与 viewer 纯黑差 15 → 图片上下留白闪灰）。
+              // pop 返回时移除本层——opaque:false 下底层网格参与合成，viewer 淡出
+              // 即露出网格；保留本层会把网格重新盖死（又变回"瞬现"）。
+              if (!isReverse) const ColoredBox(color: Colors.black),
+              // viewer 页面：push 隐藏飞行层独占缩放;pop 走 viewerOpacity(t)淡出。
+              Opacity(opacity: viewerOpacity, child: child),
+              if (showFlight) ...[
+                if (black > 0)
+                  ColoredBox(color: Colors.black.withValues(alpha: black)),
+                // ⚠️ Positioned 必须直接作为 Stack 的 child！之前在 Opacity 里
+                // （Opacity→Positioned），release 下不报错但定位不生效、图尺寸
+                // 为 0 → 飞行层不可见 → “无缩放”（多版灰屏的根因）。
+                // 渐隐用 Positioned 内部的 Opacity 实现。
+                Positioned.fromRect(
+                  rect: rect,
+                  child: Opacity(opacity: baseBlack, child: _flightImage),
+                ),
+              ],
             ],
-          ],
-        );
-      },
-      // pageBuilder 的 anim 与 transitionsBuilder 的 anim 是同一个 route 动画：
-      // 传给 viewer 用于门控 2880 原图加载时机（completed 前不加载，见 PhotoViewer）。
-      pageBuilder: (_, anim, _) => PhotoViewer(
-        photos: photos,
-        initialIndex: index,
-        hasMore: ref.read(galleryControllerProvider).hasMore,
-        totalCount: widget.bucketCount,
-        onLoadMore: () =>
-            ref.read(galleryControllerProvider.notifier).loadMore(),
-        onIndexChanged: _onViewerIndexChanged,
-        transition: anim,
+          );
+        },
+        // pageBuilder 的 anim 与 transitionsBuilder 的 anim 是同一个 route 动画：
+        // 传给 viewer 用于门控 2880 原图加载时机（completed 前不加载，见 PhotoViewer）。
+        pageBuilder: (_, anim, _) => PhotoViewer(
+          photos: photos,
+          initialIndex: index,
+          hasMore: ref.read(galleryControllerProvider).hasMore,
+          totalCount: widget.bucketCount,
+          onLoadMore: () =>
+              ref.read(galleryControllerProvider.notifier).loadMore(),
+          onIndexChanged: _onViewerIndexChanged,
+          transition: anim,
+        ),
+        settings: const RouteSettings(name: AlbumRoutes.photoViewer),
+        fullscreenDialog: true,
       ),
-      settings: const RouteSettings(name: AlbumRoutes.photoViewer),
-      fullscreenDialog: true,
-    ));
+    );
   }
 }
 
@@ -764,8 +910,10 @@ class _PhotoCell extends StatelessWidget {
   });
   final MsImageInfo info;
   final ValueChanged<Rect?> onTap;
+
   /// 缩略图像素尺寸（cell 逻辑宽 × dpr，物理对齐，替代固定 300）。
   final int thumbSize;
+
   /// 批量选择模式：点击切换勾选而非打开 viewer；显示右上角勾选圈。
   final bool selectMode;
   final bool selected;
@@ -788,8 +936,11 @@ class _PhotoCell extends StatelessWidget {
         fit: StackFit.expand,
         children: [
           Image(
-            image: buildThumbnailProvider(ref,
-                size: thumbSize, dateModifiedMs: info.dateModifiedMs),
+            image: buildThumbnailProvider(
+              ref,
+              size: thumbSize,
+              dateModifiedMs: info.dateModifiedMs,
+            ),
             fit: BoxFit.cover,
             gaplessPlayback: true,
             // 两级渐进（对标系统相册 xqip/EXIF 占位 → 清晰替换）：
@@ -801,9 +952,11 @@ class _PhotoCell extends StatelessWidget {
               return ColoredBox(
                 color: AppColors.surface,
                 child: Image(
-                  image: buildThumbnailProvider(ref,
-                      size: kThumbnailPlaceholderSize,
-                      dateModifiedMs: info.dateModifiedMs),
+                  image: buildThumbnailProvider(
+                    ref,
+                    size: kThumbnailPlaceholderSize,
+                    dateModifiedMs: info.dateModifiedMs,
+                  ),
                   fit: BoxFit.cover,
                   gaplessPlayback: true,
                   errorBuilder: (_, _, _) =>

@@ -37,10 +37,13 @@ class PhotoViewer extends ConsumerStatefulWidget {
 
   final List<MsImageInfo> photos;
   final int initialIndex;
+
   /// 相册内是否还有更多未加载的图片（用于触发 loadMore）。
   final bool hasMore;
+
   /// 相册图片总数（来自 bucket.count，仅用于底部计数器显示）。
   final int? totalCount;
+
   /// 滚动接近末尾时的回调，外部触发分页加载。
   final Future<void> Function()? onLoadMore;
   final ValueChanged<int>? onIndexChanged;
@@ -57,11 +60,13 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
   late int _index;
   OverlayEntry? _barEntry;
   final ValueNotifier<bool> _barVisible = ValueNotifier(false);
+
   /// 顶/底栏淡入淡出。显式 AnimationController 驱动 Opacity，每帧 markNeedsBuild
   /// 刷新 OverlayEntry——比 AnimatedOpacity 可靠（后者在 OverlayEntry 重建路径下
   /// 隐式动画会失效，曾出现"淡出有动画、淡入无动画"的不对称）。
   late final AnimationController _chromeFade;
   bool _loadingMore = false;
+
   /// 本次浏览中**已加载完成全图**的照片 id 集合。
   /// dispose 时逐个 evict（2880px 大图 ≈ 数十 MB/张，残留会撑爆 ImageCache →
   final Set<String> _viewedIds = {};
@@ -216,9 +221,9 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
                 child: IgnorePointer(
                   ignoring: opacity < 0.5,
                   child: Material(
-                    // ⚠️ OverlayEntry 无 Material 祖先：Text 会回退到
-                    // DefaultTextStyle.fallback（自带黄色下划线警告），必须包 Material
-                    // 提供标准文本样式，黄线才会消失。
+                    // 纯黑栏跟随 chromeFade 整体淡入淡出（沉浸时黑底一起消失，不残留）。
+                    // 进入不闪靠 _insertBars 首次把 chromeFade 立即置 1（不 forward）：
+                    // 栏瞬间就位盖住栏区飞行层图，无"图→黑"渐变。
                     color: Colors.black,
                     child: _TopChromeBar(
                       info: _photos[_index],
@@ -264,7 +269,9 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _barVisible.value = true;
-        _chromeFade.forward();
+        // 首次立即置 1（不 forward 淡入）：栏瞬间黑底就位盖住栏区飞行层图，避免
+        // "图→黑"渐变闪烁。后续 _toggleChrome 走 forward/reverse 正常淡入淡出。
+        _chromeFade.value = 1.0;
       }
     });
   }
@@ -280,10 +287,24 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
         context: context,
         builder: (ctx) => AlertDialog(
           backgroundColor: AppColors.surface,
-          title: Text(t(ref, 'delete_permanently'),
-              style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 15)),
-          content: Text(t(ref, 'delete_permanently_desc'),
-              style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)),
+          title: Text(
+            t(ref, 'delete_permanently'),
+            style: const TextStyle(
+              fontFamily: 'Space Mono',
+              fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+              color: AppColors.text,
+              fontSize: 15,
+            ),
+          ),
+          content: Text(
+            t(ref, 'delete_permanently_desc'),
+            style: const TextStyle(
+              fontFamily: 'Space Mono',
+              fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+              color: AppColors.muted,
+              fontSize: 13,
+            ),
+          ),
           actions: [
             // 左右布局：左取消、右确认（danger 红色填充）
             Row(
@@ -291,16 +312,23 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
                 Expanded(
                   child: TextButton(
                     onPressed: () => Navigator.pop(ctx, false),
-                    child: Text(t(ref, 'cancel'),
-                        style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)),
+                    child: Text(
+                      t(ref, 'cancel'),
+                      style: const TextStyle(
+                        fontFamily: 'Space Mono',
+                        fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                        color: AppColors.muted,
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: FilledButton(
                     style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.danger,
-                        foregroundColor: AppColors.bg),
+                      backgroundColor: AppColors.danger,
+                      foregroundColor: AppColors.bg,
+                    ),
                     onPressed: () => Navigator.pop(ctx, true),
                     child: Text(t(ref, 'confirm')),
                   ),
@@ -324,8 +352,15 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        title: Text(t(ref, 'delete_confirm'),
-            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 15)),
+        title: Text(
+          t(ref, 'delete_confirm'),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+            color: AppColors.text,
+            fontSize: 15,
+          ),
+        ),
         actions: [
           // 左右布局：左取消、右确认（danger 红色填充）
           Row(
@@ -333,16 +368,23 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
               Expanded(
                 child: TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: Text(t(ref, 'cancel'),
-                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)),
+                  child: Text(
+                    t(ref, 'cancel'),
+                    style: const TextStyle(
+                      fontFamily: 'Space Mono',
+                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                      color: AppColors.muted,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: FilledButton(
                   style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.danger,
-                      foregroundColor: AppColors.bg),
+                    backgroundColor: AppColors.danger,
+                    foregroundColor: AppColors.bg,
+                  ),
                   onPressed: () => Navigator.pop(ctx, true),
                   child: Text(t(ref, 'confirm')),
                 ),
@@ -370,26 +412,47 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        title: Text(t(ref, 'action_restore'),
-            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 15)),
-        content: Text(t(ref, 'restore_desc'),
-            style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)),
+        title: Text(
+          t(ref, 'action_restore'),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+            color: AppColors.text,
+            fontSize: 15,
+          ),
+        ),
+        content: Text(
+          t(ref, 'restore_desc'),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+            color: AppColors.muted,
+            fontSize: 13,
+          ),
+        ),
         actions: [
           Row(
             children: [
               Expanded(
                 child: TextButton(
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: Text(t(ref, 'cancel'),
-                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)),
+                  child: Text(
+                    t(ref, 'cancel'),
+                    style: const TextStyle(
+                      fontFamily: 'Space Mono',
+                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                      color: AppColors.muted,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: FilledButton(
                   style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.accent,
-                      foregroundColor: AppColors.bg),
+                    backgroundColor: AppColors.accent,
+                    foregroundColor: AppColors.bg,
+                  ),
                   onPressed: () => Navigator.pop(ctx, true),
                   child: Text(t(ref, 'confirm')),
                 ),
@@ -472,44 +535,44 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
   @override
   Widget build(BuildContext context) {
     _viewerTargetWidth = computeViewerTargetWidth(
-        MediaQuery.sizeOf(context).width *
-            MediaQuery.devicePixelRatioOf(context));
+      MediaQuery.sizeOf(context).width * MediaQuery.devicePixelRatioOf(context),
+    );
     return Scaffold(
       backgroundColor: Colors.black,
       body: _photos.isEmpty
           ? const SizedBox.shrink()
-            : Stack(
-                children: [
-                  ExtendedImageGesturePageView.builder(
-                    controller: _pageCtrl,
-                    physics: const _SnapSpringPhysics(),
-                    itemCount: _photos.length,
-                    canScrollPage: _canScrollPage,
-                    onPageChanged: (i) {
-                      setState(() => _index = i);
-                      widget.onIndexChanged?.call(i);
-                      _barEntry?.markNeedsBuild();
-                      _maybeLoadMore();
-                    },
-                    itemBuilder: (ctx, i) {
-                      final info = _photos[i];
-                      // 两图之间留一点黑色间隙。
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: _BigImage(
-                          info: info,
-                          active: i == _index,
-                          loadFull: _allowFull,
-                          onTapChrome: _toggleChrome,
-                          onSwipeUp: () => _showDetails(info),
-                          onZoomStateChanged: _onZoomStateChanged,
-                          onFullLoaded: (id) => _viewedIds.add(id),
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
+          : Stack(
+              children: [
+                ExtendedImageGesturePageView.builder(
+                  controller: _pageCtrl,
+                  physics: const _SnapSpringPhysics(),
+                  itemCount: _photos.length,
+                  canScrollPage: _canScrollPage,
+                  onPageChanged: (i) {
+                    setState(() => _index = i);
+                    widget.onIndexChanged?.call(i);
+                    _barEntry?.markNeedsBuild();
+                    _maybeLoadMore();
+                  },
+                  itemBuilder: (ctx, i) {
+                    final info = _photos[i];
+                    // 两图之间留一点黑色间隙。
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: _BigImage(
+                        info: info,
+                        active: i == _index,
+                        loadFull: _allowFull,
+                        onTapChrome: _toggleChrome,
+                        onSwipeUp: () => _showDetails(info),
+                        onZoomStateChanged: _onZoomStateChanged,
+                        onFullLoaded: (id) => _viewedIds.add(id),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
     );
   }
 
@@ -594,7 +657,8 @@ class _TopChromeBar extends ConsumerWidget {
                       style: const TextStyle(
                         color: AppColors.text,
                         fontSize: 13,
-                        fontFamily: 'Space Mono', height: 1.2,
+                        fontFamily: 'Space Mono',
+                        height: 1.2,
                         fontFamilyFallback: AppFonts.cjkFallback,
                       ),
                       padding: const EdgeInsets.only(right: 12),
@@ -610,7 +674,8 @@ class _TopChromeBar extends ConsumerWidget {
                   style: TextStyle(
                     color: AppColors.text.withValues(alpha: 0.7),
                     fontSize: 13,
-                    fontFamily: 'Space Mono', height: 1.2,
+                    fontFamily: 'Space Mono',
+                    height: 1.2,
                   ),
                 ),
               ),
@@ -638,10 +703,13 @@ class _BottomChromeBar extends ConsumerWidget {
   final VoidCallback onDelete;
   final bool isFavorite;
   final VoidCallback onFavorite;
+
   /// 回收站项恢复回调；非 null 时在删除按钮左侧显示恢复按钮（icon）。
   final VoidCallback? onRestore;
+
   /// 回收站项：是否已删除（决定是否显示删除日期）。
   final bool isTrashed;
+
   /// 删除日期（DATE_EXPIRES * 1000）；>0 时显示。
   final int dateTrashedMs;
 
@@ -666,7 +734,10 @@ class _BottomChromeBar extends ConsumerWidget {
                 isFavorite ? Icons.favorite : Icons.favorite_border,
                 color: isFavorite ? AppColors.danger : AppColors.text,
               ),
-              tooltip: t(ref, isFavorite ? 'action_unfavorite' : 'action_favorite'),
+              tooltip: t(
+                ref,
+                isFavorite ? 'action_unfavorite' : 'action_favorite',
+              ),
               onPressed: onFavorite,
             ),
             const Spacer(),
@@ -705,7 +776,9 @@ class _TrashDateLabel extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // DATE_EXPIRES 是「过期时间」= 移入回收站时刻 + 30 天（AOSP 默认保留期）；
     // 删除日期 ≈ DATE_EXPIRES − 30 天。（排序仍用 DATE_EXPIRES，相对顺序=删除顺序）
-    final dt = DateTime.fromMillisecondsSinceEpoch(ms - 30 * 24 * 60 * 60 * 1000);
+    final dt = DateTime.fromMillisecondsSinceEpoch(
+      ms - 30 * 24 * 60 * 60 * 1000,
+    );
     String two(int n) => n.toString().padLeft(2, '0');
     final dateStr = '${two(dt.month)}-${two(dt.day)}';
     return Column(
@@ -750,9 +823,11 @@ class _BigImage extends StatefulWidget {
   final MsImageInfo info;
   final bool active;
   final VoidCallback onTapChrome;
+
   /// _openViewer 的 precacheImage 在点击瞬间发起，此处只门控原图层进树时机。
   final bool loadFull;
   final void Function(bool zoomed)? onZoomStateChanged;
+
   /// 原图（下采样）加载完成时回调，外层记录 id 用于退出时 evict。
   final void Function(String mediaStoreId)? onFullLoaded;
   final VoidCallback? onSwipeUp;
@@ -786,8 +861,8 @@ class _BigImageState extends State<_BigImage>
   @override
   void initState() {
     super.initState();
-    _isGif = widget.info.mime == 'image/gif' ||
-        extOf(widget.info.name) == '.gif';
+    _isGif =
+        widget.info.mime == 'image/gif' || extOf(widget.info.name) == '.gif';
   }
 
   void _onGestureDetailsChanged(GestureDetails? details) {
@@ -832,8 +907,7 @@ class _BigImageState extends State<_BigImage>
       if (mounted && meta.width > 0 && meta.height > 0) {
         _imageAspect = meta.width / meta.height;
       }
-    } catch (_) {
-    }
+    } catch (_) {}
   }
 
   @override
@@ -890,8 +964,10 @@ class _BigImageState extends State<_BigImage>
 
   @override
   Widget build(BuildContext context) {
-    final ref = imageRefFromMediaStoreId(widget.info.id,
-        extension: extOf(widget.info.name));
+    final ref = imageRefFromMediaStoreId(
+      widget.info.id,
+      extension: extOf(widget.info.name),
+    );
     return Listener(
       onPointerDown: _handleSwipeDown,
       onPointerMove: _handleSwipeMove,
@@ -911,7 +987,9 @@ class _BigImageState extends State<_BigImage>
         initGestureConfigHandler: (state) => GestureConfig(
           minScale: 1.0,
           maxScale: 5.0,
-          animationMinScale: 1.0,
+          // 手势过程允许缩小到 0.5（双指向内拖动），松手弹回 minScale=1.0（正常大小）。
+          // extended_image: animationMinScale 是过程下限，minScale 是回弹目标。
+          animationMinScale: 0.5,
           animationMaxScale: 5.0,
           speed: 1.0,
           inertialSpeed: 100,
@@ -928,8 +1006,11 @@ class _BigImageState extends State<_BigImage>
               fit: BoxFit.contain,
               gaplessPlayback: true,
               errorBuilder: (ctx, error, stack) => const Center(
-                child: Icon(Icons.broken_image_outlined,
-                    color: AppColors.muted, size: 48),
+                child: Icon(
+                  Icons.broken_image_outlined,
+                  color: AppColors.muted,
+                  size: 48,
+                ),
               ),
             );
           }
@@ -1015,8 +1096,9 @@ class _BigImageState extends State<_BigImage>
       return buildImageProvider(
         ref,
         targetWidth: computeViewerTargetWidth(
-            MediaQuery.sizeOf(context).width *
-                MediaQuery.devicePixelRatioOf(context)),
+          MediaQuery.sizeOf(context).width *
+              MediaQuery.devicePixelRatioOf(context),
+        ),
       );
     }
     return buildThumbnailProvider(ref, size: 300);
@@ -1030,9 +1112,6 @@ class _SnapSpringPhysics extends ScrollPhysics {
   _SnapSpringPhysics applyTo(ScrollPhysics? ancestor) =>
       _SnapSpringPhysics(parent: buildParent(ancestor));
   @override
-  SpringDescription get spring => SpringDescription.withDampingRatio(
-        mass: 1,
-        stiffness: 300,
-        ratio: 1.0,
-      );
+  SpringDescription get spring =>
+      SpringDescription.withDampingRatio(mass: 1, stiffness: 300, ratio: 1.0);
 }
