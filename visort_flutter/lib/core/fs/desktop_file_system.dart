@@ -155,16 +155,33 @@ class DesktopFileSystem implements FileSystemRepository {
   }
 
   @override
-  Future<Set<String>> moveBatch(List<String> ids, String destPath) async {
-    // 桌面端逐个移动（destPath = 目标目录绝对路径）
+  Future<Set<String>> moveBatch(List<String> ids, String destPath, String root) async {
+    // 桌面端逐个移动：ids 是相对 root 的路径，拼成绝对路径再移。
+    // （历史 bug：旧签名无 root，调用方传相对路径而实现当绝对路径用 → existsSync 恒 false → 全部 move_failed）
     final ok = <String>{};
     for (final id in ids) {
       try {
         await Directory(destPath).create(recursive: true);
-        final srcFile = File(id); // 桌面端 id = 源文件绝对路径
+        final srcFile = File(p.join(root, id));
         if (srcFile.existsSync()) {
-          final destFile = File(p.join(destPath, p.basename(id)));
-          await srcFile.rename(destFile.path);
+          // 同名冲突改名：base_1.ext, base_2.ext, ...
+          var finalPath = p.join(destPath, p.basename(id));
+          if (File(finalPath).existsSync()) {
+            final ext = p.extension(id);
+            final baseNoExt = p.basenameWithoutExtension(id);
+            var counter = 1;
+            while (File(finalPath).existsSync()) {
+              finalPath = p.join(destPath, '${baseNoExt}_$counter$ext');
+              counter++;
+            }
+          }
+          try {
+            await srcFile.rename(finalPath);
+          } on FileSystemException {
+            // 跨设备：复制后删除
+            await srcFile.copy(finalPath);
+            await srcFile.delete();
+          }
           ok.add(id);
         }
       } catch (_) {}

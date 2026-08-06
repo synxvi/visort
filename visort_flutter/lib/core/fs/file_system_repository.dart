@@ -80,11 +80,11 @@ abstract class FileSystemRepository {
   /// 删除图片
   Future<bool> delete(ImageRef ref);
 
-  /// 批量移动（按 id 列表 + 目标路径）。
-  /// - 安卓 MediaStore：走 createWriteRequest 改 RELATIVE_PATH（系统弹窗一次确认）
-  /// - Windows：逐个移动
-  /// 返回成功移动的 id 集合
-  Future<Set<String>> moveBatch(List<String> ids, String destPath);
+  /// 批量移动（按 id 列表 + 目标路径 + 源根目录）。
+  /// - 安卓 MediaStore：走 createWriteRequest 改 RELATIVE_PATH（系统弹窗一次确认）；root 不使用
+  /// - Windows：逐个移动；ids 为相对 root 的路径，内部拼绝对路径
+  /// 返回成功移动的 id 集合（语义同入参 ids，即相对路径 / MediaStore _ID）
+  Future<Set<String>> moveBatch(List<String> ids, String destPath, String root);
 
   /// 批量删除（按 id 列表 + root）。
   /// - 安卓 MediaStore：走 createDeleteRequest（系统弹窗一次确认）

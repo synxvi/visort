@@ -136,7 +136,7 @@ class RunController {
     for (final entry in pendingMoveByDest.entries) {
       final destPath = entry.key;
       final ids = entry.value;
-      final movedIds = await _fs.moveBatch(ids, destPath);
+      final movedIds = await _fs.moveBatch(ids, destPath, session.sourceDir);
       // 找回 fileId 记入结果
       for (final entry2 in entries) {
         if (entry2.value.action == DecisionAction.move) {

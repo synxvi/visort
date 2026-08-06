@@ -113,8 +113,9 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
   }
 
   @override
-  Future<Set<String>> moveBatch(List<String> ids, String destPath) async {
+  Future<Set<String>> moveBatch(List<String> ids, String destPath, String root) async {
     // 批量移动（createWriteRequest 改 RELATIVE_PATH，一次系统弹窗）
+    // root 在 MediaStore 语义下不使用（ids 即 MediaStore _ID）
     if (ids.isEmpty) return const {};
     try {
       final count = await _channel.requestMove(ids, destPath);

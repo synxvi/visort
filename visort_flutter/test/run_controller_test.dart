@@ -36,7 +36,7 @@ class FakeFileSystem implements FileSystemRepository {
   }
 
   @override
-  Future<Set<String>> moveBatch(List<String> ids, String destPath) async {
+  Future<Set<String>> moveBatch(List<String> ids, String destPath, String root) async {
     // 记录批量移动（按目标分组）+ 模拟成功
     for (final id in ids) {
       batchMoves.add((id: id, destPath: destPath));
