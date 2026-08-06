@@ -14,6 +14,7 @@ import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
+import 'package:visort_flutter/shared/widgets/middle_ellipsis_text.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 
@@ -580,19 +581,25 @@ class _TopChromeBar extends ConsumerWidget {
                 tooltip: t(ref, 'back'),
                 onPressed: onBack,
               ),
-              // 当前照片时间（系统相册式：智能日期 + HH:MM）
+              // 图片名称（中段省略保留扩展名）
+              // Expanded 占满空间把序号推到最右；内部 ConstrainedBox 收窄
+              // 实际文字宽度（左对齐），让省略号提前出现、不紧贴序号。
               Expanded(
-                child: Text(
-                  _smartDate(ref, info.dateAddedMs),
-                  style: const TextStyle(
-                    color: AppColors.text,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
-                    fontFamily: 'Space Mono', height: 1.2,
-                    fontFamilyFallback: AppFonts.cjkFallback,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 180),
+                    child: MiddleEllipsisText(
+                      info.name,
+                      style: const TextStyle(
+                        color: AppColors.text,
+                        fontSize: 13,
+                        fontFamily: 'Space Mono', height: 1.2,
+                        fontFamilyFallback: AppFonts.cjkFallback,
+                      ),
+                      padding: const EdgeInsets.only(right: 12),
+                    ),
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               // 计数器
@@ -612,21 +619,6 @@ class _TopChromeBar extends ConsumerWidget {
         ),
       ),
     );
-  }
-
-  /// 智能日期：今天→「今天 HH:MM」/ 昨天→「昨天 HH:MM」/ 否则「YYYY-MM-DD HH:MM」
-  String _smartDate(WidgetRef ref, int ms) {
-    if (ms <= 0) return '-';
-    final dt = DateTime.fromMillisecondsSinceEpoch(ms);
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final that = DateTime(dt.year, dt.month, dt.day);
-    final diffDays = today.difference(that).inDays;
-    String two(int n) => n.toString().padLeft(2, '0');
-    final hm = '${two(dt.hour)}:${two(dt.minute)}';
-    if (diffDays == 0) return '${t(ref, 'today')} $hm';
-    if (diffDays == 1) return '${t(ref, 'yesterday')} $hm';
-    return '${dt.year}-${two(dt.month)}-${two(dt.day)} $hm';
   }
 }
 

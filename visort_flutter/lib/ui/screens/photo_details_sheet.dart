@@ -326,10 +326,12 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
   Widget _kv(String label, String value) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          // 水平居中：label 与 value 垂直方向对齐（避免小字号差异导致错位）
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             SizedBox(
-              width: 80,
+              // 110 容纳英文 "Orientation"（11 字符 Space Mono 13px），避免尾字母换行
+              width: 110,
               child: Text(
                 label,
                 style: const TextStyle(
