@@ -10,6 +10,7 @@
 //   - 安卓 MediaStore: 多个相册 bucket id 的列表
 
 import 'image_ref.dart';
+import 'package:visort_flutter/core/config/models.dart';
 
 /// 图片元信息。对应 Python /api/image/`<index>`/meta 返回结构（app.py:585-614）
 class ImageMeta {
@@ -22,22 +23,22 @@ class ImageMeta {
 
   /// 完整路径（仅用于显示）
   final String absolutePath;
+
   /// "1234.5 KB"（size/1024，1 位小数）
   final String sizeLabel;
+
   /// "2024-01-15 14:30"
   final String createdLabel;
+
   /// "2024-01-16 09:00"
   final String modifiedLabel;
 }
 
 /// 移动结果
 class MoveResult {
-  const MoveResult({
-    required this.success,
-    this.finalPath,
-    this.error,
-  });
+  const MoveResult({required this.success, this.finalPath, this.error});
   final bool success;
+
   /// 实际落地路径（可能因冲突改名而不同于原文件名）
   final String? finalPath;
   final String? error;
@@ -45,10 +46,7 @@ class MoveResult {
 
 /// 扫描结果
 class ScanResult {
-  const ScanResult({
-    required this.images,
-    this.error,
-  });
+  const ScanResult({required this.images, this.error});
   final List<ImageRef> images;
   final String? error;
 }
@@ -65,7 +63,12 @@ abstract class FileSystemRepository {
   /// [roots] 是 pickDirectories 返回的标识列表：
   ///   - Windows = 目录路径列表
   ///   - 安卓 MediaStore = bucket id 列表
-  Future<ScanResult> scanImages(List<String> roots, {required bool recursive});
+  Future<ScanResult> scanImages(
+    List<String> roots, {
+    required bool recursive,
+    SortBy? sortBy,
+    bool asc = false,
+  });
 
   /// 列出目录的直接子文件夹（过滤 . 开头、排序）。
   /// 对应 Python /api/scan-subdirs
@@ -104,7 +107,22 @@ abstract class FileSystemRepository {
 
 /// 支持的图片扩展名（18 种），与 Python 版 IMAGE_EXTENSIONS 一致
 const imageExtensions = {
-  '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp',
-  '.tiff', '.tif', '.svg', '.ico', '.heic', '.heif',
-  '.raw', '.cr2', '.nef', '.arw', '.dng', '.avif',
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.gif',
+  '.bmp',
+  '.webp',
+  '.tiff',
+  '.tif',
+  '.svg',
+  '.ico',
+  '.heic',
+  '.heif',
+  '.raw',
+  '.cr2',
+  '.nef',
+  '.arw',
+  '.dng',
+  '.avif',
 };

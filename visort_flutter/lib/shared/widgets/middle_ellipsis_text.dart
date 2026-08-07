@@ -62,8 +62,9 @@ class MiddleEllipsisText extends StatelessWidget {
   /// 4. 若 ext + tail 都放不下 → 尾部省略兜底。
   String _truncate(String src, double availWidth) {
     // 安全余量：单字符测量累加与整段 Text 渲染存在度量/字距误差，
-    // 留约 2 字符宽度（fontSize 13 下约 16px）避免算得下实际溢出（如 .png 丢 g）。
-    final safe = availWidth - 16;
+    // 留约 1.5 字符宽度（fontSize 12 下约 10px）避免算得下实际溢出（如 .png 丢 g）。
+    // (原 16px 偏保守,触发 … 过早,head 仅 1 字符就截断;收窄到 10 让 head 更长。)
+    final safe = availWidth - 10;
     if (safe <= 0) return src; // 宽度极小，不截断交给 Text 自身处理
     if (_textWidth(src) <= safe) return src;
 
@@ -75,7 +76,7 @@ class MiddleEllipsisText extends StatelessWidget {
     if (base.isEmpty) return src; // 全是扩展名的怪异情况，原样返回
 
     const ellipsis = '…';
-    const minTail = 3; // ... 后至少保留 3 字符，确保有内容可读
+    const minTail = 2; // ... 后至少保留 2 字符(原 3 挤占 head 致 … 靠前)
 
     // ① 先预留 tail：从 base 末尾取 minTail 个字符（固定，不可侵占）。
     final tail = base.length >= minTail

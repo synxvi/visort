@@ -46,14 +46,14 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
 
   // 相册数据
   List<MsBucket> _buckets = const [];
-  Set<String> _sourceBucketIds = {};   // 源相册
-  Set<String> _targetBucketIds = {};   // 模式二目标相册
+  Set<String> _sourceBucketIds = {}; // 源相册
+  Set<String> _targetBucketIds = {}; // 模式二目标相册
   // 记录上次查询封面时用的排序，用于检测变化后重查
   SortBy? _lastCoverSortBy;
   bool? _lastCoverSortAsc;
 
   // 模式
-  ClassifyMode _mode = ClassifyMode.toAlbum;
+  ClassifyMode _mode = ClassifyMode.toNewDir;
   // 模式切换方向(抽屉滑动):正向 toAlbum→toNewDir(新从右进/旧向左出),反向反之。
   // 点击 SegmentedButton 与左右滑动手势共同维护,transitionBuilder 据此定向。
   bool _slideForward = true;
@@ -70,7 +70,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   bool _loading = false;
   bool _scanning = false;
   bool _permissionGranted = false;
-  bool _manageMediaGranted = false;  // MANAGE_MEDIA 特殊权限（零弹窗媒体操作）
+  bool _manageMediaGranted = false; // MANAGE_MEDIA 特殊权限（零弹窗媒体操作）
   String? _error;
 
   // 源/目标区折叠状态
@@ -79,6 +79,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
 
   /// 主界面滚动信号：非模态菜单监听它，滚动时自动收回。
   final _isScrolling = ValueNotifier<bool>(false);
+
   /// 当前非模态菜单控制器（收回用）
   NonModalMenuController? _menuCtl;
 
@@ -105,7 +106,9 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    debugPrint('[Home] lifecycle: $state, permissionGranted=$_permissionGranted');
+    debugPrint(
+      '[Home] lifecycle: $state, permissionGranted=$_permissionGranted',
+    );
     // app 从后台恢复前台（用户从系统设置授权后返回）→ 重新检测 MANAGE_MEDIA
     if (state == AppLifecycleState.resumed) {
       // 延迟 500ms 检测，确保系统权限状态已刷新
@@ -143,7 +146,9 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   /// 从系统设置返回后重新检测 MANAGE_MEDIA
   Future<void> _recheckManageMedia() async {
     final granted = await _channel.hasManageMedia();
-    debugPrint('[Home] _recheckManageMedia: granted=$granted, current=$_manageMediaGranted');
+    debugPrint(
+      '[Home] _recheckManageMedia: granted=$granted, current=$_manageMediaGranted',
+    );
     if (mounted && granted != _manageMediaGranted) {
       setState(() => _manageMediaGranted = granted);
       if (granted) {
@@ -153,7 +158,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   }
 
   Future<void> _loadBuckets() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final config = ref.read(configProvider);
       // 封面跟随「相册内排序」（photoSortBy），保证封面 = 进相册看到的第一张
@@ -174,8 +182,8 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         // 每次进入应用不勾选任何目录（清空持久化的选择）
         _sourceBucketIds = <String>{};
         _targetBucketIds = <String>{};
-        // 默认始终进入「相册间」模式（不恢复上次的模式，避免启动落在子目录模式）
-        _mode = ClassifyMode.toAlbum;
+        // 默认进入「子目录」模式（toNewDir），不恢复上次模式
+        _mode = ClassifyMode.toNewDir;
         if (profile.newDirParent != null && profile.newDirParent!.isNotEmpty) {
           _parentCtrl.text = profile.newDirParent!;
         }
@@ -187,7 +195,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() { _loading = false; _error = e.toString(); });
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
     }
   }
 
@@ -228,11 +239,13 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     for (final bucket in _buckets) {
       if (!_targetBucketIds.contains(bucket.id)) continue;
       final relPath = await _channel.getBucketRelativePath(bucket.id);
-      result.add(FolderDescriptor(
-        key: keyIdx < _keyOrder.length ? _keyOrder[keyIdx] : '?',
-        label: bucket.name,
-        path: relPath ?? 'Pictures/${bucket.name}',
-      ));
+      result.add(
+        FolderDescriptor(
+          key: keyIdx < _keyOrder.length ? _keyOrder[keyIdx] : '?',
+          label: bucket.name,
+          path: relPath ?? 'Pictures/${bucket.name}',
+        ),
+      );
       keyIdx++;
     }
     return result;
@@ -244,7 +257,9 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         ? 'Visort'
         : _parentCtrl.text.trim();
     return _subDirs.asMap().entries.map((e) {
-      final label = e.value.trim().isEmpty ? 'folder${e.key + 1}' : e.value.trim();
+      final label = e.value.trim().isEmpty
+          ? 'folder${e.key + 1}'
+          : e.value.trim();
       return FolderDescriptor(
         key: e.key < _keyOrder.length ? _keyOrder[e.key] : '?',
         label: label,
@@ -284,13 +299,15 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     // 模式一的子目录列表存入 folders（label = 子目录名）
     final newFolders = _mode == ClassifyMode.toNewDir
         ? _subDirs
-            .asMap()
-            .entries
-            .map((e) => FolderTemplate(
+              .asMap()
+              .entries
+              .map(
+                (e) => FolderTemplate(
                   key: e.key < _keyOrder.length ? _keyOrder[e.key] : '?',
                   label: e.value.trim(),
-                ))
-            .toList()
+                ),
+              )
+              .toList()
         : oldProfile.folders;
     final newProfile = oldProfile.copyWith(
       classifyMode: _mode,
@@ -321,7 +338,9 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     ref.read(configProvider.notifier).state = updated;
     await ref.read(profilesServiceProvider).save(updated);
 
-    final err = await ref.read(scanControllerProvider.notifier).scan(
+    final err = await ref
+        .read(scanControllerProvider.notifier)
+        .scan(
           source: sourceIds,
           sourceRoot: kImagesAuthority,
           destinationParent: destParent,
@@ -341,11 +360,17 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   /// 右上角 3 点菜单：收藏 / 回收站快捷入口（相册浏览走首页列表直接点）。
   Future<void> _onMenuSelected(String value) async {
     if (value == 'favorites') {
-      await Navigator.pushNamed(context, AlbumRoutes.album,
-          arguments: const {'favoritesOnly': true});
+      await Navigator.pushNamed(
+        context,
+        AlbumRoutes.album,
+        arguments: const {'favoritesOnly': true},
+      );
     } else if (value == 'trash') {
-      await Navigator.pushNamed(context, AlbumRoutes.album,
-          arguments: const {'trashedOnly': true});
+      await Navigator.pushNamed(
+        context,
+        AlbumRoutes.album,
+        arguments: const {'trashedOnly': true},
+      );
     } else if (value == 'settings') {
       Navigator.pushNamed(context, AppRoutes.settings);
       return;
@@ -431,12 +456,15 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             children: [
               Icon(icon, color: iconColor, size: 20),
               const SizedBox(width: 12),
-              Text(label,
-                  style: const TextStyle(
-                      fontFamily: 'Space Mono',
-                      fontFamilyFallback: AppFonts.cjkFallback,
-                      color: AppColors.text,
-                      fontSize: 14)),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontFamily: 'Space Mono',
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  color: AppColors.text,
+                  fontSize: 14,
+                ),
+              ),
             ],
           ),
         ),
@@ -449,72 +477,81 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     final config = ref.watch(configProvider);
     // 检测相册内排序是否变化（从相册返回时封面需更新）
     _maybeRefreshCovers();
-    // 首页（根路由）右滑/返回：等效 Home 键回桌面（task 保留后台，不 finish）。
-    // 需要 MainActivity 的 visort/app channel 配合 moveTaskToBack。
+    // 首页（根路由）返回:勾选态下先清空所有勾选(不退桌面);无勾选再回桌面。
+    // 对标系统相册:点返回先取消选择,再按一次才退出。
+    // 无勾选时走 moveTaskToBack(task 保留后台,不 finish),需 visort/app channel。
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) {
+        if (didPop) return;
+        if (_sourceBucketIds.isNotEmpty || _targetBucketIds.isNotEmpty) {
+          setState(() {
+            _sourceBucketIds.clear();
+            _targetBucketIds.clear();
+          });
+        } else {
           const MethodChannel('visort/app').invokeMethod('moveTaskToBack');
         }
       },
       child: Scaffold(
-      backgroundColor: AppColors.bg,
-      appBar: AppBar(
-        backgroundColor: AppColors.surface,
-        foregroundColor: AppColors.text,
-        title: InkWell(
-          onTap: () => setLanguage(
-              ref, ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh'),
-          borderRadius: BorderRadius.circular(8),
-          child: const _Logo(),
+        backgroundColor: AppColors.bg,
+        appBar: AppBar(
+          backgroundColor: AppColors.surface,
+          foregroundColor: AppColors.text,
+          title: InkWell(
+            onTap: () => setLanguage(
+              ref,
+              ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh',
+            ),
+            borderRadius: BorderRadius.circular(8),
+            child: const _Logo(),
+          ),
+          actions: [
+            // 相册排序（源/目标 section 共用同一排序状态 albumSortBy/Asc）：
+            // 从 section 标题整合到 AppBar，置于 ⋮ 左侧。section 内重复的 SortToggle 已移除。
+            // Transform.translate 右移 SortToggle：内部 Padding(right:5) 让 icon 偏左，
+            // 多 action 场景下视觉离 ⋮ 偏远，translate 抵消使其靠近 ⋮（gallery/album 里
+            // SortToggle 是唯一 action，不受影响，故只在这里包）。
+            // 右移量 14：排序图标↔⋮ 视觉间距从 ~14dp 缩到 ~10dp（约缩 1/4）。
+            Transform.translate(
+              offset: const Offset(14, 0),
+              child: SortToggle(
+                sortBy: config.albumSortBy,
+                asc: config.albumSortAsc,
+                onChanged: _setAlbumSort,
+              ),
+            ),
+            IconButton(
+              key: _menuBtnKey,
+              icon: const Icon(Icons.more_vert, color: AppColors.text),
+              tooltip: t(ref, 'gallery_manage'),
+              onPressed: _showOverflowMenu,
+            ),
+          ],
         ),
-        actions: [
-          // 相册排序（源/目标 section 共用同一排序状态 albumSortBy/Asc）：
-          // 从 section 标题整合到 AppBar，置于 ⋮ 左侧。section 内重复的 SortToggle 已移除。
-          // Transform.translate 右移 SortToggle：内部 Padding(right:5) 让 icon 偏左，
-          // 多 action 场景下视觉离 ⋮ 偏远，translate 抵消使其靠近 ⋮（gallery/album 里
-          // SortToggle 是唯一 action，不受影响，故只在这里包）。
-          // 右移量 14：排序图标↔⋮ 视觉间距从 ~14dp 缩到 ~10dp（约缩 1/4）。
-          Transform.translate(
-            offset: const Offset(14, 0),
-            child: SortToggle(
-              sortBy: config.albumSortBy,
-              asc: config.albumSortAsc,
-              onChanged: _setAlbumSort,
+        body: GestureDetector(
+          // 点击空白（非输入框）：收起键盘并立即落盘 toNewDir 待保存编辑。
+          onTap: _dismissAndFlush,
+          // 左右滑动切换移动模式(对标系统相册页间滑动):右滑→相册间,左滑→子目录。
+          onHorizontalDragEnd: _onModeSwipe,
+          behavior: HitTestBehavior.opaque,
+          child: SafeArea(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 模式切换 segmented control
+                _buildModeSelector(),
+                // 顶栏↔源相册分隔线：固定显示。模式选择器自身 bottom:10 已提供到分隔线
+                // 的间距，与选择器 top:10（到顶栏）相等，故不再加额外 SizedBox。
+                const Divider(color: AppColors.border, height: 1),
+                // 主体（在分隔线下方滚动，不进入分隔线区域 → 不被遮挡）
+                Expanded(child: _buildBody()),
+                // 底部 Start
+                _buildBottomBar(),
+              ],
             ),
           ),
-          IconButton(
-            key: _menuBtnKey,
-            icon: const Icon(Icons.more_vert, color: AppColors.text),
-            tooltip: t(ref, 'gallery_manage'),
-            onPressed: _showOverflowMenu,
-          ),
-        ],
-      ),
-      body: GestureDetector(
-        // 点击空白（非输入框）：收起键盘并立即落盘 toNewDir 待保存编辑。
-        onTap: _dismissAndFlush,
-        // 左右滑动切换移动模式(对标系统相册页间滑动):右滑→相册间,左滑→子目录。
-        onHorizontalDragEnd: _onModeSwipe,
-        behavior: HitTestBehavior.opaque,
-        child: SafeArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // 模式切换 segmented control
-              _buildModeSelector(),
-              // 顶栏↔源相册分隔线：固定显示。模式选择器自身 bottom:10 已提供到分隔线
-              // 的间距，与选择器 top:10（到顶栏）相等，故不再加额外 SizedBox。
-              const Divider(color: AppColors.border, height: 1),
-              // 主体（在分隔线下方滚动，不进入分隔线区域 → 不被遮挡）
-              Expanded(child: _buildBody()),
-              // 底部 Start
-              _buildBottomBar(),
-            ],
-          ),
         ),
-      ),
       ),
     );
   }
@@ -582,12 +619,19 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                     child: Row(
                       children: [
                         Expanded(
-                            child: _modeSegment(ClassifyMode.toNewDir,
-                                Icons.create_new_folder_outlined,
-                                t(ref, 'mode_to_newdir'))),
+                          child: _modeSegment(
+                            ClassifyMode.toNewDir,
+                            Icons.create_new_folder_outlined,
+                            t(ref, 'mode_to_newdir'),
+                          ),
+                        ),
                         Expanded(
-                            child: _modeSegment(ClassifyMode.toAlbum,
-                                Icons.swap_horiz, t(ref, 'mode_to_album'))),
+                          child: _modeSegment(
+                            ClassifyMode.toAlbum,
+                            Icons.swap_horiz,
+                            t(ref, 'mode_to_album'),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -644,8 +688,8 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                         title: t(ref, 'target_albums'),
                         totalCount: _buckets.length,
                         expanded: _targetExpanded,
-                        onToggle: () => setState(
-                            () => _targetExpanded = !_targetExpanded),
+                        onToggle: () =>
+                            setState(() => _targetExpanded = !_targetExpanded),
                         child: _buildBucketList(
                           selectedIds: _targetBucketIds,
                           onToggle: (id) => setState(() {
@@ -704,14 +748,22 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   Widget _buildBody() {
     if (_loading) {
       return const Center(
-          child: CircularProgressIndicator(color: AppColors.accent));
+        child: CircularProgressIndicator(color: AppColors.accent),
+      );
     }
     if (!_permissionGranted) return _buildPermissionDenied();
     if (_error != null) return _buildError();
     if (_buckets.isEmpty) {
       return Center(
-          child: Text(t(ref, 'no_albums'),
-              style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)));
+        child: Text(
+          t(ref, 'no_albums'),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+            color: AppColors.muted,
+          ),
+        ),
+      );
     }
     return NotificationListener<ScrollNotification>(
       onNotification: (n) {
@@ -728,32 +780,32 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         children: [
           // MANAGE_MEDIA 引导（未授权时显示）
           if (!_manageMediaGranted) _buildManageMediaBanner(),
-        // 源相册区（可折叠）
-        _buildCollapsibleSection(
-          title: t(ref, 'source_albums'),
-          totalCount: _buckets.length,
-          expanded: _sourceExpanded,
-          onToggle: () => setState(() => _sourceExpanded = !_sourceExpanded),
-          child: _buildBucketList(
-            selectedIds: _sourceBucketIds,
-            onToggle: (id) => setState(() {
-              _sourceBucketIds.contains(id)
-                  ? _sourceBucketIds.remove(id)
-                  : _sourceBucketIds.add(id);
-            }),
+          // 源相册区（可折叠）
+          _buildCollapsibleSection(
+            title: t(ref, 'source_albums'),
+            totalCount: _buckets.length,
+            expanded: _sourceExpanded,
+            onToggle: () => setState(() => _sourceExpanded = !_sourceExpanded),
+            child: _buildBucketList(
+              selectedIds: _sourceBucketIds,
+              onToggle: (id) => setState(() {
+                _sourceBucketIds.contains(id)
+                    ? _sourceBucketIds.remove(id)
+                    : _sourceBucketIds.add(id);
+              }),
+            ),
           ),
-        ),
-        // 目标区随模式交叉切换：
-        //   toAlbum = 流向分隔线 + 目标相册折叠区
-        //   toNewDir = 间距 + 新建目录配置面板
-        // 外层 AnimatedSize 平滑过渡两模式的高度差，内层 AnimatedSwitcher
-        // 做交叉淡入淡出 + 轻微缩放（fade-through 语义，呼应模式切换）。
-        AnimatedSize(
-          duration: 300.ms,
-          curve: Curves.easeInOut,
-          alignment: Alignment.topCenter,
-          child: _buildModePanels(),
-        ),
+          // 目标区随模式交叉切换：
+          //   toAlbum = 流向分隔线 + 目标相册折叠区
+          //   toNewDir = 间距 + 新建目录配置面板
+          // 外层 AnimatedSize 平滑过渡两模式的高度差，内层 AnimatedSwitcher
+          // 做交叉淡入淡出 + 轻微缩放（fade-through 语义，呼应模式切换）。
+          AnimatedSize(
+            duration: 300.ms,
+            curve: Curves.easeInOut,
+            alignment: Alignment.topCenter,
+            child: _buildModePanels(),
+          ),
         ],
       ),
     );
@@ -797,8 +849,11 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
               color: AppColors.accentWithOpacity(0.12),
               shape: BoxShape.circle,
             ),
-            child: Icon(Icons.swap_horiz,
-                size: 14, color: AppColors.accent.withValues(alpha: 0.7)),
+            child: Icon(
+              Icons.swap_horiz,
+              size: 14,
+              color: AppColors.accent.withValues(alpha: 0.7),
+            ),
           ),
           // 右渐隐线（中部 border 色 → 边缘透明）
           Expanded(
@@ -836,29 +891,40 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           child: Padding(
             // top:5（距顶部分隔线/模式切换的间距，按需再收紧 1/3）；
             // bottom:6（距下方内容/分隔线收紧）
-            padding: const EdgeInsets.fromLTRB(16, 5, 8, 6),
+            padding: const EdgeInsets.fromLTRB(16, 5, 12, 6),
             child: Row(
               children: [
-                Text(title,
-                    style: const TextStyle(
-                        fontFamily: 'Space Mono',
-                        fontFamilyFallback: AppFonts.cjkFallback,
-                        color: AppColors.accent,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 13, height: 1.1)),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontFamily: 'Space Mono',
+                    fontFamilyFallback: AppFonts.cjkFallback,
+                    color: AppColors.accent,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                    height: 1.1,
+                  ),
+                ),
                 const SizedBox(width: 8),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColors.accentWithOpacity(0.15),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Text('$totalCount',
-                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                          color: AppColors.accent,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700)),
+                  child: Text(
+                    '$totalCount',
+                    style: const TextStyle(
+                      fontFamily: 'Space Mono',
+                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                      color: AppColors.accent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
                 const Spacer(),
                 // 展开/折叠指示箭头，随下方内容同步旋转（180°）。
@@ -866,8 +932,11 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                   turns: expanded ? 0.5 : 0.0,
                   duration: 200.ms,
                   curve: Curves.easeOutCubic,
-                  child: const Icon(Icons.expand_more,
-                      size: 20, color: AppColors.accent),
+                  child: const Icon(
+                    Icons.expand_more,
+                    size: 20,
+                    color: AppColors.accent,
+                  ),
                 ),
               ],
             ),
@@ -896,16 +965,18 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     final sorted = _sortedBuckets();
     final isGrid = config.homeLayout == HomeLayout.grid;
     final tiles = sorted
-        .map((b) => _HomeBucketTile(
-              key: ValueKey(b.id),
-              bucket: b,
-              selected: selectedIds.contains(b.id),
-              onCheckToggle: () => onToggle(b.id),
-              onInterceptWhileEditing: _dismissAndFlush,
-              onAlbumReturned: _refreshCovers,
-              grid: isGrid,
-              selectionMode: selectedIds.isNotEmpty,
-            ))
+        .map(
+          (b) => _HomeBucketTile(
+            key: ValueKey(b.id),
+            bucket: b,
+            selected: selectedIds.contains(b.id),
+            onCheckToggle: () => onToggle(b.id),
+            onInterceptWhileEditing: _dismissAndFlush,
+            onAlbumReturned: _refreshCovers,
+            grid: isGrid,
+            selectionMode: selectedIds.isNotEmpty,
+          ),
+        )
         .toList();
     if (isGrid) {
       // 用 Wrap + 固定列宽替代 GridView.count：GridView 的 childAspectRatio 会把 cell
@@ -917,8 +988,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           final cols = config.homeGridColumns;
           const spacing = 4.0;
           const hpad = 12.0;
-          final cellW =
-              (c.maxWidth - hpad * 2 - spacing * (cols - 1)) / cols;
+          final cellW = (c.maxWidth - hpad * 2 - spacing * (cols - 1)) / cols;
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: hpad),
             child: Wrap(
@@ -966,8 +1036,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   /// 封面跟随「相册内排序」(photoSortBy)，在 _loadBuckets 时决定。
   Future<void> _setAlbumSort(SortBy sortBy, bool asc) async {
     final config = ref.read(configProvider);
-    final updated =
-        config.copyWith(albumSortBy: sortBy, albumSortAsc: asc);
+    final updated = config.copyWith(albumSortBy: sortBy, albumSortAsc: asc);
     ref.read(configProvider.notifier).state = updated;
     await ref.read(profilesServiceProvider).save(updated);
     setState(() {});
@@ -983,20 +1052,24 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     final newFolders = _subDirs
         .asMap()
         .entries
-        .map((e) => FolderTemplate(
-              key: e.key < _keyOrder.length ? _keyOrder[e.key] : '?',
-              label: e.value.trim(),
-            ))
+        .map(
+          (e) => FolderTemplate(
+            key: e.key < _keyOrder.length ? _keyOrder[e.key] : '?',
+            label: e.value.trim(),
+          ),
+        )
         .toList();
     final newProfile = oldProfile.copyWith(
-      newDirParent:
-          _parentCtrl.text.trim().isEmpty ? null : _parentCtrl.text.trim(),
+      newDirParent: _parentCtrl.text.trim().isEmpty
+          ? null
+          : _parentCtrl.text.trim(),
       folders: newFolders,
     );
     final newProfiles = Map<String, Profile>.from(config.profiles)
       ..[config.activeProfile] = newProfile;
-    ref.read(configProvider.notifier).state =
-        config.copyWith(profiles: newProfiles);
+    ref.read(configProvider.notifier).state = config.copyWith(
+      profiles: newProfiles,
+    );
     _persistTimer?.cancel();
     _persistTimer = Timer(const Duration(milliseconds: 400), () {
       ref.read(profilesServiceProvider).save(ref.read(configProvider));
@@ -1037,16 +1110,26 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(t(ref, 'manage_media_title'),
-                    style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                        color: AppColors.accent2,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12)),
+                Text(
+                  t(ref, 'manage_media_title'),
+                  style: const TextStyle(
+                    fontFamily: 'Space Mono',
+                    fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                    color: AppColors.accent2,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
                 const SizedBox(height: 2),
-                Text(t(ref, 'manage_media_hint'),
-                    style: TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                        color: AppColors.text.withValues(alpha: 0.7),
-                        fontSize: 11)),
+                Text(
+                  t(ref, 'manage_media_hint'),
+                  style: TextStyle(
+                    fontFamily: 'Space Mono',
+                    fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                    color: AppColors.text.withValues(alpha: 0.7),
+                    fontSize: 11,
+                  ),
+                ),
               ],
             ),
           ),
@@ -1059,8 +1142,15 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
               minimumSize: const Size(0, 0),
             ),
             onPressed: _requestManageMedia,
-            child: Text(t(ref, 'enable'),
-                style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], fontSize: 11, fontWeight: FontWeight.w700)),
+            child: Text(
+              t(ref, 'enable'),
+              style: const TextStyle(
+                fontFamily: 'Space Mono',
+                fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
         ],
       ),
@@ -1095,8 +1185,11 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                 onTap: _addSubDir,
                 child: const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: Icon(Icons.add_circle_outline,
-                      color: AppColors.accent, size: 22),
+                  child: Icon(
+                    Icons.add_circle_outline,
+                    color: AppColors.accent,
+                    size: 22,
+                  ),
                 ),
               ),
             ],
@@ -1124,7 +1217,11 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             child: Text(
               _buildNewDirFolders().map((f) => f.path).join('\n'),
               style: const TextStyle(
-                  color: AppColors.muted, fontFamily: 'Space Mono', height: 1.2, fontSize: 11),
+                color: AppColors.muted,
+                fontFamily: 'Space Mono',
+                height: 1.2,
+                fontSize: 11,
+              ),
             ),
           ),
           const SizedBox(height: 16),
@@ -1158,8 +1255,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   /// controller 必须由 _SubDirRow 的 State 持有并跨 rebuild 复用——之前在本
   /// build 内 `TextEditingController(text: value)` 每次 new，onChanged→setState
   /// 触发的 rebuild 会重建 controller，导致输入（尤其删除字符）后光标/焦点消失。
-  Widget _buildSubDirRow(
-      int idx, String value, Animation<double> animation) {
+  Widget _buildSubDirRow(int idx, String value, Animation<double> animation) {
     return _SubDirRow(
       value: value,
       keyLabel: idx < _keyOrder.length ? _keyOrder[idx] : '?',
@@ -1179,11 +1275,16 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
 
   /// 区块标题文字（统一样式）
   Widget _sectionTitle(String text) {
-    return Text(text,
-        style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-            color: AppColors.accent,
-            fontWeight: FontWeight.w800,
-            fontSize: 13));
+    return Text(
+      text,
+      style: const TextStyle(
+        fontFamily: 'Space Mono',
+        fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+        color: AppColors.accent,
+        fontWeight: FontWeight.w800,
+        fontSize: 13,
+      ),
+    );
   }
 
   /// 带标题的目录输入框（父目录用）。
@@ -1226,34 +1327,30 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     VoidCallback? onDelete,
     String? hintText,
   }) {
-    return TextField(
+    final field = TextField(
       controller: controller,
       focusNode: focusNode,
-      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 14),
+      style: const TextStyle(
+        fontFamily: 'Space Mono',
+        fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+        color: AppColors.text,
+        fontSize: 14,
+      ),
       decoration: InputDecoration(
         isDense: true,
         hintText: hintText,
         hintStyle: const TextStyle(
-            color: AppColors.muted,
-            fontFamily: 'Space Mono',
-            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-            fontSize: 14),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          color: AppColors.muted,
+          fontFamily: 'Space Mono',
+          fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+          fontSize: 14,
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 14,
+        ),
         filled: true,
         fillColor: AppColors.surface,
-        // 子目录行的删除图标放在输入框内部右侧（suffix），
-        // 这样输入框本身撑满整行宽度，右边界与父目录输入框对齐。
-        suffixIcon: onDelete == null
-            ? null
-            : IconButton(
-                icon: const Icon(Icons.remove_circle_outline,
-                    color: AppColors.danger, size: 20),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                onPressed: onDelete,
-                tooltip: '删除',
-              ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
           borderSide: const BorderSide(color: AppColors.border),
@@ -1269,10 +1366,30 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       ),
       onChanged: onChanged,
     );
+    if (onDelete == null) return field;
+    // 删除按钮放在输入框外右侧,与顶部「加号」行(Padding(h:8)+Icon 22)同列对齐。
+    return Row(
+      children: [
+        Expanded(child: field),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: onDelete,
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Icon(
+              Icons.remove_circle_outline,
+              color: AppColors.danger,
+              size: 22,
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   Widget _buildBottomBar() {
-    final canStart = _sourceBucketIds.isNotEmpty &&
+    final canStart =
+        _sourceBucketIds.isNotEmpty &&
         ((_mode == ClassifyMode.toAlbum && _targetBucketIds.isNotEmpty) ||
             (_mode == ClassifyMode.toNewDir && _subDirs.isNotEmpty));
     return Container(
@@ -1289,7 +1406,8 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
               child: Text(
                 _statusText(),
                 style: TextStyle(
-                  fontFamily: 'Space Mono', height: 1.2,
+                  fontFamily: 'Space Mono',
+                  height: 1.2,
                   fontFamilyFallback: AppFonts.cjkFallback,
                   fontSize: 12,
                   color: canStart ? AppColors.accent : AppColors.muted,
@@ -1301,10 +1419,13 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
               style: FilledButton.styleFrom(
                 backgroundColor: AppColors.accent,
                 foregroundColor: AppColors.bg,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 32,
+                  vertical: 14,
+                ),
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
               onPressed: (canStart && !_scanning) ? _startScan : null,
               child: _scanning
@@ -1312,11 +1433,19 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                       height: 18,
                       width: 18,
                       child: CircularProgressIndicator(
-                          strokeWidth: 2, color: AppColors.bg),
+                        strokeWidth: 2,
+                        color: AppColors.bg,
+                      ),
                     )
-                  : Text(t(ref, 'start'),
-                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                          fontWeight: FontWeight.w800, fontSize: 14)),
+                  : Text(
+                      t(ref, 'start'),
+                      style: const TextStyle(
+                        fontFamily: 'Space Mono',
+                        fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14,
+                      ),
+                    ),
             ),
           ],
         ),
@@ -1341,12 +1470,22 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.photo_library_outlined,
-                size: 48, color: AppColors.muted),
+            const Icon(
+              Icons.photo_library_outlined,
+              size: 48,
+              color: AppColors.muted,
+            ),
             const SizedBox(height: 16),
-            Text(t(ref, 'permission_needed'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.text, fontSize: 14)),
+            Text(
+              t(ref, 'permission_needed'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontFamily: 'Space Mono',
+                fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                color: AppColors.text,
+                fontSize: 14,
+              ),
+            ),
             const SizedBox(height: 20),
             FilledButton(
               onPressed: _initAndLoad,
@@ -1367,11 +1506,21 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           children: [
             const Icon(Icons.error_outline, size: 40, color: AppColors.danger),
             const SizedBox(height: 12),
-            SelectableText(_error!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.danger, fontSize: 12)),
+            SelectableText(
+              _error!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontFamily: 'Space Mono',
+                fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                color: AppColors.danger,
+                fontSize: 12,
+              ),
+            ),
             const SizedBox(height: 16),
-            OutlinedButton(onPressed: _loadBuckets, child: Text(t(ref, 'retry'))),
+            OutlinedButton(
+              onPressed: _loadBuckets,
+              child: Text(t(ref, 'retry')),
+            ),
           ],
         ),
       ),
@@ -1400,11 +1549,14 @@ class _HomeBucketTile extends StatefulWidget {
   final MsBucket bucket;
   final bool selected;
   final VoidCallback onCheckToggle;
+
   /// 输入法展开时点击本 tile 的回调（收键盘 + 保存）；为 null 则不拦截。
   final VoidCallback? onInterceptWhileEditing;
+
   /// 从相册浏览返回后的回调（刷新封面/数量——删除/恢复会改变它们）。
   final VoidCallback? onAlbumReturned;
   final bool grid;
+
   /// 本组已进入选择模式（至少一个相册被勾选）：此时点击 tile 改为勾选/取消本相册，
   /// 不进入相册浏览——满足"勾选第一个后，点其余直接勾选"的批量选择体感。
   final bool selectionMode;
@@ -1455,8 +1607,7 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 curve: Curves.easeOut,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 decoration: BoxDecoration(
                   color: Colors.transparent,
                   borderRadius: BorderRadius.circular(8),
@@ -1464,8 +1615,10 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                 child: Row(
                   children: [
                     _CoverThumb(
-                        key: _coverKey,
-                        coverId: widget.bucket.coverId, size: 44),
+                      key: _coverKey,
+                      coverId: widget.bucket.coverId,
+                      size: 44,
+                    ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -1474,7 +1627,8 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                           Text(
                             widget.bucket.name,
                             style: TextStyle(
-                              fontFamily: 'Space Mono', height: 1.2,
+                              fontFamily: 'Space Mono',
+                              height: 1.2,
                               fontFamilyFallback: AppFonts.cjkFallback,
                               fontWeight: FontWeight.w700,
                               fontSize: 13,
@@ -1484,11 +1638,15 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                             overflow: TextOverflow.ellipsis,
                           ),
                           const SizedBox(height: 2),
-                          Text('${widget.bucket.count}',
-                              style: const TextStyle(
-                                  fontFamily: 'Space Mono', height: 1.2,
-                                  fontSize: 10,
-                                  color: AppColors.muted)),
+                          Text(
+                            '${widget.bucket.count}',
+                            style: const TextStyle(
+                              fontFamily: 'Space Mono',
+                              height: 1.2,
+                              fontSize: 10,
+                              color: AppColors.muted,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -1503,8 +1661,7 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
             onTap: _onCheckToggle,
             borderRadius: BorderRadius.circular(20),
             child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
               child: SizedBox(
                 width: 24,
                 height: 24,
@@ -1525,8 +1682,9 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             border: Border.all(
-                              color: AppColors.accent
-                                  .withValues(alpha: (1 - t) * 0.7),
+                              color: AppColors.accent.withValues(
+                                alpha: (1 - t) * 0.7,
+                              ),
                               width: 2,
                             ),
                           ),
@@ -1541,12 +1699,9 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                       height: selected ? 20 : 18,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: selected
-                            ? AppColors.accent
-                            : Colors.transparent,
+                        color: selected ? AppColors.accent : Colors.transparent,
                         border: Border.all(
-                          color:
-                              selected ? AppColors.accent : AppColors.muted,
+                          color: selected ? AppColors.accent : AppColors.muted,
                           width: 2,
                         ),
                       ),
@@ -1572,6 +1727,7 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
       ),
     );
   }
+
   // ── 网格态：竖向 tile（封面 + 名称 + 角标勾选），与列表态共用波动环。
   /// 输入法展开（有 TextField 聚焦）时，点击相册入口只用于收起键盘并保存
   /// 编辑，不进入相册——避免编辑中的父/子目录改动落在防抖窗口内、随导航
@@ -1615,10 +1771,11 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
       'bucketCount': widget.bucket.count,
     };
     if (rect != null) {
-      await pushAlbumGrow(context,
-          args: args,
-          coverAlignment:
-              albumCoverAlignment(rect, MediaQuery.sizeOf(context)));
+      await pushAlbumGrow(
+        context,
+        args: args,
+        coverAlignment: albumCoverAlignment(rect, MediaQuery.sizeOf(context)),
+      );
     } else {
       await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
     }
@@ -1642,7 +1799,9 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                   onTap: () => _openAlbum(coverContext: context),
                   child: LayoutBuilder(
                     builder: (ctx, c) => _CoverThumb(
-                        coverId: widget.bucket.coverId, size: c.maxWidth),
+                      coverId: widget.bucket.coverId,
+                      size: c.maxWidth,
+                    ),
                   ),
                 ),
                 if (selected)
@@ -1650,8 +1809,7 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                            color: AppColors.accent, width: 2.5),
+                        border: Border.all(color: AppColors.accent, width: 2.5),
                       ),
                     ),
                   ),
@@ -1662,16 +1820,22 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                   child: IgnorePointer(
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 5, vertical: 1),
+                        horizontal: 5,
+                        vertical: 1,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.black.withValues(alpha: 0.55),
                         borderRadius: BorderRadius.circular(4),
                       ),
-                      child: Text('${widget.bucket.count}',
-                          style: const TextStyle(
-                              fontSize: 9,
-                              color: Colors.white,
-                              fontFamily: 'Space Mono', height: 1.2)),
+                      child: Text(
+                        '${widget.bucket.count}',
+                        style: const TextStyle(
+                          fontSize: 9,
+                          color: Colors.white,
+                          fontFamily: 'Space Mono',
+                          height: 1.2,
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -1696,7 +1860,8 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontFamily: 'Space Mono', height: 1.2,
+                fontFamily: 'Space Mono',
+                height: 1.2,
                 fontFamilyFallback: AppFonts.cjkFallback,
                 fontWeight: FontWeight.w700,
                 fontSize: 11,
@@ -1729,9 +1894,9 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
-                      color: AppColors.accent
-                          .withValues(alpha: (1 - t) * 0.7),
-                      width: 2),
+                    color: AppColors.accent.withValues(alpha: (1 - t) * 0.7),
+                    width: 2,
+                  ),
                 ),
               );
             },
@@ -1747,8 +1912,9 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                   ? AppColors.accent
                   : Colors.black.withValues(alpha: 0.4),
               border: Border.all(
-                  color: selected ? AppColors.accent : Colors.white54,
-                  width: 2),
+                color: selected ? AppColors.accent : Colors.white54,
+                width: 2,
+              ),
             ),
             child: selected
                 ? const Center(
@@ -1779,8 +1945,11 @@ class _CoverThumb extends StatelessWidget {
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: AppColors.border),
         ),
-        child: const Icon(Icons.photo_outlined,
-            color: AppColors.muted, size: 20),
+        child: const Icon(
+          Icons.photo_outlined,
+          color: AppColors.muted,
+          size: 20,
+        ),
       );
     }
     final ref = imageRefFromMediaStoreId(coverId!);
@@ -1796,8 +1965,11 @@ class _CoverThumb extends StatelessWidget {
           width: size,
           height: size,
           color: AppColors.surface,
-          child: const Icon(Icons.broken_image_outlined,
-              color: AppColors.muted, size: 20),
+          child: const Icon(
+            Icons.broken_image_outlined,
+            color: AppColors.muted,
+            size: 20,
+          ),
         ),
       ),
     );
@@ -1812,19 +1984,25 @@ class _Logo extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         // V 用主题绿(accent),ISORT 白色 —— VISORT logo。
-        Text('V',
-            style: TextStyle(
-                fontFamily: 'Syne',
-                fontFamilyFallback: AppFonts.cjkFallback,
-                fontWeight: FontWeight.w800,
-                fontSize: 22,
-                color: AppColors.accent)),
-        Text('ISORT',
-            style: TextStyle(
-                fontFamily: 'Syne',
-                fontFamilyFallback: AppFonts.cjkFallback,
-                fontWeight: FontWeight.w800,
-                fontSize: 22)),
+        Text(
+          'V',
+          style: TextStyle(
+            fontFamily: 'Syne',
+            fontFamilyFallback: AppFonts.cjkFallback,
+            fontWeight: FontWeight.w800,
+            fontSize: 22,
+            color: AppColors.accent,
+          ),
+        ),
+        Text(
+          'ISORT',
+          style: TextStyle(
+            fontFamily: 'Syne',
+            fontFamilyFallback: AppFonts.cjkFallback,
+            fontWeight: FontWeight.w800,
+            fontSize: 22,
+          ),
+        ),
       ],
     );
   }
@@ -1860,8 +2038,9 @@ class _SubDirRow extends StatefulWidget {
 }
 
 class _SubDirRowState extends State<_SubDirRow> {
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.value);
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.value,
+  );
 
   @override
   void didUpdateWidget(covariant _SubDirRow oldWidget) {
@@ -1907,11 +2086,12 @@ class _SubDirRowState extends State<_SubDirRow> {
                     child: Text(
                       widget.keyLabel,
                       style: const TextStyle(
-                          fontFamily: 'Space Mono',
-                          fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                          color: AppColors.accent,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 13),
+                        fontFamily: 'Space Mono',
+                        fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                        color: AppColors.accent,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                      ),
                     ),
                   ),
                 ),
@@ -1926,5 +2106,3 @@ class _SubDirRowState extends State<_SubDirRow> {
     );
   }
 }
-
-

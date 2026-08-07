@@ -12,6 +12,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as p;
+import 'package:visort_flutter/core/config/models.dart';
 
 import 'file_system_repository.dart';
 import 'image_ref.dart';
@@ -29,8 +30,13 @@ class DesktopFileSystem implements FileSystemRepository {
   }
 
   @override
-  Future<ScanResult> scanImages(List<String> roots,
-      {required bool recursive}) async {
+  Future<ScanResult> scanImages(
+    List<String> roots, {
+    required bool recursive,
+    SortBy? sortBy,
+    bool asc = false,
+  }) async {
+    // 桌面端按相对路径排序(sortBy/asc 仅安卓 MediaStore 用,此处忽略)。
     final images = <ImageRef>[];
     for (final root in roots) {
       final dir = Directory(root);
@@ -46,11 +52,9 @@ class DesktopFileSystem implements FileSystemRepository {
             final rel = p.relative(entry.path, from: root);
             // 统一用 / 作为相对路径分隔符（与 Python relative_to 跨平台一致）
             final relNormalized = rel.replaceAll(r'\', '/');
-            images.add(ImageRef(
-              root: root,
-              relativePath: relNormalized,
-              extension: ext,
-            ));
+            images.add(
+              ImageRef(root: root, relativePath: relNormalized, extension: ext),
+            );
           }
         }
       }
@@ -65,8 +69,7 @@ class DesktopFileSystem implements FileSystemRepository {
     final dir = Directory(parent);
     if (!dir.existsSync()) return const [];
     final names = <String>[];
-    await for (final entry
-        in dir.list(recursive: false, followLinks: false)) {
+    await for (final entry in dir.list(recursive: false, followLinks: false)) {
       if (entry is Directory) {
         final name = p.basename(entry.path);
         if (!name.startsWith('.')) names.add(name);
@@ -155,7 +158,11 @@ class DesktopFileSystem implements FileSystemRepository {
   }
 
   @override
-  Future<Set<String>> moveBatch(List<String> ids, String destPath, String root) async {
+  Future<Set<String>> moveBatch(
+    List<String> ids,
+    String destPath,
+    String root,
+  ) async {
     // 桌面端逐个移动：ids 是相对 root 的路径，拼成绝对路径再移。
     // （历史 bug：旧签名无 root，调用方传相对路径而实现当绝对路径用 → existsSync 恒 false → 全部 move_failed）
     final ok = <String>{};

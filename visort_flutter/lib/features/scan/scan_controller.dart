@@ -24,6 +24,7 @@ class ScanState {
     this.imageCount = 0,
   });
   final ScanStatus status;
+
   /// 错误 i18n key（如 'dir_not_exist' / 'no_images'）
   final String? errorKey;
   final int imageCount;
@@ -37,8 +38,7 @@ class ScanState {
 }
 
 class ScanController extends StateNotifier<ScanState> {
-  ScanController(this._fs, this._sessionController)
-      : super(const ScanState());
+  ScanController(this._fs, this._sessionController) : super(const ScanState());
 
   final FileSystemRepository _fs;
   final SessionController _sessionController;
@@ -59,7 +59,12 @@ class ScanController extends StateNotifier<ScanState> {
   }) async {
     state = const ScanState(status: ScanStatus.scanning);
 
-    final result = await _fs.scanImages(source, recursive: recursive);
+    final result = await _fs.scanImages(
+      source,
+      recursive: recursive,
+      sortBy: config.photoSortBy,
+      asc: config.photoSortAsc,
+    );
     if (result.error != null) {
       state = ScanState(status: ScanStatus.error, errorKey: result.error);
       return result.error;
@@ -82,7 +87,10 @@ class ScanController extends StateNotifier<ScanState> {
       prebuiltFolders: prebuiltFolders,
     );
 
-    state = ScanState(status: ScanStatus.done, imageCount: result.images.length);
+    state = ScanState(
+      status: ScanStatus.done,
+      imageCount: result.images.length,
+    );
     return null;
   }
 
@@ -91,10 +99,11 @@ class ScanController extends StateNotifier<ScanState> {
   }
 }
 
-final scanControllerProvider =
-    StateNotifierProvider<ScanController, ScanState>((ref) {
-  return ScanController(
-    ref.watch(fileSystemRepositoryProvider),
-    ref.watch(sessionControllerProvider.notifier),
-  );
-});
+final scanControllerProvider = StateNotifierProvider<ScanController, ScanState>(
+  (ref) {
+    return ScanController(
+      ref.watch(fileSystemRepositoryProvider),
+      ref.watch(sessionControllerProvider.notifier),
+    );
+  },
+);

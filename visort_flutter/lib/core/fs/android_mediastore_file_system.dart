@@ -14,13 +14,14 @@
 import 'file_system_repository.dart';
 import 'image_ref.dart';
 import 'mediastore_channel.dart';
+import 'package:visort_flutter/core/config/models.dart';
 
 /// MediaStore Images 的 authority 常量（与 Kotlin IMAGES_AUTHORITY 对齐）
 const kImagesAuthority = 'content://media/external/images/media';
 
 class AndroidMediaStoreFileSystem implements FileSystemRepository {
   AndroidMediaStoreFileSystem({MediaStoreChannel? channel})
-      : _channel = channel ?? const MediaStoreChannel();
+    : _channel = channel ?? const MediaStoreChannel();
 
   final MediaStoreChannel _channel;
 
@@ -41,33 +42,43 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
   }
 
   @override
-  Future<ScanResult> scanImages(List<String> roots,
-      {required bool recursive}) async {
-    // roots = bucket id 列表（recursive 在 MediaStore 无意义）
-    // 分类流程需全量扫描：循环分页直到耗尽（limit 大以减少 round-trip）。
+  Future<ScanResult> scanImages(
+    List<String> roots, {
+    required bool recursive,
+    SortBy? sortBy,
+    bool asc = false,
+  }) async {
+    // roots = bucket id 列表（recursive 在 MediaStore 无意义）。
+    // 按勾选顺序逐相册查询,每相册内由 [sortBy]/[asc] 排序,拼接后即
+    // 「相册分组(勾选序) + 组内排序」的浏览顺序。不再整体按 _ID 排序——
+    // 那会打散相册分组,且 _ID 字典序无意义。
     try {
+      final sort = sortBy ?? SortBy.dateCreated;
       final all = <MsImageInfo>[];
-      String? cursor;
-      do {
-        final page = await _channel.scanImages(
-          roots,
-          afterCursor: cursor,
-          limit: 1000,
-        );
-        all.addAll(page.images);
-        cursor = page.nextCursor;
-      } while (cursor != null);
-      final infos = all;
-      final images = infos
-          .map((info) => ImageRef(
-                root: kImagesAuthority,
-                relativePath: info.id, // _ID 作为决策字典 key
-                extension: _extensionOf(info.name),
-                displayName: info.name, // 真实文件名（DISPLAY_NAME）
-              ))
+      for (final bucket in roots) {
+        String? cursor;
+        do {
+          final page = await _channel.scanImages(
+            [bucket],
+            afterCursor: cursor,
+            limit: 1000,
+            sortBy: sort,
+            asc: asc,
+          );
+          all.addAll(page.images);
+          cursor = page.nextCursor;
+        } while (cursor != null);
+      }
+      final images = all
+          .map(
+            (info) => ImageRef(
+              root: kImagesAuthority,
+              relativePath: info.id, // _ID 作为决策字典 key
+              extension: _extensionOf(info.name),
+              displayName: info.name, // 真实文件名（DISPLAY_NAME）
+            ),
+          )
           .toList(growable: false);
-      // 按 _ID 排序（与桌面端 relativePath 排序语义对齐）
-      images.sort((a, b) => a.relativePath.compareTo(b.relativePath));
       return ScanResult(images: images);
     } catch (e) {
       return ScanResult(images: const [], error: e.toString());
@@ -113,7 +124,11 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
   }
 
   @override
-  Future<Set<String>> moveBatch(List<String> ids, String destPath, String root) async {
+  Future<Set<String>> moveBatch(
+    List<String> ids,
+    String destPath,
+    String root,
+  ) async {
     // 批量移动（createWriteRequest 改 RELATIVE_PATH，一次系统弹窗）
     // root 在 MediaStore 语义下不使用（ids 即 MediaStore _ID）
     if (ids.isEmpty) return const {};

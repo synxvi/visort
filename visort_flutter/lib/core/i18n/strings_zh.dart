@@ -167,7 +167,7 @@ const Map<String, String> stringsZh = {
   'review_title': '审核变更',
   'review_desc': '点击「应用所有变更」后以下变更将被应用。目前尚未移动任何文件。',
   'back': '← 返回',
-  'file': '文件',
+  'file': '文件名',
   'action': '操作',
   'dest_col': '目标位置',
   'undecided_label': '未处理的文件（将被跳过）',

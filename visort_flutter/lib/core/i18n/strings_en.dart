@@ -118,8 +118,10 @@ const Map<String, String> stringsEn = {
   'target_count': 'Target {0}',
   'subdir_count': 'Subdirs {0}',
   'manage_media_title': 'Enable silent operations',
-  'manage_media_hint': 'Grant media management access to move/delete without confirmation dialogs.',
-  'manage_media_granted': 'Media management enabled. Batch operations now silent.',
+  'manage_media_hint':
+      'Grant media management access to move/delete without confirmation dialogs.',
+  'manage_media_granted':
+      'Media management enabled. Batch operations now silent.',
   'enable': 'Enable',
 
   // ───────── Gallery (相册浏览) ─────────
@@ -171,7 +173,7 @@ const Map<String, String> stringsEn = {
   'review_desc':
       'Click "Apply All Changes" to apply the changes below. No files have been moved yet.',
   'back': '← Back',
-  'file': 'File',
+  'file': 'Filename',
   'action': 'Action',
   'dest_col': 'Destination',
   'undecided_label': 'Unprocessed files (will be skipped)',

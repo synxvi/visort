@@ -407,6 +407,25 @@ class MediaStoreRepository(private val context: Context) {
         )
         val result = mutableMapOf<String, MutableMap<String, String>>()
 
+        // 0) 文件绝对路径(MediaStore.DATA)。供详情面板显示完整路径。
+        try {
+            contentResolver.query(
+                uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    val idx = c.getColumnIndex(MediaStore.MediaColumns.DATA)
+                    if (idx >= 0) {
+                        val data = c.getString(idx)
+                        if (!data.isNullOrEmpty()) {
+                            result.getOrPut("FILE") { mutableMapOf() }["Path"] = data
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "getMetadata DATA 查询失败: ${e.message}")
+        }
+
         // 1) ExifInterface 读 JPEG EXIF + GPS
         try {
             contentResolver.openInputStream(uri)?.use { input ->
