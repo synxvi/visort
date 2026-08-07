@@ -472,11 +472,12 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         actions: [
           // 相册排序（源/目标 section 共用同一排序状态 albumSortBy/Asc）：
           // 从 section 标题整合到 AppBar，置于 ⋮ 左侧。section 内重复的 SortToggle 已移除。
-          // Transform.translate 右移 10dp：SortToggle 内部 Padding(right:5) 让 icon 偏左，
+          // Transform.translate 右移 SortToggle：内部 Padding(right:5) 让 icon 偏左，
           // 多 action 场景下视觉离 ⋮ 偏远，translate 抵消使其靠近 ⋮（gallery/album 里
           // SortToggle 是唯一 action，不受影响，故只在这里包）。
+          // 右移量 14：排序图标↔⋮ 视觉间距从 ~14dp 缩到 ~10dp（约缩 1/4）。
           Transform.translate(
-            offset: const Offset(10, 0),
+            offset: const Offset(14, 0),
             child: SortToggle(
               sortBy: config.albumSortBy,
               asc: config.albumSortAsc,
@@ -503,8 +504,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             children: [
               // 模式切换 segmented control
               _buildModeSelector(),
+              // 顶栏↔源相册分隔线：固定显示。模式选择器自身 bottom:10 已提供到分隔线
+              // 的间距，与选择器 top:10（到顶栏）相等，故不再加额外 SizedBox。
               const Divider(color: AppColors.border, height: 1),
-              // 主体
+              // 主体（在分隔线下方滚动，不进入分隔线区域 → 不被遮挡）
               Expanded(child: _buildBody()),
               // 底部 Start
               _buildBottomBar(),
@@ -520,19 +523,22 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   void _applyMode(ClassifyMode m) {
     if (m == _mode) return;
     setState(() {
-      _slideForward = m.index > _mode.index;
+      // 显示顺序为 toNewDir(左)→toAlbum(右)：切到右边的 toAlbum = 正向(新面板从右进)，
+      // 切到左边的 toNewDir = 反向(从左进)。让抽屉动画方向与顶栏位置一致。
+      // （原按枚举 index 判定，交换显示顺序后方向会反。）
+      _slideForward = m == ClassifyMode.toAlbum;
       _mode = m;
     });
   }
 
-  /// 左右滑动切换移动模式:右滑(正速度)→相册间(toAlbum);左滑→子目录(toNewDir)。
+  /// 左右滑动切换移动模式:右滑(正速度)→子目录(toNewDir);左滑→相册间(toAlbum)。
   /// 阈值 300px/s 避免误触。垂直滚动(ListView)不受影响——水平 drag 由本层独占。
   void _onModeSwipe(DragEndDetails details) {
     final v = details.primaryVelocity ?? 0;
-    if (v > 300 && _mode != ClassifyMode.toAlbum) {
-      _applyMode(ClassifyMode.toAlbum);
-    } else if (v < -300 && _mode != ClassifyMode.toNewDir) {
+    if (v > 300 && _mode != ClassifyMode.toNewDir) {
       _applyMode(ClassifyMode.toNewDir);
+    } else if (v < -300 && _mode != ClassifyMode.toAlbum) {
+      _applyMode(ClassifyMode.toAlbum);
     }
   }
 
@@ -560,7 +566,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                   AnimatedPositioned(
                     duration: const Duration(milliseconds: 280),
                     curve: Curves.easeOutCubic,
-                    left: isAlbum ? 0 : blockW,
+                    left: isAlbum ? blockW : 0,
                     top: 0,
                     bottom: 0,
                     width: blockW,
@@ -576,12 +582,12 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                     child: Row(
                       children: [
                         Expanded(
-                            child: _modeSegment(ClassifyMode.toAlbum,
-                                Icons.swap_horiz, t(ref, 'mode_to_album'))),
-                        Expanded(
                             child: _modeSegment(ClassifyMode.toNewDir,
                                 Icons.create_new_folder_outlined,
                                 t(ref, 'mode_to_newdir'))),
+                        Expanded(
+                            child: _modeSegment(ClassifyMode.toAlbum,
+                                Icons.swap_horiz, t(ref, 'mode_to_album'))),
                       ],
                     ),
                   ),
@@ -591,6 +597,72 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           },
         ),
       ),
+    );
+  }
+
+  /// 双面板卡片推动（PageView 式）：始终同时持有 toNewDir、toAlbum 两个面板，
+  /// 用单一动画值 v（0=toNewDir、1=toAlbum）驱动两者水平位移——toNewDir 偏移 -v·w、
+  /// toAlbum 偏移 (1-v)·w，两者边沿恒相接（紧贴），新面板从一侧推入、旧面板被推向
+  /// 另一侧，不叠加不淡出。单一 v 保证缓动曲线下仍严格紧贴（AnimatedSwitcher 给新旧
+  /// 各自独立的 anim，曲线下两者会同时落到中心附近而重叠，呈现叠加而非推动，故弃用）。
+  Widget _buildModePanels() {
+    final target = _mode == ClassifyMode.toAlbum ? 1.0 : 0.0;
+    return LayoutBuilder(
+      builder: (ctx, c) {
+        final w = c.maxWidth;
+        return TweenAnimationBuilder<double>(
+          tween: Tween<double>(begin: target, end: target),
+          duration: 280.ms,
+          curve: Curves.easeOutCubic,
+          builder: (ctx, v, _) => Stack(
+            alignment: Alignment.topCenter,
+            children: [
+              // toNewDir 面板（左侧）：v=0 居中，v=1 推到左屏外
+              Transform.translate(
+                offset: Offset(-v * w, 0),
+                child: SizedBox(
+                  width: w,
+                  child: Padding(
+                    padding:
+                        // 展开态 top:20 → 末行相册底到「父目录」标题 = 2(tile v2)+20 = 22；
+                        // 折叠态 16 补偿 header 的 bottom:6，使 header→「父目录」标题同为 22（不再过近）
+                        EdgeInsets.only(top: _sourceExpanded ? 20.0 : 16.0),
+                    child: _buildNewDirConfig(),
+                  ),
+                ),
+              ),
+              // toAlbum 面板（右侧）：v=0 在右屏外，v=1 推到居中
+              Transform.translate(
+                offset: Offset((1 - v) * w, 0),
+                child: SizedBox(
+                  width: w,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildFlowDivider(sourceExpanded: _sourceExpanded),
+                      _buildCollapsibleSection(
+                        title: t(ref, 'target_albums'),
+                        totalCount: _buckets.length,
+                        expanded: _targetExpanded,
+                        onToggle: () => setState(
+                            () => _targetExpanded = !_targetExpanded),
+                        child: _buildBucketList(
+                          selectedIds: _targetBucketIds,
+                          onToggle: (id) => setState(() {
+                            _targetBucketIds.contains(id)
+                                ? _targetBucketIds.remove(id)
+                                : _targetBucketIds.add(id);
+                          }),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -651,7 +723,8 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         return false;
       },
       child: ListView(
-        padding: const EdgeInsets.only(top: 2),
+        // 分隔线（固定在上）到源相册 header 内容 = 10：top:5 + 源相册 header top:5
+        padding: const EdgeInsets.only(top: 5),
         children: [
           // MANAGE_MEDIA 引导（未授权时显示）
           if (!_manageMediaGranted) _buildManageMediaBanner(),
@@ -679,78 +752,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           duration: 300.ms,
           curve: Curves.easeInOut,
           alignment: Alignment.topCenter,
-          child: AnimatedSwitcher(
-            duration: 280.ms,
-            switchInCurve: Curves.easeOutCubic,
-            switchOutCurve: Curves.easeInCubic,
-            transitionBuilder: (child, anim) {
-              // 抽屉式同向水平滑动(对标桌面抽屉/系统页间切换,非淡入淡出):
-              // 正向(toAlbum→toNewDir):新内容从右进、旧内容向左出;反向反之。
-              // AnimatedSwitcher 对新旧 child 用同一 transitionBuilder + 正/反
-              // animation,这里靠 child.key(=ValueKey(_mode))区分新旧,各自取
-              // 相反方向的 offset——新进 child 从来向滑入,旧退 child 向同侧滑出,
-              // 形成连贯的同向流动而非"对开"。
-              final mode = (child.key as ValueKey<ClassifyMode>).value;
-              final isNew = mode == _mode;
-              final Offset begin;
-              if (isNew) {
-                begin =
-                    _slideForward ? const Offset(1, 0) : const Offset(-1, 0);
-              } else {
-                begin =
-                    _slideForward ? const Offset(-1, 0) : const Offset(1, 0);
-              }
-              return SlideTransition(
-                position:
-                    Tween<Offset>(begin: begin, end: Offset.zero).animate(
-                  CurvedAnimation(parent: anim, curve: Curves.easeOutCubic),
-                ),
-                child: child,
-              );
-            },
-            // 自定义 layoutBuilder：新旧 child 顶部对齐。默认 alignment.center 在
-            // 变高场景会让较短内容垂直居中悬浮，两模式高度差大时元素上下跳动。
-            layoutBuilder: (currentChild, previousChildren) => Stack(
-              alignment: Alignment.topCenter,
-              children: <Widget>[
-                ...previousChildren,
-                ?currentChild,
-              ],
-            ),
-            child: KeyedSubtree(
-              key: ValueKey(_mode),
-              child: _mode == ClassifyMode.toAlbum
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _buildFlowDivider(sourceExpanded: _sourceExpanded),
-                        _buildCollapsibleSection(
-                          title: t(ref, 'target_albums'),
-                          totalCount: _buckets.length,
-                          expanded: _targetExpanded,
-                          onToggle: () => setState(
-                              () => _targetExpanded = !_targetExpanded),
-                          child: _buildBucketList(
-                            selectedIds: _targetBucketIds,
-                            onToggle: (id) => setState(() {
-                              _targetBucketIds.contains(id)
-                                  ? _targetBucketIds.remove(id)
-                                  : _targetBucketIds.add(id);
-                            }),
-                          ),
-                        ),
-                      ],
-                    )
-                  : Padding(
-                      // 展开态 top:20 对齐配置面板内区块分隔（父目录输入框→子目录
-                      // 标题用 SizedBox(20)），让末位相册→「父目录」标题间距与面板内一致；
-                      // 折叠态 top:0（源 header bottom:10 已提供标题间间距）。
-                      padding: EdgeInsets.only(
-                          top: _sourceExpanded ? 20.0 : 0.0),
-                      child: _buildNewDirConfig(),
-                    ),
-            ),
-          ),
+          child: _buildModePanels(),
         ),
         ],
       ),
@@ -902,18 +904,32 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
               onInterceptWhileEditing: _dismissAndFlush,
               onAlbumReturned: _refreshCovers,
               grid: isGrid,
+              selectionMode: selectedIds.isNotEmpty,
             ))
         .toList();
     if (isGrid) {
-      return GridView.count(
-        crossAxisCount: config.homeGridColumns,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        mainAxisSpacing: 4,
-        crossAxisSpacing: 4,
-        childAspectRatio: 0.72,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-        children: tiles,
+      // 用 Wrap + 固定列宽替代 GridView.count：GridView 的 childAspectRatio 会把 cell
+      // 高度锁死，内容（封面+SizedBox+文字）顶对齐后底部留白，且留白随列数变化
+      //（3列 cell 大留白多、4列留白少），导致末行相册到后续元素间距忽大忽小。
+      // Wrap 让每个 tile 高度=内容高度（无留白），末行底边天然对齐 → 各布局间距统一。
+      return LayoutBuilder(
+        builder: (ctx, c) {
+          final cols = config.homeGridColumns;
+          const spacing = 4.0;
+          const hpad = 12.0;
+          final cellW =
+              (c.maxWidth - hpad * 2 - spacing * (cols - 1)) / cols;
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: hpad),
+            child: Wrap(
+              spacing: spacing,
+              runSpacing: spacing,
+              children: tiles
+                  .map((t) => SizedBox(width: cellW, child: t))
+                  .toList(),
+            ),
+          );
+        },
       );
     }
     return Column(children: tiles);
@@ -1137,58 +1153,26 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     _persistNewDir();
   }
 
-  /// 单个子目录行（AnimatedList 入场/退场共用）：SizeTransition + FadeTransition。
+  /// 单个子目录行：委托给 _SubDirRow（StatefulWidget）。
+  ///
+  /// controller 必须由 _SubDirRow 的 State 持有并跨 rebuild 复用——之前在本
+  /// build 内 `TextEditingController(text: value)` 每次 new，onChanged→setState
+  /// 触发的 rebuild 会重建 controller，导致输入（尤其删除字符）后光标/焦点消失。
   Widget _buildSubDirRow(
       int idx, String value, Animation<double> animation) {
-    return SizeTransition(
-      sizeFactor: animation,
-      // SizeTransition 无 alignment 参数：垂直轴 -1.0 = 顶部对齐
-      axisAlignment: -1.0,
-      child: FadeTransition(
-        opacity: animation,
-        child: Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // 快捷键标签：正方形，高度跟随输入框
-                AspectRatio(
-                  aspectRatio: 1,
-                  child: Container(
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: AppColors.accentWithOpacity(0.15),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      idx < _keyOrder.length ? _keyOrder[idx] : '?',
-                      style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                          color: AppColors.accent,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 13),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                // 子目录名输入：删除图标内置 suffix
-                Expanded(
-                  child: _dirInputField(
-                    controller: TextEditingController(text: value),
-                    hintText: 'folder ${idx + 1}',
-                    onChanged: (val) {
-                      setState(() => _subDirs[idx] = val);
-                      _persistNewDir();
-                    },
-                    onDelete: _subDirs.length > 1
-                        ? () => _removeSubDir(idx)
-                        : null,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+    return _SubDirRow(
+      value: value,
+      keyLabel: idx < _keyOrder.length ? _keyOrder[idx] : '?',
+      animation: animation,
+      // fieldBuilder 闭包捕获 idx，复用父级 _dirInputField 与编辑/删除逻辑不变
+      fieldBuilder: (controller) => _dirInputField(
+        controller: controller,
+        hintText: 'folder ${idx + 1}',
+        onChanged: (val) {
+          setState(() => _subDirs[idx] = val);
+          _persistNewDir();
+        },
+        onDelete: _subDirs.length > 1 ? () => _removeSubDir(idx) : null,
       ),
     );
   }
@@ -1411,6 +1395,7 @@ class _HomeBucketTile extends StatefulWidget {
     this.onInterceptWhileEditing,
     this.onAlbumReturned,
     this.grid = false,
+    this.selectionMode = false,
   });
   final MsBucket bucket;
   final bool selected;
@@ -1420,6 +1405,9 @@ class _HomeBucketTile extends StatefulWidget {
   /// 从相册浏览返回后的回调（刷新封面/数量——删除/恢复会改变它们）。
   final VoidCallback? onAlbumReturned;
   final bool grid;
+  /// 本组已进入选择模式（至少一个相册被勾选）：此时点击 tile 改为勾选/取消本相册，
+  /// 不进入相册浏览——满足"勾选第一个后，点其余直接勾选"的批量选择体感。
+  final bool selectionMode;
 
   @override
   State<_HomeBucketTile> createState() => _HomeBucketTileState();
@@ -1608,6 +1596,11 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
 
   Future<void> _openAlbum({BuildContext? coverContext}) async {
     if (_interceptIfEditing()) return;
+    // 选择模式（本组已有相册勾选）：点击改为勾选/取消本相册，不进入浏览
+    if (widget.selectionMode) {
+      widget.onCheckToggle();
+      return;
+    }
     // 封面缩略图的屏幕坐标：list 模式取 _coverKey 挂载的封面；grid 模式
     // 由调用方传封面区域的 context（GestureDetector/名称区）。网格动画
     // 从封面位置"长"出来（由小变大）。
@@ -1833,6 +1826,103 @@ class _Logo extends StatelessWidget {
                 fontWeight: FontWeight.w800,
                 fontSize: 22)),
       ],
+    );
+  }
+}
+
+/// 单个子目录输入行（toNewDir 模式）。
+///
+/// 设计要点：[TextEditingController] 在 [_SubDirRowState] 内创建并跨 rebuild
+/// 复用。AnimatedList 的 itemBuilder 每次 rebuild 都会调用 _buildSubDirRow，
+/// 若在 build 内 `new TextEditingController` 会让 TextField 在每次输入
+/// （onChanged→父 setState）后挂上一个全新 controller，光标位置与 IME 焦点
+/// 随之丢失——表现为「删一个字后光标消失」。把 row 抽成 StatefulWidget，
+/// 编辑期间列表项位置不变、State 复用，controller 稳定，光标得以保留。
+///
+/// 输入框本体（[TextField] + 装饰）由父级通过 [fieldBuilder] 提供，以复用
+/// _dirInputField 与既有的 onChanged/onDelete 逻辑；本组件只负责持有
+/// controller、同步外部 value 变化，以及入场/退场动画包裹与快捷键标签。
+class _SubDirRow extends StatefulWidget {
+  final String value;
+  final String keyLabel;
+  final Animation<double> animation;
+  final Widget Function(TextEditingController controller) fieldBuilder;
+
+  const _SubDirRow({
+    required this.value,
+    required this.keyLabel,
+    required this.animation,
+    required this.fieldBuilder,
+  });
+
+  @override
+  State<_SubDirRow> createState() => _SubDirRowState();
+}
+
+class _SubDirRowState extends State<_SubDirRow> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.value);
+
+  @override
+  void didUpdateWidget(covariant _SubDirRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 外部 value 变化（配置加载、增删行导致的位置位移）时同步。
+    // 用户正在编辑本行时 value == _controller.text（onChanged 已先写回 _subDirs），
+    // 此处不触发，光标位置得以保留。
+    if (_controller.text != widget.value) {
+      _controller.text = widget.value;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizeTransition(
+      sizeFactor: widget.animation,
+      // 展开方向为垂直（height）：顶部对齐，行从上往下生长
+      // （等价旧 axisAlignment: -1.0；该属性自 Flutter 3.41 起被 alignment 取代）
+      alignment: Alignment.topCenter,
+      child: FadeTransition(
+        opacity: widget.animation,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 快捷键标签：正方形，高度跟随输入框
+                AspectRatio(
+                  aspectRatio: 1,
+                  child: Container(
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: AppColors.accentWithOpacity(0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      widget.keyLabel,
+                      style: const TextStyle(
+                          fontFamily: 'Space Mono',
+                          fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                          color: AppColors.accent,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // 子目录名输入：删除图标内置 suffix（由父级 fieldBuilder 提供）
+                Expanded(child: widget.fieldBuilder(_controller)),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

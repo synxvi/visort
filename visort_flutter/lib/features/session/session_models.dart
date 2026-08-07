@@ -109,6 +109,11 @@ class SessionState {
   bool get isEmpty => images.isEmpty;
   int get totalCount => images.length;
 
+  /// 所有图片已决策完毕（currentIndex 越过末尾）。
+  /// Sort 屏据此自动进入 Review，不再停留多余的"审核变更"中间页
+  /// （否则进度会显示成 (length+1)/length，如 5/4）。
+  bool get isComplete => !isEmpty && currentIndex >= images.length;
+
   /// 当前图片（可能越界）
   ImageRef? get currentImage =>
       currentIndex >= 0 && currentIndex < images.length ? images[currentIndex] : null;

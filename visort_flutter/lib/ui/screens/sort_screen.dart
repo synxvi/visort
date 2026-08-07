@@ -32,11 +32,26 @@ class SortScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(sessionControllerProvider);
 
+    // 完成时自动跳 Review：ref.listen 仅在 session"变完成"时触发一次，
+    // 从 Review pop 回不会重复触发（配合 continue_sort 回退 index 避免完成态空白）。
+    // 删除了原先最后一张图之后的"审核变更"中间页——它会多算一页，
+    // 导致进度显示成 (length+1)/length（如 5/4）。
+    ref.listen<SessionState>(sessionControllerProvider, (prev, next) {
+      if (next.isComplete && (prev == null || !prev.isComplete)) {
+        Navigator.pushNamed(context, AppRoutes.review);
+      }
+    });
+
     // 空 session（未扫描直接进入）→ 回 Home
     if (session.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (_) => false);
       });
+      return const Scaffold(body: SizedBox.shrink());
+    }
+
+    // 完成态：不再渲染"审核变更"中间页，留一帧空白作跳转过渡
+    if (session.isComplete) {
       return const Scaffold(body: SizedBox.shrink());
     }
 
@@ -194,21 +209,8 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
     final session = widget.session;
     final img = session.currentImage;
     if (img == null) {
-      // 已处理完，引导去 Review
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(t(ref, 'review_title'),
-                style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], fontSize: 18)),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: () => Navigator.pushNamed(context, AppRoutes.review),
-              child: Text(t(ref, 'review_go')),
-            ),
-          ],
-        ),
-      );
+      // 完成态由 SortScreen.build 拦截自动跳 Review；此处不会渲染，留空兜底
+      return const SizedBox.shrink();
     }
 
     return Column(
@@ -330,21 +332,9 @@ class _FullscreenImageState extends ConsumerState<_FullscreenImage> {
     final session = widget.session;
     final img = session.currentImage;
 
-    // 已处理完 → 引导去 Review
+    // 完成态由 SortScreen.build 拦截自动跳 Review；此处不会渲染，留空兜底
     if (img == null) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(t(ref, 'review_title'), style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], fontSize: 18)),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: () => Navigator.pushNamed(context, AppRoutes.review),
-              child: Text(t(ref, 'review_go')),
-            ),
-          ],
-        ),
-      );
+      return const SizedBox.shrink();
     }
 
     // 图片区约束在顶栏底部 ↔ 底栏顶部之间的预览区内，避免高图溢出到顶栏

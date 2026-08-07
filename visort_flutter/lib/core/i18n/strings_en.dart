@@ -169,7 +169,7 @@ const Map<String, String> stringsEn = {
   // ───────── Review ─────────
   'review_title': 'Review Changes',
   'review_desc':
-      'Click "Run" to apply the changes below. No files have been moved yet.',
+      'Click "Apply All Changes" to apply the changes below. No files have been moved yet.',
   'back': '← Back',
   'file': 'File',
   'action': 'Action',

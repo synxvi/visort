@@ -24,6 +24,7 @@ class AppColors {
   static const muted = Color(0xFF666666);
   static const danger = Color(0xFFFF3B3B);
   static const success = Color(0xFF3BFF8A);
+  static const softYellow = Color(0xFFFFE066); // 淡黄（review"继续分类"图标）
 
   // 派生（hover 色，源 index.html:259,279,281）
   static const accentHover = Color(0xFFFFFFFF);

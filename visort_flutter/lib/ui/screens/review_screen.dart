@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/review/review_controller.dart';
+import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/shared/widgets/kbd_badge.dart';
 import 'package:visort_flutter/ui/router.dart';
 
@@ -25,15 +26,29 @@ class ReviewScreen extends ConsumerWidget {
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.pop(context),
+          // 与底部"返回"按钮一致：回退到最后一张再 pop，避免回到完成态 Sort 屏黑屏
+          onPressed: () {
+            final s = ref.read(sessionControllerProvider);
+            if (s.totalCount > 0) {
+              ref.read(sessionControllerProvider.notifier)
+                  .goToIndex(s.totalCount - 1);
+            }
+            Navigator.pop(context);
+          },
         ),
-        title: Text(t(ref, 'review_title')),
+        // "审核变更"标题在右侧，与返回箭头同高（标准 toolbar 垂直居中）
         actions: [
-          TextButton(
-            onPressed: () => setLanguage(
-                ref, ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh'),
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
             child: Text(
-                ref.read(currentLanguageProvider) == 'zh' ? '中文' : 'EN'),
+              t(ref, 'review_title'),
+              style: const TextStyle(
+                  fontFamily: 'Space Mono',
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.text),
+            ),
           ),
         ],
       ),
@@ -45,9 +60,6 @@ class ReviewScreen extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(t(ref, 'review_desc'),
-                    style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)),
-                const SizedBox(height: 24),
                 // 4 张统计卡片
                 Row(
                   children: [
@@ -76,7 +88,48 @@ class ReviewScreen extends ConsumerWidget {
                             color: AppColors.accent2)),
                   ],
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 24),
+                // 操作按钮：返回（淡黄·左）+ 应用所有变更（主题黄绿·右）
+                Row(
+                  children: [
+                    FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.softYellow,
+                        foregroundColor: AppColors.bg,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 14),
+                      ),
+                      onPressed: () {
+                        // 返回 Sort 屏继续编辑最后一张（避免完成态空白）
+                        final s = ref.read(sessionControllerProvider);
+                        if (s.totalCount > 0) {
+                          ref.read(sessionControllerProvider.notifier)
+                              .goToIndex(s.totalCount - 1);
+                        }
+                        Navigator.pop(context);
+                      },
+                      child: Text(t(ref, 'back')),
+                    ),
+                    const Spacer(),
+                    FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.accent,
+                        foregroundColor: AppColors.bg,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 14),
+                      ),
+                      onPressed: stats.total == 0
+                          ? null
+                          : () => Navigator.pushNamed(
+                              context, AppRoutes.results),
+                      child: Text(t(ref, 'run_apply')),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Text(t(ref, 'review_desc'),
+                    style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted, fontSize: 13)),
+                const SizedBox(height: 24),
                 // 变更表格
                 _ChangesTable(stats: stats),
                 // 未处理文件
@@ -119,33 +172,6 @@ class ReviewScreen extends ConsumerWidget {
                     ),
                   ),
                 ],
-                const SizedBox(height: 32),
-                // 操作按钮（Flexible 防止窄屏溢出）
-                Row(
-                  children: [
-                    Flexible(
-                      child: TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: Text(t(ref, 'continue_sort'),
-                            overflow: TextOverflow.ellipsis),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.success,
-                        foregroundColor: AppColors.bg,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 20, vertical: 14),
-                      ),
-                      onPressed: stats.total == 0
-                          ? null
-                          : () => Navigator.pushNamed(
-                              context, AppRoutes.results),
-                      child: Text(t(ref, 'run_apply')),
-                    ),
-                  ],
-                ),
               ],
             ),
           ),
