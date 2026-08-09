@@ -650,7 +650,8 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
 
   /// 详情面板关闭收尾(路由动画 dismissed 后由 host 回调 / Future 兜底)。
   void _onDetailsDismissed() {
-    _detailsOpen = false;
+    // setState:恢复 PopScope canPop(面板收回后可正常返回退出大图)。
+    setState(() => _detailsOpen = false);
     _panelExtent.value = 0;
     _dismissEntry?.remove();
     _dismissEntry = null;
@@ -703,7 +704,8 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
   // 图片整体上移 e·H/2 后,可见区[0, H−e·H]恰好显示图像居中主体[e·H/2, H−e·H/2],无大面积空白。
   void _showDetails(MsImageInfo info) {
     if (_detailsOpen) return;
-    _detailsOpen = true;
+    // setState:PopScope 的 canPop 依赖 _detailsOpen,不重建则系统返回直接退出。
+    setState(() => _detailsOpen = true);
     // 面板打开期间底栏需随面板上移、顶栏淡出:强制栏可见(edge-to-edge)。
     if (!_barVisible.value) {
       _barVisible.value = true;
@@ -771,8 +773,10 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
 
   /// 详情面板 Overlay:固定 _kDetailInitial 可用区高度,Transform 跟随 _panelCtrl
   /// 从屏底滑入/滑出。锚定在底栏上方(bottom: barH)→ 底栏始终可见,面板从底栏上沿
-  /// 长出。GestureDetector 包整个面板(内容 scrollable:false 不滚动,手势不被 ListView
-  /// 抢),松手 snap 二值。Material 提供 DefaultTextStyle(消除 Overlay 内 Text 黄线)。
+  /// 长出。松手 snap 二值。Material 提供 DefaultTextStyle(消除 Overlay 内 Text 黄线)。
+  ///
+  /// 手势分层:内容区(ListView)滚内容;内容滚到顶后继续下拉 → OverscrollNotification
+  /// → 收回面板(见 [_handlePanelContentScroll]);顶部把手条可随时直接拖面板。
   Widget _buildPanelOverlay(MsImageInfo info) {
     final mq = MediaQuery.of(context);
     final barH = _kBottomChromeHeight + mq.viewPadding.bottom;
@@ -790,22 +794,119 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
           final ty = (1 - _panelCtrl!.value) * slideOut;
           return Transform.translate(offset: Offset(0, ty), child: child);
         },
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onVerticalDragUpdate: (d) {
-            final ctrl = _panelCtrl;
-            if (ctrl == null) return;
-            ctrl.value =
-                (ctrl.value - d.primaryDelta! / slideOut).clamp(0.0, 1.0);
-          },
-          onVerticalDragEnd: _onPanelDragEnd,
-          child: Material(
-            type: MaterialType.transparency,
-            child: PhotoDetailsSheet(info: info, scrollable: false),
-          ),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              // scrollable:true → 面板内容可滚动(ListView)。拖拽手势只挂在顶部
+              // 把手区:内容 Scrollable 与父 GestureDetector 同抢垂直拖拽时子级必赢,
+              // 全面板 GestureDetector 会收不到事件,故收窄到把手条互不冲突。
+              child: NotificationListener<ScrollNotification>(
+                onNotification: _handlePanelContentScroll,
+                child: ScrollConfiguration(
+                  // 内容区需始终接受拖拽(内容不可滚时默认 physics 会拒绝用户
+                  // 拖拽 → 无法通过 overscroll 收回面板),见 _PanelContentPhysics。
+                  behavior: const _PanelContentScrollBehavior(),
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: PhotoDetailsSheet(info: info, scrollable: true),
+                  ),
+                ),
+              ),
+            ),
+            // 面板顶部把手拖拽区(透明):下拉收起 / 上拉展开面板。
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: _kPanelDragZone,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onVerticalDragUpdate: (d) {
+                  final ctrl = _panelCtrl;
+                  if (ctrl == null) return;
+                  ctrl.value =
+                      (ctrl.value - d.primaryDelta! / slideOut).clamp(0.0, 1.0);
+                },
+                onVerticalDragEnd: _onPanelDragEnd,
+              ),
+            ),
+          ],
         ),
       ),
     );
+  }
+
+  /// 面板内容区越界拖拽状态:记录本次手势是否发生过 overscroll(面板联动过),
+  /// 及末次越界速率(ScrollEnd 时据此决定 snap 方向,与图片区 dismiss 手感一致)。
+  /// 注意:SDK 的 Scroll/OverscrollNotification 不含拖拽速度(velocity 恒 0,
+  /// DragUpdateDetails 无 velocity),只能采样 (事件时间戳, 单次过界量) 自算。
+  bool _panelOverDragged = false;
+  final List<(Duration, double)> _overSamples = [];
+  double _lastOverVel = 0;
+
+  /// 面板内容区滚动协调(嵌套滚动):
+  ///   - 内容滚到顶后继续下拉 → OverscrollNotification(负)→ 面板随之下移(收回);
+  ///   - 内容滚到底后继续上拉 → overscroll(正)→ 面板回升(展开);
+  ///   - 松手(ScrollEnd)→ 与图片区(dismiss 层)一致:向下速度即收回,不依赖位移;
+  ///     向上速度展开;无速度(缓停)按位置二值。
+  /// 内容区范围内的滚动完全交给 ListView,这里只处理越界量(Android 默认
+  /// ClampingScrollPhysics 在边界本就发出 OverscrollNotification,无需自定义 physics)。
+  bool _handlePanelContentScroll(ScrollNotification n) {
+    final ctrl = _panelCtrl;
+    if (ctrl == null) return false;
+    if (n is ScrollStartNotification) {
+      // 新手势开始:重置越界状态(内容普通滚动不触发面板 snap)
+      _panelOverDragged = false;
+      _overSamples.clear();
+      _lastOverVel = 0;
+      return false;
+    }
+    if (n is OverscrollNotification) {
+      _panelOverDragged = true;
+      final over = n.overscroll;
+      final t = n.dragDetails?.sourceTimeStamp;
+      if (over != 0 && t != null) {
+        _overSamples.add((t, over));
+        if (_overSamples.length > 4) _overSamples.removeAt(0);
+        if (_overSamples.length >= 2) {
+          final a = _overSamples[_overSamples.length - 2];
+          final b = _overSamples.last;
+          final dtUs = b.$1.inMicroseconds - a.$1.inMicroseconds;
+          if (dtUs > 0) {
+            // 取反:overscroll 负 = 内容向顶部过界 = 手指向下 → 速度应为正。
+            _lastOverVel = -(b.$2 / dtUs * 1e6);
+          }
+        }
+      }
+      if (over == 0) return false;
+      ctrl.value = (ctrl.value + over / _panelSlideOut).clamp(0.0, 1.0);
+      return false; // 不消费:辉光反馈等仍由 Scrollable 内部处理
+    }
+    if (n is ScrollEndNotification &&
+        _panelOverDragged &&
+        ctrl.value < 1.0) {
+      final v = _lastOverVel;
+      if (v > 0) {
+        _animateClose();
+      } else if (v < 0) {
+        ctrl.animateTo(1,
+            duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+      } else if (ctrl.value > 0.5) {
+        ctrl.animateTo(1,
+            duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+      } else {
+        _animateClose();
+      }
+      return false;
+    }
+    return false;
+  }
+
+  /// 面板从屏外滑到位的总行程(与 _buildPanelOverlay 的 slideOut 同值)。
+  double get _panelSlideOut {
+    final mq = MediaQuery.of(context);
+    final barH = _kBottomChromeHeight + mq.viewPadding.bottom;
+    return _kDetailInitial * (mq.size.height - barH) + barH;
   }
 }
 
@@ -1325,6 +1426,33 @@ class _SnapSpringPhysics extends ScrollPhysics {
 
 /// 底栏内容行高(不含安全区 inset);面板以此垫高,锚定在底栏上方生长。
 const double _kBottomChromeHeight = 64.0;
+
+/// 面板顶部把手拖拽区高度:内容 ListView 与面板拖拽手势分离的窄条区域。
+const double _kPanelDragZone = 32.0;
+
+/// 面板内容区 physics:默认 physics 在内容不可滚(maxScrollExtent==0,占位/短内容)
+/// 时 shouldAcceptUserOffset 返回 false,Scrollable 拒绝用户拖拽 → 下拉无法产生
+/// overscroll、面板收不回来。强制接受:内容可滚时行为不变,不可滚时下拉仍能
+/// 经 OverscrollNotification 收回面板。
+class _PanelContentPhysics extends ClampingScrollPhysics {
+  const _PanelContentPhysics({super.parent});
+
+  @override
+  _PanelContentPhysics applyTo(ScrollPhysics? ancestor) =>
+      _PanelContentPhysics(parent: buildParent(ancestor));
+
+  @override
+  bool shouldAcceptUserOffset(ScrollMetrics position) => true;
+}
+
+/// 供面板内容 ListView 使用的 ScrollBehavior(注入 [_PanelContentPhysics])。
+class _PanelContentScrollBehavior extends MaterialScrollBehavior {
+  const _PanelContentScrollBehavior();
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      const _PanelContentPhysics().applyTo(super.getScrollPhysics(context));
+}
 
 /// 默认展开占比(相对「屏高 − 底栏高」可用区):相比旧 0.6×屏高 缩小约 1/4。
 const double _kDetailInitial = 0.5;
