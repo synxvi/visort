@@ -227,7 +227,7 @@ class AppConfig {
   const AppConfig({
     required this.profiles,
     required this.activeProfile,
-    this.language = 'en',
+    this.language = 'system',
     this.lastSourceDir = '',
     this.lastDestParent = '',
     this.albumSortBy = SortBy.name,
@@ -245,7 +245,7 @@ class AppConfig {
   /// 当前激活的 Profile 名（key into [profiles]）。
   final String activeProfile;
 
-  /// 语言代码：'en' | 'zh'。
+  /// 语言代码：'system'（跟随设备系统语言）| 'en' | 'zh'。
   final String language;
 
   /// 上次使用的源目录（Windows=路径 / 安卓=tree URI / 相册=bucket id）。
@@ -284,7 +284,7 @@ class AppConfig {
           ),
         },
         activeProfile: 'Default',
-        language: 'en',
+        language: 'system',
       );
 
   AppConfig copyWith({
@@ -337,10 +337,10 @@ class AppConfig {
   /// 从 JSON 还原。
   ///
   /// 兼容两种历史格式：
-  ///   - 新格式：profiles 为 Map<String, ProfileJson>
-  ///   - 旧格式（裸列表）：profiles 为 List<{key,label}>，归入「Default」
+  ///   - 新格式：profiles 为 `Map<String, ProfileJson>`
+  ///   - 旧格式（裸列表）：profiles 为 `List<{key,label}>`，归入「Default」
   factory AppConfig.fromJson(Map<String, dynamic> json) {
-    final language = (json['language'] as String?) ?? 'en';
+    final language = (json['language'] as String?) ?? 'system';
     final lastSourceDir = (json['last_source_dir'] as String?) ??
         (json['lastSourceDir'] as String?) ??
         '';

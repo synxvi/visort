@@ -325,23 +325,39 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
         value: iso.isEmpty ? '-' : iso,
         label: t(ref, 'meta_iso'),
         horizontal: false,
+        fitWidth: false,
       ),
-      _PillCell(value: ev, label: t(ref, 'detail_ev'), horizontal: false),
+      _PillCell(
+        value: ev,
+        label: t(ref, 'detail_ev'),
+        horizontal: false,
+        fitWidth: false,
+      ),
       _PillCell(
         value: shutter,
         label: t(ref, 'detail_shutter'),
         horizontal: false,
+        fitWidth: false,
       ),
       _PillCell(
         value: aperture,
         label: t(ref, 'meta_aperture'),
         horizontal: false,
+        fitWidth: false,
       ),
-      _PillCell(value: focal, label: t(ref, 'meta_focal'), horizontal: false),
+      _PillCell(
+        value: focal,
+        label: t(ref, 'meta_focal'),
+        horizontal: false,
+        fitWidth: false,
+      ),
     ];
     // 仅在有相机参数时被调用(见 build 的 _hasCameraParams 判断)。
-    // 5 等分横排(对标 PhotoDetailsImageParamCardView:constraintWidth 0.2)。
-    return _SectionCard(child: _PillRow(cells: cells));
+    // spaceEvenly 均匀分布:5 值按自然宽 + 4 短竖线等距排布,两端留白 = 值间留白,
+    // 数值宽度差异大时也均匀(短值不单侧空一大截、长值不挤)。竖线缩短至 ~3/5 格高。
+    return _SectionCard(
+      child: _PillRow(cells: cells, evenly: true, dividerHeight: 16),
+    );
   }
 
   // ─────────────── 卡片:④ 文件信息(创建 / 修改 / 方向)───────────────
@@ -544,12 +560,17 @@ class _PillCell extends StatelessWidget {
     required this.value,
     required this.label,
     this.horizontal = true,
+    this.fitWidth = true,
   });
   final String value;
   final String label;
 
   /// true=项名左/数值右(分辨率行用);false=数值上/项名下(ISO/EV 等相机参数行用)。
   final bool horizontal;
+
+  /// true=用 FittedBox 撑满列宽(等分格时保证值完整);false=按自然宽度
+  /// (配合 _PillRow.evenly 的 spaceEvenly 均匀分布:值不撑满、自然宽完整)。
+  final bool fitWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -608,35 +629,78 @@ class _PillCell extends StatelessWidget {
                 ),
               ],
             )
-          : Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  value,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: valueStyle,
+          : fitWidth
+              ? FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.center,
+                  // 等分格撑满列宽时:整体等比缩小保证值完整(如 "5 mm"、"1/125"),
+                  // 值/标签同比例缩放,不会出现值比标签小的怪相。够宽时不放大。
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(value, style: valueStyle),
+                      const SizedBox(height: 4),
+                      Text(label, style: labelStyle),
+                    ],
+                  ),
+                )
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      value,
+                      textAlign: TextAlign.center,
+                      style: valueStyle,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      label,
+                      textAlign: TextAlign.center,
+                      style: labelStyle,
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  label,
-                  textAlign: TextAlign.center,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: labelStyle,
-                ),
-              ],
-            ),
     );
   }
 }
 
 class _PillRow extends StatelessWidget {
-  const _PillRow({required this.cells});
+  const _PillRow({
+    required this.cells,
+    this.evenly = false,
+    this.dividerHeight,
+  });
   final List<_PillCell> cells;
+  /// true=spaceEvenly 均匀分布:各值按自然宽度,与竖线一起在长条上等距排布,
+  /// 两端留白 = 值间留白,数值宽度差异大时也均匀(短值不单侧空、长值不挤)。
+  /// 配合 cell.fitWidth=false。
+  final bool evenly;
+  /// evenly 模式下竖线的固定高度(null=不指定,由交叉轴决定)。
+  final double? dividerHeight;
   @override
   Widget build(BuildContext context) {
+    if (evenly) {
+      final items = <Widget>[];
+      for (var i = 0; i < cells.length; i++) {
+        if (i > 0) {
+          items.add(
+            Container(
+              width: 1,
+              height: dividerHeight,
+              color: AppColors.border,
+            ),
+          );
+        }
+        items.add(cells[i]);
+      }
+      return IntrinsicHeight(
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: items,
+        ),
+      );
+    }
     final items = <Widget>[];
     for (var i = 0; i < cells.length; i++) {
       if (i > 0) {

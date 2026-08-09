@@ -74,8 +74,12 @@ String formatExposureTime(String? raw) {
   if (raw == null || raw.trim().isEmpty) return '-';
   final v = _parseRational(raw);
   if (v == null || v <= 0) return '-';
-  if (v < 1) return '$raw s'; // 短曝光保留分数更直观(1/100 s)
-  return '${_trimDouble(v)} s';
+  // 长曝光(≥1s)显示秒数;短曝光统一用 1/N 分数(相机标准快门标示)。
+  // ExifInterface 常返回小数字符串(如 "0.008333")而非 "1/120",此处统一换算,
+  // 否则会显示成 0.008333 这种一串小数。
+  if (v >= 1) return '${_trimDouble(v)} s';
+  final n = (1 / v).round();
+  return n > 0 ? '1/$n' : '-';
 }
 
 /// 光圈。ExifInterface 的 FNumber 形如 "1.8" 或 "f/1.8" → 统一 "f/1.8"。

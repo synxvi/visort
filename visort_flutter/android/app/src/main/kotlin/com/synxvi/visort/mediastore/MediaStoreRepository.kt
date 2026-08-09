@@ -253,7 +253,10 @@ class MediaStoreRepository(private val context: Context) {
         // 注意：MediaStore ContentResolver 的 sortOrder 参数不支持 LIMIT 关键字
         // （真机会报 "Invalid token LIMIT"）。分页靠 keyset WHERE 条件 + 循环读 limit 条停止；
         // 多读一条用于判断 hasMore。
-        val dir = if (asc) "ASC" else "DESC"
+        // date_expires ASC 在部分设备(ColorOS)查询返回空,统一 DESC 查询,
+        // asc 由结果反转实现(见 return 前)。仅 dateTrashed(DATE_EXPIRES) 受影响。
+        val queryAsc = asc && sortBy != "dateTrashed"
+        val dir = if (queryAsc) "ASC" else "DESC"
         val sortOrder = "$sortColumn $dir, ${MediaStore.Images.Media._ID} $dir"
 
         var nextCursor: String? = null
@@ -302,13 +305,14 @@ class MediaStoreRepository(private val context: Context) {
                 // 是否存在第 limit+1 条（决定 hasMore）。
                 while (results.size < limit && cursor.moveToNext()) {
                     val id = cursor.getString(idxId) ?: continue
-                    // 手动过滤回收站行：ColorOS 的 MATCH_TRASHED/selection 对
-                    // MANAGE_MEDIA app 不可靠，代码级过滤保证普通视图永远
-                    // 不含回收站项（回收站视图 trashedOnly 时保留）。
-                    if (idxTrash >= 0 && !trashedOnly &&
-                        cursor.getInt(idxTrash) == 1
-                    ) {
-                        continue
+                    // 手动双向过滤：ColorOS 的 MATCH_TRASHED/selection(IS_TRASHED) 对
+                    // MANAGE_MEDIA app 不可靠,代码级兜底——
+                    // 普通视图(!trashedOnly)跳过回收站项(IS_TRASHED=1);
+                    // 回收站视图(trashedOnly)跳过非回收站项(IS_TRASHED=0),
+                    // 否则 selection 失效时普通图片会混入回收站。
+                    if (idxTrash >= 0) {
+                        val isTrashedRow = !cursor.isNull(idxTrash) && cursor.getInt(idxTrash) == 1
+                        if (isTrashedRow != trashedOnly) continue
                     }
                     val name = cursor.getString(idxName) ?: continue
                     val size = if (cursor.isNull(idxSize)) 0L else cursor.getLong(idxSize)
@@ -335,6 +339,12 @@ class MediaStoreRepository(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.w(TAG, "scanImages 异常: ${e.message}")
+        }
+        // dateTrashed + asc:DESC 查询后反转结果实现升序。回收站通常单页(<60),
+        // 反转即正确;反转后游标方向不匹配,多页场景不再分页(nextCursor=null,降级,罕见)。
+        if (sortBy == "dateTrashed" && asc && results.size > 1) {
+            results.reverse()
+            nextCursor = null
         }
         Log.i(TAG, "scanImages: 本页 ${results.size} 张（limit=$limit, cursor=$afterCursor, hasMore=${nextCursor != null}, sortBy=$sortBy, asc=$asc）")
         return ScanPage(results, nextCursor)

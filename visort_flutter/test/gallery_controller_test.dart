@@ -276,10 +276,10 @@ void main() {
       // b1 快照直出（不 await 其后台刷新）→ 立刻切 b2
       final pending = controller.enterBucket('b1');
       await controller.enterBucket('b2'); // b2 在 fake 中不存在 → 空页
-      expect(container.read(galleryControllerProvider).currentBucketId, 'b2');
+      expect(container.read(galleryControllerProvider).bucketId, 'b2');
       expect(container.read(galleryControllerProvider).photos.isEmpty, true);
       await pending; // 收尾：等 b1 刷新结束
-      expect(container.read(galleryControllerProvider).currentBucketId, 'b2',
+      expect(container.read(galleryControllerProvider).bucketId, 'b2',
           reason: 'b1 后台刷新（旧 token）不得覆盖 b2');
       expect(container.read(galleryControllerProvider).photos.isEmpty, true);
     });

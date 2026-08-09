@@ -4,8 +4,9 @@
 //   - 支持 {0} {1} 占位符替换
 //   - 回退顺序: currentLang → en → key 本身
 //
-// 当前语言由 configProvider.language 驱动（'en' | 'zh'）
+// 当前语言由 configProvider.language 驱动（'system' 跟随系统 | 'en' | 'zh'）
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config/models.dart';
@@ -43,11 +44,21 @@ String _translate(String lang, String key, List<Object> args) {
 
 // ───────────────────────── Provider 接线 ─────────────────────────
 
-/// 当前语言 Provider，由 config 派生
+/// 当前语言 Provider，由 config 派生。
+/// config.language == 'system' 时跟随设备系统语言(中文系统→zh,其余→en);
+/// 用户手动切换后为 'en'/'zh',固定不再跟随。
 final currentLanguageProvider = Provider<String>((ref) {
   final config = ref.watch(configProvider);
-  return config.language;
+  return resolveLanguage(config.language);
 });
+
+/// 解析语言:'system' → 设备系统语言(中文→zh,其余→en);'en'/'zh' 原样返回。
+String resolveLanguage(String language) {
+  if (language != 'system') return language;
+  final langCode =
+      WidgetsBinding.instance.platformDispatcher.locale.languageCode;
+  return langCode == 'zh' ? 'zh' : 'en';
+}
 
 /// 切换语言。对应 Python POST /api/lang（app.py:421-431）
 Future<void> setLanguage(WidgetRef ref, String lang) async {
