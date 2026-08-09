@@ -54,7 +54,7 @@ class PhotoViewer extends ConsumerStatefulWidget {
 }
 
 class _PhotoViewerState extends ConsumerState<PhotoViewer>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final ExtendedPageController _pageCtrl;
   late List<MsImageInfo> _photos;
   late int _index;
@@ -80,9 +80,13 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
   // 由 ModalBottomSheet 的路由动画(开/关)与 DraggableScrollableSheet 的拖拽通知共同写入。
   final ValueNotifier<double> _panelExtent = ValueNotifier(0);
   bool _detailsOpen = false;
-  /// 图片区(面板上方)下滑/点击收起的全屏手势层。随面板打开插入、关闭移除;
-  /// 独立于模态内容(不随路由滑动),只覆盖面板上方,故不干扰面板拖拽。
+  /// 图片区(面板上方)下滑/点击收起的全屏手势层。随面板打开插入、关闭移除。
   OverlayEntry? _dismissEntry;
+  // 详情面板用 Overlay 自有实现(不经 showModalBottomSheet 路由 + DSS:二者组合下
+  // DSS 松手的 snap/fling 会卡 route ticker,且 snap 开关无法同时满足"不卡"与"无
+  // 中间态")。_panelCtrl 单一驱动面板位移 + 图片上推,严格同步、无路由、自定义 snap。
+  AnimationController? _panelCtrl;
+  OverlayEntry? _panelEntry;
 
   @override
   void initState() {
@@ -135,6 +139,10 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
     _barEntry = null;
     _dismissEntry?.remove();
     _dismissEntry = null;
+    _panelEntry?.remove();
+    _panelEntry = null;
+    _panelCtrl?.dispose();
+    _panelCtrl = null;
     _chromeFade.dispose();
     _barVisible.dispose();
     _panelExtent.dispose();
@@ -556,7 +564,13 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
     _viewerTargetWidth = computeViewerTargetWidth(
       MediaQuery.sizeOf(context).width * MediaQuery.devicePixelRatioOf(context),
     );
-    return Scaffold(
+    return PopScope(
+      // 面板展开时拦截系统返回:收回面板而非退出大图;关闭时正常返回相册。
+      canPop: !_detailsOpen,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _detailsOpen) _animateClose();
+      },
+      child: Scaffold(
       backgroundColor: Colors.black,
       body: _photos.isEmpty
           ? const SizedBox.shrink()
@@ -615,13 +629,14 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
                 ),
               ],
             ),
+      ),
     );
   }
 
   /// 切换详情面板(底栏 info 按钮入口):开则关、关则开。
   void _toggleDetails() {
     if (_detailsOpen) {
-      Navigator.of(context).maybePop();
+      _animateClose();
     } else if (_photos.isNotEmpty) {
       _showDetails(_photos[_index]);
     }
@@ -639,6 +654,10 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
     _panelExtent.value = 0;
     _dismissEntry?.remove();
     _dismissEntry = null;
+    _panelEntry?.remove();
+    _panelEntry = null;
+    _panelCtrl?.dispose();
+    _panelCtrl = null;
   }
 
   /// 插入图片区(面板上方)的收起手势层:下滑或点击 → 收起面板。
@@ -661,10 +680,10 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
               // 应用内任意位置(面板上方)下滑或点击即收起。
-              onTap: () => Navigator.of(ctx).maybePop(),
+              onTap: _animateClose,
               onVerticalDragEnd: (d) {
                 if ((d.primaryVelocity ?? 0) > 0) {
-                  Navigator.of(ctx).maybePop();
+                  _animateClose();
                 }
               },
             ),
@@ -691,168 +710,99 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
       _chromeFade.forward();
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      // 透明遮罩:图片不被压暗,上推后居中主体清晰可见(对标系统相册)。
-      barrierColor: Colors.transparent,
-      isScrollControlled: true,
-      useSafeArea: false,
-      // 关闭模态自带的 enableDrag:它会在拖拽结束时把面板动画重绑到 Split 曲线,
-      // 与本文件 _onAnim 用的 legacyDecelerate 不同步 → 从面板下滑收起时图片下沿闪烁。
-      // DraggableScrollableSheet 自带拖拽缩放 + min 时通知关闭,面板仍可拖动/收起。
-      enableDrag: false,
-      // 整体动画比默认(进 250ms / 出 200ms)略快,也让关闭后遮罩更快消失 →
-      // 关闭后能更快重新上划触发面板(否则关闭动画期间遮罩仍拦截图片手势)。
-      sheetAnimationStyle: const AnimationStyle(
-        duration: Duration(milliseconds: 200),
-        reverseDuration: Duration(milliseconds: 150),
-      ),
-      builder: (_) => _SyncedDetailsSheet(
-        info: info,
-        panelExtent: _panelExtent,
-        onDismissed: _onDetailsDismissed,
-      ),
-    ).then((_) {
-      // 路由 Future 在面板完全关闭时完成:作为 _detailsOpen 复位的兜底,
-      // 与 host 的 onDismissed 双保险(任一路径都保证能再次上划唤起)。
-      // 路由 Future 在 pop 时立即 complete,不等关闭动画结束(这是 Flutter 行为)。
-      // 不能在此调 _onDetailsDismissed——它会把 _panelExtent 强行归零,而此时路由
-      // reverse 动画才刚开始、_onAnim 正用 _closeStartExtent 驱动图片平滑回落,
-      // 提前归零会让图片瞬间落底、再被 _onAnim 拉回 → 收尾闪烁。
-      // 这里只复位非视觉状态;视觉归零交给路由动画真正结束时由
-      // _SyncedDetailsSheet._onStatus(dismissed)→onDismissed→_onDetailsDismissed。
-      if (mounted && _detailsOpen) {
-        _detailsOpen = false;
-        _dismissEntry?.remove();
-        _dismissEntry = null;
-      }
-    });
-    // 插入图片区收起手势层(在模态之后插入 → 位于模态之上;不随路由滑动)。
+    // Overlay 自有面板:单一 _panelCtrl 驱动面板位移 + 图片上推,严格同步,无路由
+    // (不误 pop)、无 DSS (无 snap 卡 ticker)。value 0=关闭/1=展开。
+    _panelCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+      reverseDuration: const Duration(milliseconds: 180),
+    )..addListener(() {
+        _panelExtent.value = _panelCtrl!.value * _kDetailInitial;
+        _panelEntry?.markNeedsBuild();
+      });
+    _panelCtrl!.value = 0;
+    _panelEntry = OverlayEntry(builder: (_) => _buildPanelOverlay(info));
+    // 面板条目插入到底栏条目(_barEntry)之下:底栏绘制在面板之上 → 面板从底栏
+    // 后面滑入/滑出,动画过程中不再遮挡底栏。仅调整绘制层级,位移/曲线/时长/
+    // 图片上推等动画参数一律不变。
+    final bar = _barEntry;
+    if (bar != null) {
+      Overlay.of(context).insert(_panelEntry!, below: bar);
+    } else {
+      Overlay.of(context).insert(_panelEntry!);
+    }
+    // 打开:easeOut(前快后慢)。
+    _panelCtrl!.animateTo(1,
+        duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+    // 图片区收起手势层(下滑/点击关闭),位于面板之上。
     _insertDismissLayer();
   }
-}
 
-/// 详情面板容器:在 ModalBottomSheet 内,把路由动画(开/关滑动)与拖拽 extent 统一写入
-/// [panelExtent],从而与图片上推 / 顶栏淡出 / 底栏上移严格同步。
-/// didChangeDependencies 一次性绑定路由动画监听(builder 可能重入,避免重复 addListener)。
-class _SyncedDetailsSheet extends StatefulWidget {
-  const _SyncedDetailsSheet({
-    required this.info,
-    required this.panelExtent,
-    required this.onDismissed,
-  });
-  final MsImageInfo info;
-  final ValueNotifier<double> panelExtent;
-  final VoidCallback onDismissed;
-
-  @override
-  State<_SyncedDetailsSheet> createState() => _SyncedDetailsSheetState();
-}
-
-class _SyncedDetailsSheetState extends State<_SyncedDetailsSheet> {
-  Animation<double>? _anim;
-  bool _attached = false;
-  bool _dismissed = false;
-  double _closeStartExtent = 0;
-  /// DSS 控制器:关闭触发时 jumpTo(min) 冻结面板尺寸,取消释放后的 snap/fling,
-  /// 使其在路由 reverse 期间恒定,与 _onAnim 驱动的图片上推同步。
-  final DraggableScrollableController _dssController =
-      DraggableScrollableController();
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_attached) return;
-    _attached = true;
-    _anim = ModalRoute.of(context)?.animation;
-    _anim?.addListener(_onAnim);
-    _anim?.addStatusListener(_onStatus);
+  /// 关闭:easeIn(前快后慢,不在一半突然加速),完成后移除 Overlay。
+  void _animateClose() {
+    final ctrl = _panelCtrl;
+    if (ctrl == null) return;
+    ctrl
+        .animateTo(0,
+            duration: const Duration(milliseconds: 180), curve: Curves.easeIn)
+        .orCancel
+        .then((_) {
+      if (mounted) _onDetailsDismissed();
+    });
   }
 
-  // 路由动画驱动开/关过程的占比,与面板滑入/滑出严格同步。
-  void _onAnim() {
-    final a = _anim;
-    if (a == null) return;
-    // 面板滑动用 CurvedAnimation 包了 Easing.legacyDecelerate;若这里用原始线性值,
-    // 图片上推/回落会与面板不同步 → 面板下沿处闪烁(尤其图片下半部)。对原始动画值
-    // 施加相同曲线,二者严丝合缝。(拖拽关闭时走 DSS extent 通知,不经此处,无此问题。)
-    final t = Easing.legacyDecelerate.transform(a.value);
-    if (a.status == AnimationStatus.forward) {
-      widget.panelExtent.value = _kDetailInitial * t;
-    } else if (a.status == AnimationStatus.reverse) {
-      widget.panelExtent.value = _closeStartExtent * t;
+  /// 拖拽面板松手:snap 二值(展开/收回),不停在中间。
+  void _onPanelDragEnd(DragEndDetails d) {
+    final ctrl = _panelCtrl;
+    if (ctrl == null) return;
+    final v = d.primaryVelocity ?? 0;
+    if (v > 300) {
+      _animateClose();
+    } else if (v < -300) {
+      ctrl.animateTo(1,
+          duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+    } else if (ctrl.value > 0.5) {
+      ctrl.animateTo(1,
+          duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+    } else {
+      _animateClose();
     }
   }
 
-  void _onStatus(AnimationStatus s) {
-    if (s == AnimationStatus.completed) {
-      // forward 末帧 value=1 时 status 可能已切到 completed → _onAnim 跳过,
-      // 这里补一帧精确落定到目标,避免占比停在 ~99%(顶栏残留微透明)。
-      widget.panelExtent.value = _kDetailInitial;
-      // 预记录落定值:reverse 首帧的 value 监听(_onAnim)可能先于 status 监听触发,
-      // 若此时才捕获 _closeStartExtent 会用到旧值(0)→ 占比瞬间跳到 0 → 图片/顶栏闪烁。
-      // 在落定/拖拽时持续记录,reverse 起点即始终有效。
-      _closeStartExtent = _kDetailInitial;
-    } else if (s == AnimationStatus.dismissed) {
-      // 路由完全关闭:无条件重置外层 _detailsOpen。不再用 !_dismissed 守卫——
-      // 拖拽关闭路径会先置 _dismissed=true,旧守卫会跳过此处导致 _detailsOpen
-      // 不复位 → 之后上划再也无法唤起面板。
-      widget.onDismissed();
-    }
-  }
-
-  @override
-  void dispose() {
-    _anim?.removeListener(_onAnim);
-    _anim?.removeStatusListener(_onStatus);
-    _dssController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // 面板锚定在底栏上方:底部留出底栏高度,DraggableScrollableSheet 从底栏上沿生长。
-    // 保持内容为「仅面板」(非全屏)——路由开/关动画只平移面板自身高度,
-    // 与图片上推回落的幅度同尺度,避免全屏内容平移整屏导致面板先飞走、留出黑色空隙。
-    final barH = _kBottomChromeHeight + MediaQuery.viewPaddingOf(context).bottom;
-    return Padding(
-      padding: EdgeInsets.only(bottom: barH),
-      child: NotificationListener<DraggableScrollableNotification>(
-        onNotification: (n) {
-          // 路由动画落定后,拖拽/吸附占比直接驱动(开/关过程由路由动画接管)。
-          if (_anim?.status == AnimationStatus.completed) {
-            widget.panelExtent.value = n.extent;
-            _closeStartExtent = n.extent; // 持续记录当前占比,关闭时插值起点始终有效
-          }
-          // 拖到最小尺寸以下 → 关闭。先 jumpTo(min) 冻结面板尺寸:取消拖拽释放后的
-          // snap/fling,使其不在路由 reverse 期间继续改变尺寸(否则与 _onAnim 驱动的
-          // 图片上推不同步 → 从信息栏下滑收起时图片抖动)。maybePop 后路由 reverse,
-          // 面板尺寸恒定,与图片严格同步。
-          if (!_dismissed && n.extent <= n.minExtent + 0.01) {
-            _dismissed = true;
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!mounted) return;
-              try {
-                _dssController.jumpTo(n.minExtent);
-              } catch (_) {}
-            });
-            Navigator.of(context).maybePop();
-          }
-          return false;
+  /// 详情面板 Overlay:固定 _kDetailInitial 可用区高度,Transform 跟随 _panelCtrl
+  /// 从屏底滑入/滑出。锚定在底栏上方(bottom: barH)→ 底栏始终可见,面板从底栏上沿
+  /// 长出。GestureDetector 包整个面板(内容 scrollable:false 不滚动,手势不被 ListView
+  /// 抢),松手 snap 二值。Material 提供 DefaultTextStyle(消除 Overlay 内 Text 黄线)。
+  Widget _buildPanelOverlay(MsImageInfo info) {
+    final mq = MediaQuery.of(context);
+    final barH = _kBottomChromeHeight + mq.viewPadding.bottom;
+    final availH = mq.size.height - barH;
+    final panelH = _kDetailInitial * availH;
+    final slideOut = panelH + barH;
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: barH,
+      height: panelH,
+      child: AnimatedBuilder(
+        animation: _panelCtrl!,
+        builder: (_, child) {
+          final ty = (1 - _panelCtrl!.value) * slideOut;
+          return Transform.translate(offset: Offset(0, ty), child: child);
         },
-        child: DraggableScrollableSheet(
-          controller: _dssController,
-          // 默认展开相比旧 0.6 缩小约 1/4;snap 保留(无 snap 时拖拽惯性更晃)。
-          // 关闭抖动由上面的 jumpTo(min) 冻结解决,而非关闭 snap。
-          initialChildSize: _kDetailInitial,
-          minChildSize: _kDetailMin,
-          maxChildSize: _kDetailMax,
-          snapSizes: const [_kDetailInitial, _kDetailSnapHigh],
-          snap: true,
-          expand: false,
-          builder: (_, controller) =>
-              PhotoDetailsSheet(info: widget.info, scrollController: controller),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onVerticalDragUpdate: (d) {
+            final ctrl = _panelCtrl;
+            if (ctrl == null) return;
+            ctrl.value =
+                (ctrl.value - d.primaryDelta! / slideOut).clamp(0.0, 1.0);
+          },
+          onVerticalDragEnd: _onPanelDragEnd,
+          child: Material(
+            type: MaterialType.transparency,
+            child: PhotoDetailsSheet(info: info, scrollable: false),
+          ),
         ),
       ),
     );
@@ -1093,10 +1043,15 @@ class _BigImageState extends State<_BigImage>
   double? _imageAspect;
   bool _wasZoomed = false;
   // Decelerate ≈ 系统相册 DecelerateInterpolator(2.5)：快进慢出
-  late final AnimationController _doubleTapAnim = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 300),
-  )..addListener(_onDoubleTapTick);
+  // 惰性创建（首次触摸/双击时）；不用 late final —— dispose 阶段若从未访问过
+  // 会在此惰性初始化 AnimationController，而 dispose 中 createTicker 会因
+  // TickerMode 祖先查找断言崩溃（widget test 复现）。
+  AnimationController? _doubleTapAnim;
+  AnimationController get _dblTapAnim =>
+      _doubleTapAnim ??= AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 300),
+      )..addListener(_onDoubleTapTick);
   Tween<double>? _doubleTapTween;
   Offset _doubleTapPos = Offset.zero;
   bool _fullLoaded = false;
@@ -1134,7 +1089,7 @@ class _BigImageState extends State<_BigImage>
     final tween = _doubleTapTween;
     if (state == null || tween == null) return;
     state.handleDoubleTap(
-      scale: tween.evaluate(_doubleTapAnim),
+      scale: tween.evaluate(_dblTapAnim),
       doubleTapPosition: _doubleTapPos,
     );
   }
@@ -1168,7 +1123,7 @@ class _BigImageState extends State<_BigImage>
   @override
   void dispose() {
     _chromeTapTimer?.cancel();
-    _doubleTapAnim.dispose();
+    _doubleTapAnim?.dispose();
     super.dispose();
   }
 
@@ -1183,11 +1138,11 @@ class _BigImageState extends State<_BigImage>
     final targetScale = zooming ? _computeDoubleTapTarget() : 1.0;
     _doubleTapPos = pointerDown;
     _doubleTapTween = Tween(begin: begin, end: targetScale);
-    _doubleTapAnim
+    _dblTapAnim
       ..stop()
       ..value = 0.0;
     // animateTo 而非 fling：fling(0.4) 经 ClampingSimulation 实际约 1.5s，
-    _doubleTapAnim.animateTo(
+    _dblTapAnim.animateTo(
       1.0,
       duration: const Duration(milliseconds: 300),
       curve: Curves.decelerate,
@@ -1283,7 +1238,7 @@ class _BigImageState extends State<_BigImage>
 
   /// 上划详情：未放大时单指快速上划 → 详情面板。
   void _handleSwipeDown(PointerDownEvent e) {
-    _doubleTapAnim.stop();
+    _dblTapAnim.stop();
     if (_trackPointer != null) return;
     _trackPointer = e.pointer;
     _trackDown = e.position;
@@ -1373,9 +1328,6 @@ const double _kBottomChromeHeight = 64.0;
 
 /// 默认展开占比(相对「屏高 − 底栏高」可用区):相比旧 0.6×屏高 缩小约 1/4。
 const double _kDetailInitial = 0.5;
-const double _kDetailMin = 0.15;
-const double _kDetailMax = 0.95;
-const double _kDetailSnapHigh = 0.8;
 /// 图片上推量 = 面板像素高度 × 此系数。0.5 使图片居中主体落在面板上方可见区,
 /// 且可见区无大面积空白(图像刚好覆盖,见 _showDetails 设计推导)。
 const double _kImagePushFactor = 0.5;

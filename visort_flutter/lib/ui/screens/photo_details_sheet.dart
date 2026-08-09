@@ -24,11 +24,16 @@ class PhotoDetailsSheet extends ConsumerStatefulWidget {
     super.key,
     required this.info,
     this.scrollController,
+    this.scrollable = true,
   });
   final MsImageInfo info;
 
   /// 由 DraggableScrollableSheet 注入的滚动控制器;null 时回退自有控制器。
   final ScrollController? scrollController;
+
+  /// true=内容可滚动(ListView,旧 DSS 用);false=固定不滚动(Overlay 自有面板用,
+  /// 避免内部 ListView 与外层拖拽手势冲突)。内容超出时由父级裁剪,不溢出黄线。
+  final bool scrollable;
 
   @override
   ConsumerState<PhotoDetailsSheet> createState() => _PhotoDetailsSheetState();
@@ -86,27 +91,41 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
       ),
       child: ClipRRect(
         borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        child: _loading
-            ? _buildLoading()
-            : ListView(
-                controller: _scrollCtrl,
-                padding: EdgeInsets.fromLTRB(16, 8, 16, 24 + bottomInset),
-                children: [
-                  _grabHandle(),
-                  const SizedBox(height: 8),
-                  _buildTimeCard(),
-                  const SizedBox(height: 10),
-                  _buildLensCard(),
-                  // ③ 图片参数卡仅在确有相机参数(快门/光圈/ISO 等)时渲染:
-                  // 截图、非相机图片无 EXIF 相机信息 → 该卡不显示。
-                  if (_hasCameraParams(_exif)) ...[
-                    const SizedBox(height: 10),
-                    _buildImageParamCard(),
-                  ],
-                  const SizedBox(height: 10),
-                  _buildFileInfoCard(),
-                ],
-              ),
+        child: _loading ? _buildLoading() : _bodyContent(bottomInset),
+      ),
+    );
+  }
+
+  /// 面板内容:scrollable=true 用 ListView(旧 DSS);false 用固定 Column(Overlay
+  /// 自有面板,不滚动 → 外层拖拽手势不被 ListView 抢)。
+  Widget _bodyContent(double bottomInset) {
+    final padding = EdgeInsets.fromLTRB(16, 8, 16, 24 + bottomInset);
+    final children = <Widget>[
+      _grabHandle(),
+      const SizedBox(height: 8),
+      _buildTimeCard(),
+      const SizedBox(height: 10),
+      _buildLensCard(),
+      if (_hasCameraParams(_exif)) ...[
+        const SizedBox(height: 10),
+        _buildImageParamCard(),
+      ],
+      const SizedBox(height: 10),
+      _buildFileInfoCard(),
+    ];
+    if (widget.scrollable) {
+      return ListView(
+          controller: _scrollCtrl, padding: padding, children: children);
+    }
+    return SingleChildScrollView(
+      physics: const NeverScrollableScrollPhysics(),
+      child: Padding(
+        padding: padding,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: children,
+        ),
       ),
     );
   }
