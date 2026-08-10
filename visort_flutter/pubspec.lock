@@ -76,10 +76,9 @@ packages:
   extended_image:
     dependency: "direct main"
     description:
-      name: extended_image
-      sha256: e81d801cd692921f152834e01f39bba8b3d6302c48ad420d499c6062a7e24737
-      url: "https://pub.dev"
-    source: hosted
+      path: "packages/extended_image"
+      relative: true
+    source: path
     version: "10.1.0"
   extended_image_library:
     dependency: transitive

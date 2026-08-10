@@ -314,7 +314,11 @@ class _FullscreenImageState extends ConsumerState<_FullscreenImage> {
     super.initState();
     final img = widget.session.currentImage;
     _currentImgId = img?.id;
-    _precacheNext(img);
+    // precacheNextImage → precacheImage → createLocalImageConfiguration 会访问
+    // MediaQuery(inherited widget),initState 阶段不可用会红屏。延迟到首帧后。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _precacheNext(img);
+    });
   }
 
   /// 预加载下一张图片（meta 读取已移至 _AndroidTopInfo，此处仅负责 precache）。

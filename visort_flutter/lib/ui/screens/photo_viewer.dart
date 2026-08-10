@@ -564,6 +564,19 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
     _viewerTargetWidth = computeViewerTargetWidth(
       MediaQuery.sizeOf(context).width * MediaQuery.devicePixelRatioOf(context),
     );
+    // pageBuilder（PageRouteBuilder）只在 push 时执行一次，widget.photos 是打开
+    // 瞬间的快照；loadMore 后 gallery state.photos 增长但 widget.photos 不刷新，
+    // didUpdateWidget 的合并永不触发 → _photos 卡在第一页（_pageSize=60）→
+    // 翻到第 60 张后再也无法右滑。直接监听 provider，把 loadMore 追加的条目
+    // 合并进 _photos（删除/收藏等 length 不增长的场景不在此响应）。
+    ref.listen(galleryControllerProvider, (_, next) {
+      if (next.photos.length <= _photos.length) return;
+      final existing = _photos.map((p) => p.id).toSet();
+      final added =
+          next.photos.where((p) => !existing.contains(p.id)).toList();
+      if (added.isEmpty) return;
+      setState(() => _photos.addAll(added));
+    });
     return PopScope(
       // 面板展开时拦截系统返回:收回面板而非退出大图;关闭时正常返回相册。
       canPop: !_detailsOpen,
@@ -599,6 +612,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
                     // 避免每帧重新光栅化大图导致的偶发闪烁。
                     child: ExtendedImageGesturePageView.builder(
                       controller: _pageCtrl,
+                      allowImplicitScrolling: true, // 预渲染±1 页：相邻页图片提前解码，翻页时已就绪，减少"某张大图解码慢→手势丢帧→要滑多次"
                       physics: const _SnapSpringPhysics(),
                       itemCount: _photos.length,
                       canScrollPage: _canScrollPage,

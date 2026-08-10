@@ -62,7 +62,9 @@ class ScanController extends StateNotifier<ScanState> {
     final result = await _fs.scanImages(
       source,
       recursive: recursive,
-      sortBy: config.photoSortBy,
+      sortBy: config.photoSortBy == SortBy.dateTrashed
+          ? SortBy.dateCreated // dateTrashed(DATE_EXPIRES) 仅回收站有值；普通相册全 NULL → keyset 游标失效死循环
+          : config.photoSortBy,
       asc: config.photoSortAsc,
     );
     if (result.error != null) {

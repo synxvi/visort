@@ -21,6 +21,10 @@ dependencies:
   flutter_animate: ^4.5.0
   extended_image: ^10.1.0
 
+dependency_overrides:
+  extended_image:
+    path: packages/extended_image
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

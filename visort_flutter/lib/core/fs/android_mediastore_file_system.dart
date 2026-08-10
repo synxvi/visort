@@ -66,7 +66,11 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
             asc: asc,
           );
           all.addAll(page.images);
+          final prevCursor = cursor;
           cursor = page.nextCursor;
+          // 防死循环：cursor 不推进时跳出（如 dateTrashed 排序下普通相册
+          // DATE_EXPIRES 全 NULL → keyset 游标 sortValue 为空、永不变）。
+          if (cursor != null && cursor == prevCursor) break;
         } while (cursor != null);
       }
       final images = all
