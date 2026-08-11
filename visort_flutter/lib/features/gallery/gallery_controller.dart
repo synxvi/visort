@@ -14,8 +14,11 @@
 // 缩略图渲染时由 UI 层把 MsImageInfo.id 包成 ImageRef（imageRefFromMediaStoreId）。
 
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/config/profiles_service.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
@@ -170,7 +173,10 @@ class GalleryState {
 }
 
 class GalleryController extends Notifier<GalleryState> {
-  static const _pageSize = 60;
+  /// 单次查询上限：足够大以一次查完全量（对齐系统相册「全量元数据 + 缩略图窗口化」）。
+  /// 全量后 itemCount 固定 → maxScrollExtent 从一开始就稳定 → 滚动手柄不跳。
+  /// 真正昂贵的是缩略图解码（UI 层懒加载 + 磁盘缓存），元数据 cursor 几万行毫秒级。
+  static const _pageSize = 100000;
 
   /// 桶快照缓存（内存）：exitBucket 写入，同桶重进直出。上限 8 桶 LRU 淘汰。
   final Map<String, _BucketSnapshot> _bucketSnapshots = {};
@@ -273,7 +279,12 @@ class GalleryController extends Notifier<GalleryState> {
   /// 占位灰格（UI 层按 firstPageLoaded=false 渲染），第一页到达后填充。
   Future<void> enterBucket(String bucketId, {bool silent = false}) async {
     final token = ++_loadToken;
-    final snap = _bucketSnapshots[bucketId];
+    var snap = _bucketSnapshots[bucketId];
+    if (snap == null) {
+      // 内存 miss（杀后台后进程重建）：尝试磁盘快照秒出，对标系统相册 loadFromCache。
+      snap = await _loadDiskSnapshot(bucketId);
+      if (snap != null) _bucketSnapshots[bucketId] = snap;
+    }
     final snapValid = snap != null &&
         snap.sortBy == state.effectivePhotoSortBy &&
         snap.asc == state.photoSortAsc;
@@ -352,6 +363,54 @@ class GalleryController extends Notifier<GalleryState> {
     if (_bucketSnapshots.length > 8) {
       _bucketSnapshots.remove(_bucketSnapshots.keys.first);
     }
+    _persistSnapshot(bucketId, snap); // fire-and-forget 磁盘持久化（杀后台后秒出）
+  }
+
+  /// 磁盘快照 key。
+  static String _snapKey(String bucketId) => 'visort_snap_$bucketId';
+
+  /// 写磁盘快照（异步，失败静默）。杀后台/进程重建后 [enterBucket] 可秒出。
+  Future<void> _persistSnapshot(String bucketId, _BucketSnapshot snap) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _snapKey(bucketId),
+        jsonEncode({
+          'photos': snap.photos.map((p) => p.toJson()).toList(growable: false),
+          'nextCursor': snap.nextCursor,
+          'sortBy': snap.sortBy.name,
+          'asc': snap.asc,
+        }),
+      );
+    } catch (_) {
+      // 磁盘写失败不影响功能（仅退化为下次无磁盘缓存）。
+    }
+  }
+  Future<_BucketSnapshot?> _loadDiskSnapshot(String bucketId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_snapKey(bucketId));
+      if (raw == null) return null;
+      final j = jsonDecode(raw) as Map<String, dynamic>;
+      final photos = (j['photos'] as List)
+          .map((e) => MsImageInfo.fromJson(e as Map<String, dynamic>))
+          .toList(growable: false);
+      final sortBy = SortBy.values.firstWhere(
+        (s) => s.name == j['sortBy'],
+        orElse: () => SortBy.dateCreated,
+      );
+      final nextCursor = (j['nextCursor'] == null || j['nextCursor'] == 'null')
+          ? null
+          : j['nextCursor'] as String?;
+      return _BucketSnapshot(
+        photos,
+        nextCursor,
+        sortBy,
+        (j['asc'] as bool?) ?? false,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 退出相册，回到相册列表。退出前把当前网格数据存入桶快照，
@@ -359,6 +418,10 @@ class GalleryController extends Notifier<GalleryState> {
   /// 同时静默重查相册列表：删除/恢复后返回首页，count 与封面以
   /// MediaStore 实时数据为准（兜底 mutation 后的重查，防时序竞争）。
   void exitBucket() {
+    // 递增 token：使 snapValid 秒出后挂起的后台 _refreshBucketPage 失效，
+    // 避免 album_screen pop（element defunct）后后台查询返回触发 state= →
+    // riverpod notify 已 unmount 的 listener 报 defunct assertion。
+    _loadToken++;
     final bucketId = state.bucketId;
     if (bucketId != null && state.firstPageLoaded) {
       _putSnapshot(

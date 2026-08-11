@@ -340,6 +340,7 @@ class MediaStoreRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.w(TAG, "scanImages 异常: ${e.message}")
         }
+
         // dateTrashed + asc:DESC 查询后反转结果实现升序。回收站通常单页(<60),
         // 反转即正确;反转后游标方向不匹配,多页场景不再分页(nextCursor=null,降级,罕见)。
         if (sortBy == "dateTrashed" && asc && results.size > 1) {
@@ -364,8 +365,21 @@ class MediaStoreRepository(private val context: Context) {
 
     /// keyset 分页结果（图片列表 + 下一页游标）。
     data class ScanPage(val images: List<MsImageInfo>, val nextCursor: String?) {
+        // 扁平化传输：12 个并行数组代替 List<Map>，减少 MethodChannel 序列化
+        // 开销（实测 1105 项 List<Map> ~160ms → 并行数组显著更省）。Dart 按索引重组。
         fun toMap(): Map<String, Any?> = mapOf(
-            "images" to images.map { it.toMap() },
+            "ids" to images.map { it.id },
+            "names" to images.map { it.name },
+            "sizes" to images.map { it.size },
+            "mimes" to images.map { it.mime },
+            "bucketIds" to images.map { it.bucketId },
+            "dateAddeds" to images.map { it.dateAddedMs },
+            "dateModifieds" to images.map { it.dateModifiedMs },
+            "isFavorites" to images.map { it.isFavorite },
+            "isTrasheds" to images.map { it.isTrashed },
+            "dateTrasheds" to images.map { it.dateTrashedMs },
+            "widths" to images.map { it.width },
+            "heights" to images.map { it.height },
             "nextCursor" to nextCursor,
         )
     }

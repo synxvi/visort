@@ -234,6 +234,7 @@ class AppConfig {
     this.albumSortAsc = true,
     this.photoSortBy = SortBy.dateCreated,
     this.photoSortAsc = false,
+    this.photoTimelineView = false,
     this.homeLayout = HomeLayout.grid,
     this.homeGridColumns = 4,
     this.photoGridColumns = 4,
@@ -261,6 +262,9 @@ class AppConfig {
   /// 相册内图片排序偏好。
   final SortBy photoSortBy;
   final bool photoSortAsc;
+
+  /// 相册内视图模式：false=沉浸网格(默认)；true=日期分组视图。
+  final bool photoTimelineView;
 
   /// 首页（Home 源相册区）布局：列表 / 网格。
   final HomeLayout homeLayout;
@@ -297,6 +301,7 @@ class AppConfig {
     bool? albumSortAsc,
     SortBy? photoSortBy,
     bool? photoSortAsc,
+    bool? photoTimelineView,
     HomeLayout? homeLayout,
     int? homeGridColumns,
     int? photoGridColumns,
@@ -311,6 +316,7 @@ class AppConfig {
         albumSortAsc: albumSortAsc ?? this.albumSortAsc,
         photoSortBy: photoSortBy ?? this.photoSortBy,
         photoSortAsc: photoSortAsc ?? this.photoSortAsc,
+        photoTimelineView: photoTimelineView ?? this.photoTimelineView,
         homeLayout: homeLayout ?? this.homeLayout,
         homeGridColumns: homeGridColumns ?? this.homeGridColumns,
         photoGridColumns: photoGridColumns ?? this.photoGridColumns,
@@ -326,6 +332,7 @@ class AppConfig {
         'album_sort_asc': albumSortAsc,
         'photo_sort_by': photoSortBy.name,
         'photo_sort_asc': photoSortAsc,
+        'photo_timeline_view': photoTimelineView,
         'home_layout': homeLayout.name,
         'home_grid_columns': homeGridColumns,
         'photo_grid_columns': photoGridColumns,
@@ -383,6 +390,7 @@ class AppConfig {
           SortBy.dateCreated),
       photoSortAsc:
           (json['photo_sort_asc'] ?? json['photoSortAsc'] as bool?) ?? false,
+      photoTimelineView: (json['photo_timeline_view'] as bool?) ?? false,
       homeLayout: _parseHomeLayout(
           json['home_layout'] ?? json['homeLayout'], HomeLayout.grid),
       homeGridColumns:

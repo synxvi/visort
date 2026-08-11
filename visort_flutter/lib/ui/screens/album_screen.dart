@@ -13,6 +13,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
@@ -58,6 +59,9 @@ class AlbumScreen extends ConsumerStatefulWidget {
 
 class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   late final ScrollController _scrollCtrl = ScrollController();
+  /// 日期视图独立的滚动控制器（与沉浸网格分用，避免切换视图时
+  /// ScrollController 同时 attached 到两个 scrollable 触发断言）。
+  final ScrollController _timelineScrollCtrl = ScrollController();
   static const _threshold = 0.7; // 滚动到 70% 触发加载更多
 
   /// 网格 GridView key：计算 cell 屏幕位置（返回飞行层终点）用。
@@ -82,6 +86,19 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   // ── 批量选择模式：长按 cell 进入，勾选后底部操作栏执行批量操作 ──
   bool _selectMode = false;
   final Set<String> _selectedIds = {};
+  /// 视图模式：false=沉浸网格(默认)；true=日期分组视图。
+  bool _timelineView = false;
+
+  // ── 日期分组视图扁平索引（单 SliverList 混合项：组头 / 整行照片）──
+  // 多 sliver（每组分 SliverGrid）在组数多时 build 重：进入动画帧叠加会卡顿
+  // （真机实测 1100 张/几十组明显，沉浸单 GridView 无此问题）。扁平化为单
+  // SliverList 后 build 轻（只 layout 可见项），动画流畅且直接渲染清晰缩略图
+  // （128→300 正常渐进，无低质量跳变）。全量加载后 itemCount 固定，extent 稳定。
+  List<MsImageInfo>? _flatPhotos; // 索引对应的 photos（identical 判定缓存）
+  List<int> _flat = const []; // 负=组头(-组号-1)，非负=行首 photo 全局下标
+  List<int> _flatRowEnd = const []; // 行项的末尾 photo 下标+1（组尾行不满）
+  List<int> _flatDayMs = const []; // 组头 dayMs（按组号）
+  int _flatGroupCount = 0; // 已加载组数
 
   void _enterSelectMode(String id) {
     setState(() {
@@ -103,10 +120,30 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     });
   }
 
+  /// 切换沉浸网格/日期分组视图。切到日期视图时强制按创建日期排序
+  /// （日期分组依赖 dateCreated 顺序；切回沉浸保留原排序偏好）。
+  void _toggleViewMode() {
+    setState(() => _timelineView = !_timelineView);
+    // 持久化视图偏好（重进相册保持）。
+    ref.read(configProvider.notifier).state =
+        ref.read(configProvider).copyWith(photoTimelineView: _timelineView);
+    if (_timelineView) {
+      final c = ref.read(galleryControllerProvider);
+      if (c.effectivePhotoSortBy != SortBy.dateCreated) {
+        ref
+            .read(galleryControllerProvider.notifier)
+            .setPhotoSort(SortBy.dateCreated, c.photoSortAsc);
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    // 恢复上次相册内视图偏好（沉浸网格 / 日期分组）。
+    _timelineView = ref.read(configProvider).photoTimelineView;
     _scrollCtrl.addListener(_onScroll);
+    _timelineScrollCtrl.addListener(_onTimelineScroll);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // 进入动画（网格由小变大）期间网格照常渲染——动画主体就是网格本身，
       // query 在动画窗口内完成,动画结束缩略图渐进填充。
@@ -126,6 +163,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   void dispose() {
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
+    _timelineScrollCtrl.removeListener(_onTimelineScroll);
+    _timelineScrollCtrl.dispose();
     // 退出相册：保存桶快照（同桶重进秒出）+ 重查相册列表（返回首页刷新
     // count/封面，删除/恢复后不残留旧数据）。
     ref.read(galleryControllerProvider.notifier).exitBucket();
@@ -134,10 +173,20 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
 
   void _onScroll() {
     if (!_scrollCtrl.hasClients) return;
-    final pos = _scrollCtrl.position;
-    if (pos.pixels >= pos.maxScrollExtent * _threshold) {
-      ref.read(galleryControllerProvider.notifier).loadMore();
-    }
+    _maybeLoadMore(_scrollCtrl.position);
+  }
+
+  /// 日期视图滚动：接近底部触发 loadMore（独立 controller）。
+  void _onTimelineScroll() {
+    if (!_timelineScrollCtrl.hasClients) return;
+    _maybeLoadMore(_timelineScrollCtrl.position);
+  }
+
+  /// 接近底部触发 loadMore。全量加载后 nextCursor=null，loadMore 内部直接 return，
+  /// 此方法保留作 fallback（未来若恢复分页仍可用）。
+  void _maybeLoadMore(ScrollPosition pos) {
+    if (pos.pixels < pos.maxScrollExtent * _threshold) return;
+    ref.read(galleryControllerProvider.notifier).loadMore();
   }
 
   @override
@@ -201,15 +250,36 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                   ),
                 ]
               : [
-                  SortToggle(
-                    sortBy: gallery.effectivePhotoSortBy,
-                    asc: gallery.photoSortAsc,
-                    // 回收站视图额外提供「按删除日期」
-                    showDateTrashed: widget.trashedOnly,
-                    onChanged: (by, asc) => ref
-                        .read(galleryControllerProvider.notifier)
-                        .setPhotoSort(by, asc),
+                  // 与首页顶栏一致的排版：SortToggle 右移 14 贴近右侧按钮
+                  Transform.translate(
+                    offset: const Offset(14, 0),
+                    child: SortToggle(
+                      // 日期视图固定按创建日期，只留升/降序
+                      sortBy: _timelineView
+                          ? SortBy.dateCreated
+                          : gallery.effectivePhotoSortBy,
+                      asc: gallery.photoSortAsc,
+                      dateOnly: _timelineView,
+                      // 回收站视图额外提供「按删除日期」
+                      showDateTrashed: widget.trashedOnly,
+                      onChanged: (by, asc) => ref
+                          .read(galleryControllerProvider.notifier)
+                          .setPhotoSort(by, asc),
+                    ),
                   ),
+                  // 视图切换（排序组件右侧；仅普通相册，收藏/回收站保持沉浸）
+                  if (!widget.favoritesOnly && !widget.trashedOnly)
+                    IconButton(
+                      icon: Icon(
+                        _timelineView
+                            ? Icons.calendar_view_day
+                            : Icons.view_module,
+                        color: AppColors.text,
+                      ),
+                      tooltip: t(
+                          ref, _timelineView ? 'view_immersive' : 'view_date'),
+                      onPressed: _toggleViewMode,
+                    ),
                 ],
         ),
         body: SafeArea(child: _buildBody(gallery)),
@@ -221,6 +291,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
 
   Widget _buildBody(GalleryState gallery) {
     final cols = ref.watch(configProvider).photoGridColumns;
+    // 日期分组视图（仅普通相册）：按创建日期分组 + sticky 日期头。
+    if (_timelineView && !widget.favoritesOnly && !widget.trashedOnly) {
+      // 进入动画期间先渲染轻量占位：日期视图多 sliver（每组一个 SliverGrid）
+      // 完整 build 叠加动画帧会卡顿（沉浸单 GridView 无此问题）。动画完成后
+      // 切完整日期视图（数据秒出 + 缩略图渐进填充，无突兀感）。
+      return _buildTimelineBody(gallery);
+    }
     // ⚠️ 无转圈：首屏未完成（firstPageLoaded=false 且无数据）时显示灰格占位网格，
     // 第一页到达后无缝替换；error 时显示错误页（可重试）。
     if (gallery.error != null) {
@@ -332,6 +409,170 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         ),
       ],
     );
+  }
+
+  /// 日期分组视图：按创建日期(dateAddedMs)分组，组头 + 整行照片混合的单
+  /// SliverList。网格列数复用 config.photoGridColumns（与沉浸视图一致）。
+  /// 扁平化：多 sliver（每组分 SliverGrid）在组数多时 build 重，进入动画帧
+  /// 叠加会卡顿；单 SliverList 只 layout 可见项 → 动画流畅 + 直接清晰缩略图
+  /// （128→300 正常渐进，无低质量跳变）。全量加载后 itemCount 固定，extent 稳定。
+  Widget _buildTimelineBody(GalleryState gallery) {
+    final cols = ref.watch(configProvider).photoGridColumns;
+    final photos = gallery.photos;
+    if (photos.isEmpty) {
+      if (!gallery.firstPageLoaded) {
+        return _ThumbGridPlaceholder(cols: cols);
+      }
+      return Center(
+        child: Text(
+          t(ref, 'album_empty'),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+            color: AppColors.muted,
+            fontSize: 13,
+          ),
+        ),
+      );
+    }
+    final cellWidth =
+        (MediaQuery.sizeOf(context).width - 4 * 2 - (cols - 1) * 3) / cols;
+    final cellH = cellWidth + 3; // 含行距，与手柄 rowExtent 一致
+    final thumbSize = (cellWidth * MediaQuery.devicePixelRatioOf(context))
+        .round()
+        .clamp(160, 512);
+    final totalItems = widget.bucketCount ?? photos.length;
+    // 扁平索引：photos 引用变化（loadMore/刷新）时重建，否则复用（滚动/选中/
+    // 动画帧不重算 —— build 轻的关键，也是动画流畅的根因）。
+    if (!identical(_flatPhotos, photos)) _buildTimelineIndex(photos, cols);
+    return Stack(
+      children: [
+        CustomScrollView(
+          key: _gridKey,
+          controller: _timelineScrollCtrl,
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+              sliver: SliverList(
+                delegate: SliverChildBuilderDelegate((ctx, j) {
+                  final f = _flat[j];
+                  if (f < 0) {
+                    // 组头项：随内容滚动（非 sticky，避免多组日期头叠成日期列表）
+                    return _DateHeaderRow(
+                      label: _dayLabel(_flatDayMs[-f - 1], ref),
+                    );
+                  }
+                  // 整行项：行首 photo 下标 f 起连续 cols 张（组尾行不满补空）
+                  final end = _flatRowEnd[j];
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 3),
+                    child: Row(
+                      children: [
+                        for (var pi = f; pi < end; pi++)
+                          Expanded(
+                            child: Padding(
+                              padding:
+                                  EdgeInsets.only(right: pi == end - 1 ? 0 : 3),
+                              child: SizedBox(
+                                width: double.infinity,
+                                height: cellWidth,
+                                child: _PhotoCell(
+                                  info: photos[pi],
+                                  thumbSize: thumbSize,
+                                  selectMode: _selectMode,
+                                  selected:
+                                      _selectedIds.contains(photos[pi].id),
+                                  onTap: (cellRect) => _selectMode
+                                      ? _toggleSelect(photos[pi].id)
+                                      : _openViewer(context, gallery, photos,
+                                          pi, cellRect),
+                                  onLongPress: _selectMode
+                                      ? null
+                                      : () =>
+                                          _enterSelectMode(photos[pi].id),
+                                ),
+                              ),
+                            ),
+                          ),
+                        // 组尾不完整行：补齐空位（与沉浸网格右侧留白观感一致）
+                        for (var i = end - f; i < cols; i++)
+                          const Expanded(child: SizedBox()),
+                      ],
+                    ),
+                  );
+                }, childCount: _flat.length),
+              ),
+            ),
+          ],
+        ),
+        // 日期视图拖拽手柄：useActualExtent（实际可滚范围），到底=100%。
+        // 全量加载后 itemCount 固定 → maxScrollExtent 稳定，手柄不跳。
+        ScrollDragHandle(
+          controller: _timelineScrollCtrl,
+          totalItems: totalItems,
+          rowExtent: cellH,
+          columns: cols,
+          viewportRows: 5,
+          useActualExtent: true,
+        ),
+      ],
+    );
+  }
+
+  /// 构建日期视图扁平索引：flat（组头/整行）+ 行边界。photos 引用变化时重建。
+  void _buildTimelineIndex(List<MsImageInfo> photos, int cols) {
+    _flatPhotos = photos;
+    final groups = _groupPhotosByDay(photos);
+    _flatGroupCount = groups.length;
+    _flat = <int>[];
+    _flatRowEnd = <int>[];
+    _flatDayMs = List<int>.filled(groups.length, 0);
+    for (var gi = 0; gi < groups.length; gi++) {
+      final g = groups[gi];
+      _flatDayMs[gi] = g.dayMs;
+      _flat.add(-(gi + 1)); // 组头项
+      _flatRowEnd.add(-1);
+      final end = g.startIndex + g.photos.length;
+      for (var rowFirst = g.startIndex; rowFirst < end; rowFirst += cols) {
+        final rowEnd = rowFirst + cols < end ? rowFirst + cols : end;
+        _flat.add(rowFirst); // 行项：行首 photo 下标
+        _flatRowEnd.add(rowEnd);
+      }
+    }
+  }
+
+  /// 按天分组（保持 photos 的 SQL 排序顺序：升序旧→新 / 降序新→旧）。
+  /// [startIndex] 记录每组首项在 gallery.photos 的全局下标，供 viewer 全列表翻页。
+  List<_DateGroup> _groupPhotosByDay(List<MsImageInfo> photos) {
+    final groups = <_DateGroup>[];
+    for (var i = 0; i < photos.length; i++) {
+      final day = _dayStartMs(photos[i].dateAddedMs);
+      if (groups.isEmpty || groups.last.dayMs != day) {
+        groups.add(_DateGroup(day, [photos[i]], i));
+      } else {
+        groups.last.photos.add(photos[i]);
+      }
+    }
+    return groups;
+  }
+
+  /// 归一化到当天 0 点（毫秒）。
+  int _dayStartMs(int ms) {
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
+    return DateTime(d.year, d.month, d.day).millisecondsSinceEpoch;
+  }
+
+  /// 日期标签：今天/昨天/M月d日/YYYY年M月d日（跨年带年份）。
+  String _dayLabel(int dayMs, WidgetRef ref) {
+    final day = DateTime.fromMillisecondsSinceEpoch(dayMs);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    if (day == today) return t(ref, 'today');
+    if (day == today.subtract(const Duration(days: 1))) {
+      return t(ref, 'yesterday');
+    }
+    if (day.year == now.year) return '${day.month}月${day.day}日';
+    return '${day.year}年${day.month}月${day.day}日';
   }
 
   /// 批量选择模式的底部操作栏：按视图模式提供不同操作。
@@ -1013,6 +1254,37 @@ class _ThumbGridPlaceholder extends StatelessWidget {
       ),
       itemCount: cols * 6,
       itemBuilder: (_, _) => const ColoredBox(color: AppColors.surface),
+    );
+  }
+}
+
+/// 日期分组：一天的照片 + 该组首项在总列表中的下标。
+class _DateGroup {
+  const _DateGroup(this.dayMs, this.photos, this.startIndex);
+  final int dayMs;
+  final List<MsImageInfo> photos;
+  final int startIndex;
+}
+
+/// 日期分组视图的日期行（随内容滚动，无背景）。
+class _DateHeaderRow extends StatelessWidget {
+  const _DateHeaderRow({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontFamily: 'Space Mono',
+          fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+          color: AppColors.text,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
 }

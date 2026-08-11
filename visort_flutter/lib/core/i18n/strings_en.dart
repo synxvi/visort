@@ -127,6 +127,8 @@ const Map<String, String> stringsEn = {
   // ───────── Gallery (相册浏览) ─────────
   'gallery_title': 'Albums',
   'album_sort': 'Sort',
+  'view_immersive': 'Immersive view',
+  'view_date': 'Date view',
   'sort_by_name': 'By Name',
   'sort_by_date_created': 'By Created Date',
   'sort_by_date_modified': 'By Modified Date',

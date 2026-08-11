@@ -25,6 +25,7 @@ class ScrollDragHandle extends StatefulWidget {
     required this.rowExtent,
     this.columns = 3,
     this.viewportRows = 5,
+    this.useActualExtent = false,
     this.margin = const EdgeInsets.only(right: 8),
   });
 
@@ -37,6 +38,9 @@ class ScrollDragHandle extends StatefulWidget {
   final int columns;
   /// 一屏可见的行数
   final int viewportRows;
+  /// true=进度/拖拽基于实际 maxScrollExtent（到底=100%，适合日期分组）；
+  /// false=基于全量几何分母（loadMore 不跳，适合沉浸均匀网格）。
+  final bool useActualExtent;
   final EdgeInsets margin;
 
   @override
@@ -57,11 +61,19 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
     return widget.controller.offset > 4;
   }
 
-  /// 纯几何稳定进度 [0,1]。分母恒定（totalItems 固定 + rowExtent 固定）。
+  /// 进度 [0,1]。useActualExtent=实际可滚范围（到底=100%，日期分组用，
+  /// loadMore 时跳、由调用处防抖缓解）；否则=全量几何分母（沉浸网格用，
+  /// loadMore 不跳但已加载到底时手柄未到 100%）。
   double get _progress {
     final c = widget.controller;
     if (!c.hasClients) return 0.0;
     final pos = c.position;
+    if (widget.useActualExtent) {
+      if (!pos.hasViewportDimension) return 0.0;
+      final me = pos.maxScrollExtent;
+      if (me <= 0) return 0.0;
+      return (pos.pixels / me).clamp(0.0, 1.0);
+    }
     final h = widget.rowExtent;
     final total = widget.totalItems;
     if (h <= 0 || total <= 0) return 0.0;
@@ -70,8 +82,9 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
         _trackH > 0 ? _trackH / h : widget.viewportRows.toDouble();
     final scrollableRows =
         (totalRows - viewportRows).clamp(1.0, totalRows.toDouble());
-    final scrolledRows = (pos.pixels / h).clamp(0.0, scrollableRows.toDouble());
-    return (scrolledRows / scrollableRows).clamp(0.0, 1.0);
+    final denom = scrollableRows * h;
+    if (denom <= 0) return 0.0;
+    return (pos.pixels / denom).clamp(0.0, 1.0);
   }
 
   void _update() => setState(() {});
@@ -101,20 +114,28 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
     final c = widget.controller;
     if (!c.hasClients) return;
     final pos = c.position;
+    if (!pos.hasViewportDimension) return;
     // 手柄在 track 上的可移动区间（与 build 定位严格一致）
     final handleMovable =
         (_trackH - _handleH - _bottomSafe).clamp(1.0, double.infinity);
-    // 列表的总可滚动像素（纯几何）
-    final h = widget.rowExtent;
-    final totalRows = (widget.totalItems / widget.columns).ceil();
-    final viewportRows =
-        _trackH > 0 ? _trackH / h : widget.viewportRows.toDouble();
-    final scrollableRows =
-        (totalRows - viewportRows).clamp(1.0, totalRows.toDouble());
-    final maxPixels = scrollableRows * h;
+    // 列表的总可滚动像素（与 build 的 _progress 分母一致）
+    final double maxPixels;
+    if (widget.useActualExtent) {
+      maxPixels = pos.maxScrollExtent;
+    } else {
+      final h = widget.rowExtent;
+      final totalRows = (widget.totalItems / widget.columns).ceil();
+      final viewportRows =
+          _trackH > 0 ? _trackH / h : widget.viewportRows.toDouble();
+      final scrollableRows =
+          (totalRows - viewportRows).clamp(1.0, totalRows.toDouble());
+      maxPixels = scrollableRows * h;
+    }
+    if (maxPixels <= 0) return;
     // 1:1 跟手：手指 Δy → 手柄移动 Δy → 对应列表滚动 Δy/maxPixels 比例
     final deltaRatio = details.delta.dy / handleMovable;
-    final target = (pos.pixels + deltaRatio * maxPixels).clamp(0.0, pos.maxScrollExtent);
+    final target =
+        (pos.pixels + deltaRatio * maxPixels).clamp(0.0, pos.maxScrollExtent);
     pos.jumpTo(target);
   }
 

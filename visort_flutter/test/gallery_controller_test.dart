@@ -212,8 +212,9 @@ void main() {
       expect(fakeChannel.scanCalls.length, 1);
     });
 
-    test('大相册分页：多页累加，hasMore 随游标翻转', () async {
-      // 重建一个 130 张图的相册，limit=60 → 第一页 60（hasMore），第二页 60（hasMore），第三页 10（无）
+    test('大相册全量加载：enterBucket 一次查完，hasMore 始终 false', () async {
+      // 全量加载策略（_pageSize 足够大）：一次查询返回所有图片，不分页。
+      // 手柄 itemCount 固定 → maxScrollExtent 稳定 → 滚动不跳（对齐系统相册）。
       final big = List.generate(130, (i) => _info('p$i', added: 1000 - i));
       final fake = _FakeMediaStoreChannel(
         [_bucket('b2', 'Big', 130)],
@@ -228,20 +229,15 @@ void main() {
 
       await ctrl.enterBucket('b2');
       var st = c.read(galleryControllerProvider);
-      expect(st.photos.length, 60);
-      expect(st.hasMore, true);
-      expect(st.nextCursor, '60');
+      expect(st.photos.length, 130); // 全量一次查完
+      expect(st.hasMore, false);
+      expect(st.firstPageLoaded, true);
 
+      // loadMore 在全量后是 no-op（nextCursor=null）
+      final callsBefore = fake.scanCalls.length;
       await ctrl.loadMore();
-      st = c.read(galleryControllerProvider);
-      expect(st.photos.length, 120);
-      expect(st.hasMore, true);
-
-      await ctrl.loadMore();
-      st = c.read(galleryControllerProvider);
-      expect(st.photos.length, 130);
-      expect(st.hasMore, false, reason: '最后一页耗尽后游标置 null');
-      expect(fake.scanCalls, ['<first>', '60', '120']);
+      expect(c.read(galleryControllerProvider).photos.length, 130);
+      expect(fake.scanCalls.length, callsBefore);
     });
 
     test('loadMore 在无更多时是 no-op', () async {

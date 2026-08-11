@@ -123,6 +123,8 @@ const Map<String, String> stringsZh = {
   // ───────── Gallery (相册浏览) ─────────
   'gallery_title': '相册',
   'album_sort': '排序',
+  'view_immersive': '沉浸视图',
+  'view_date': '日期视图',
   'sort_by_name': '按名称',
   'sort_by_date_created': '按创建日期',
   'sort_by_date_modified': '按修改时间',

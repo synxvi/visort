@@ -109,6 +109,37 @@ class MsImageInfo {
   /// viewer 双击自适应铺满按宽高比算 coverRatio，为 0 时 fallback readMeta 或 2.5×。
   final int width;
   final int height;
+
+  /// 持久化用（snapshot 磁盘缓存）。
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'size': size,
+        'mime': mime,
+        'bucketId': bucketId,
+        'dateAddedMs': dateAddedMs,
+        'dateModifiedMs': dateModifiedMs,
+        'isFavorite': isFavorite,
+        'isTrashed': isTrashed,
+        'dateTrashedMs': dateTrashedMs,
+        'width': width,
+        'height': height,
+      };
+
+  factory MsImageInfo.fromJson(Map<String, dynamic> j) => MsImageInfo(
+        id: j['id'] as String,
+        name: j['name'] as String,
+        size: j['size'] as int,
+        mime: j['mime'] as String,
+        bucketId: j['bucketId'] as String,
+        dateAddedMs: j['dateAddedMs'] as int,
+        dateModifiedMs: j['dateModifiedMs'] as int? ?? j['dateAddedMs'] as int,
+        isFavorite: j['isFavorite'] as bool? ?? false,
+        isTrashed: j['isTrashed'] as bool? ?? false,
+        dateTrashedMs: j['dateTrashedMs'] as int? ?? 0,
+        width: j['width'] as int? ?? 0,
+        height: j['height'] as int? ?? 0,
+      );
 }
 
 /// 单图元信息
@@ -220,9 +251,38 @@ class MediaStoreChannel {
       if (raw == null) {
         return MsScanPage(images: const [], nextCursor: null);
       }
-      final list = (raw['images'] as List<dynamic>?) ?? const [];
-      final images = list.cast<Map>().map(_toImageInfo).toList(growable: false);
+      // 扁平化传输：12 并行数组按索引重组（Kotlin ScanPage.toMap）。
+      final ids = (raw['ids'] as List<dynamic>?) ?? const [];
       final next = raw['nextCursor'] as String?;
+      if (ids.isEmpty) return MsScanPage(images: const [], nextCursor: next);
+      final names = raw['names'] as List<dynamic>;
+      final sizes = raw['sizes'] as List<dynamic>;
+      final mimes = raw['mimes'] as List<dynamic>;
+      final bucketIdArr = raw['bucketIds'] as List<dynamic>;
+      final dateAddeds = raw['dateAddeds'] as List<dynamic>;
+      final dateModifieds = raw['dateModifieds'] as List<dynamic>;
+      final isFavorites = raw['isFavorites'] as List<dynamic>;
+      final isTrasheds = raw['isTrasheds'] as List<dynamic>;
+      final dateTrasheds = raw['dateTrasheds'] as List<dynamic>;
+      final widths = raw['widths'] as List<dynamic>;
+      final heights = raw['heights'] as List<dynamic>;
+      final images = List<MsImageInfo>.generate(ids.length, (i) {
+        final added = (dateAddeds[i] as num).toInt();
+        return MsImageInfo(
+          id: ids[i].toString(),
+          name: names[i] as String,
+          size: (sizes[i] as num).toInt(),
+          mime: mimes[i] as String,
+          bucketId: bucketIdArr[i].toString(),
+          dateAddedMs: added,
+          dateModifiedMs: (dateModifieds[i] as num?)?.toInt() ?? added,
+          isFavorite: isFavorites[i] == true,
+          isTrashed: isTrasheds[i] == true,
+          dateTrashedMs: (dateTrasheds[i] as num?)?.toInt() ?? 0,
+          width: (widths[i] as num?)?.toInt() ?? 0,
+          height: (heights[i] as num?)?.toInt() ?? 0,
+        );
+      }, growable: false);
       return MsScanPage(images: images, nextCursor: next);
     } on PlatformException catch (e) {
       throw _convertError(e);
@@ -418,21 +478,6 @@ class MediaStoreChannel {
         coverId: m['coverId']?.toString(),
       );
 
-  MsImageInfo _toImageInfo(Map m) => MsImageInfo(
-        id: m['id'].toString(),
-        name: m['name'] as String,
-        size: (m['size'] as num).toInt(),
-        mime: m['mime'] as String,
-        bucketId: m['bucketId'].toString(),
-        dateAddedMs: (m['dateAddedMs'] as num).toInt(),
-        dateModifiedMs: (m['dateModifiedMs'] as num?)?.toInt() ??
-            (m['dateAddedMs'] as num).toInt(),
-        isFavorite: m['isFavorite'] == true,
-        isTrashed: m['isTrashed'] == true,
-        dateTrashedMs: (m['dateTrashedMs'] as num?)?.toInt() ?? 0,
-        width: (m['width'] as num?)?.toInt() ?? 0,
-        height: (m['height'] as num?)?.toInt() ?? 0,
-      );
 
   MsException _convertError(PlatformException e) => MsException(
         MsErrorCode.fromString(e.code),

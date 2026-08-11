@@ -36,24 +36,33 @@ class AppRoutes {
 final ValueNotifier<String?> currentRouteName = ValueNotifier<String?>(null);
 
 class RouteNameObserver extends NavigatorObserver {
+  // restoreState（导航状态恢复）在 build 期间同步回调 didPush/didPop，
+  // 直接赋 currentRouteName 会触发监听者（app.dart 噪点层）build 期间 setState
+  // 断言（setState() called during build）。延迟到帧后赋值。
+  static void _set(String? name) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      currentRouteName.value = name;
+    });
+  }
+
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    currentRouteName.value = route.settings.name;
+    _set(route.settings.name);
   }
 
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    currentRouteName.value = previousRoute?.settings.name;
+    _set(previousRoute?.settings.name);
   }
 
   @override
   void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
-    if (newRoute != null) currentRouteName.value = newRoute.settings.name;
+    if (newRoute != null) _set(newRoute.settings.name);
   }
 
   @override
   void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    currentRouteName.value = previousRoute?.settings.name;
+    _set(previousRoute?.settings.name);
   }
 }
 

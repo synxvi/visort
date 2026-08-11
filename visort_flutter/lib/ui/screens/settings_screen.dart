@@ -283,6 +283,6 @@ class _PickerRow<T> extends StatelessWidget {
       )..layout();
       if (tp.width > maxText) maxText = tp.width;
     }
-    return 14 * 2 + 16 + 8 + maxText;
+    return 14 * 2 + 16 + 8 + maxText + 2;
   }
 }

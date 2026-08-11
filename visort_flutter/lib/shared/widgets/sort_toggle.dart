@@ -25,6 +25,7 @@ class SortToggle extends ConsumerWidget {
     required this.asc,
     required this.onChanged,
     this.showDateTrashed = false,
+    this.dateOnly = false,
   });
 
   final SortBy sortBy;
@@ -33,6 +34,8 @@ class SortToggle extends ConsumerWidget {
   /// 回收站视图：显示「按删除日期」(dateTrashed) 维度选项。
   /// 仅回收站有意义（DATE_EXPIRES 仅回收站项有值），其他视图不显示。
   final bool showDateTrashed;
+  /// 日期视图：菜单只显示升/降序方向段，维度固定为按创建日期(dateCreated)。
+  final bool dateOnly;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -45,7 +48,9 @@ class SortToggle extends ConsumerWidget {
         icon: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(_byIcon(sortBy), size: 18, color: AppColors.text),
+            Icon(dateOnly ? Icons.access_time : _byIcon(sortBy),
+                size: 18,
+                color: AppColors.text),
             const SizedBox(width: 2),
             Icon(
               asc ? Icons.arrow_upward : Icons.arrow_downward,
@@ -87,22 +92,25 @@ class SortToggle extends ConsumerWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // ── 维度段 ──
-            _dimRow(ctx, ref, Icons.sort_by_alpha, 'name', SortBy.name),
-            _dimRow(
-                ctx, ref, Icons.access_time, 'date_created', SortBy.dateCreated),
-            _dimRow(ctx, ref, Icons.access_time, 'date_modified',
-                SortBy.dateModified),
-            // 回收站视图额外提供「按删除日期」（DATE_EXPIRES）
-            if (showDateTrashed)
-              _dimRow(ctx, ref, Icons.delete_outline, 'date_trashed',
-                  SortBy.dateTrashed),
-            // 自定义暗色分隔线
-            Container(
-              height: 1,
-              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              color: AppColors.border,
-            ),
+            // ── 维度段（dateOnly 时固定按创建日期，只留方向段）──
+            if (!dateOnly) ...[
+              _dimRow(ctx, ref, Icons.sort_by_alpha, 'name', SortBy.name),
+              _dimRow(ctx, ref, Icons.access_time, 'date_created',
+                  SortBy.dateCreated),
+              _dimRow(ctx, ref, Icons.access_time, 'date_modified',
+                  SortBy.dateModified),
+              // 回收站视图额外提供「按删除日期」（DATE_EXPIRES）
+              if (showDateTrashed)
+                _dimRow(ctx, ref, Icons.delete_outline, 'date_trashed',
+                    SortBy.dateTrashed),
+              // 自定义暗色分隔线
+              Container(
+                height: 1,
+                margin:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                color: AppColors.border,
+              ),
+            ],
             // ── 方向段 ──
             _dirRow(ctx, ref, Icons.arrow_upward, 'asc', true),
             _dirRow(ctx, ref, Icons.arrow_downward, 'desc', false),
@@ -158,10 +166,12 @@ class SortToggle extends ConsumerWidget {
     );
     final scaler = MediaQuery.textScalerOf(context);
     final labels = [
-      t(ref, 'sort_by_name'),
-      t(ref, 'sort_by_date_created'),
-      t(ref, 'sort_by_date_modified'),
-      if (showDateTrashed) t(ref, 'sort_by_date_trashed'),
+      if (!dateOnly) ...[
+        t(ref, 'sort_by_name'),
+        t(ref, 'sort_by_date_created'),
+        t(ref, 'sort_by_date_modified'),
+        if (showDateTrashed) t(ref, 'sort_by_date_trashed'),
+      ],
       t(ref, 'sort_asc'),
       t(ref, 'sort_desc'),
     ];
@@ -174,7 +184,7 @@ class SortToggle extends ConsumerWidget {
       )..layout();
       if (tp.width > maxText) maxText = tp.width;
     }
-    return 16 * 2 + 16 + 8 + maxText;
+    return 16 * 2 + 16 + 8 + maxText + 2;
   }
 
   IconData _byIcon(SortBy by) {
