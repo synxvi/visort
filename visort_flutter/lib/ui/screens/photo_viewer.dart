@@ -6,6 +6,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:extended_image/extended_image.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
@@ -87,6 +88,19 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
   // 中间态")。_panelCtrl 单一驱动面板位移 + 图片上推,严格同步、无路由、自定义 snap。
   AnimationController? _panelCtrl;
   OverlayEntry? _panelEntry;
+  /// 底栏缩略图条（对标系统相册 photo_page ThumbLine）。独立 OverlayEntry：
+  /// 显隐由 _chromeFade × _panelExtent 组合驱动（ValueListenableBuilder 内部重建，
+  /// 不随 _barEntry markNeedsBuild）。滚动/吸附/联动由 ScrollController + 手写居中吸附
+  /// （对标系统相册 ThumbLineLayoutManager 手写居中，非 SnapHelper/PageView）。
+  OverlayEntry? _thumbEntry;
+  ScrollController? _thumbScrollCtrl;
+  /// 实时居中项（滚动中更新，驱动单项高亮）。
+  ValueNotifier<int>? _thumbCenterIndex;
+  /// 主图→缩略图条程序滚动标记：期间忽略滚动联动，防回环。
+  bool _thumbSyncing = false;
+  /// 缩略图条驱动主图 animateToPage 期间标记:主图跨多页时中间页 onPageChanged 据此
+  /// 忽略,不回弹缩略图条。到达 target(i==_index) 复位,另有超时兜底。
+  bool _pagerDrivenByThumb = false;
 
   @override
   void initState() {
@@ -112,7 +126,10 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
     }
     // 顶/底栏插入 Navigator Overlay（route 之上）：点击打开立即浮现（50ms 淡入），
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _insertBars();
+      if (mounted) {
+        _insertBars();
+        _insertThumbLine();
+      }
     });
   }
 
@@ -143,6 +160,12 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
     _panelEntry = null;
     _panelCtrl?.dispose();
     _panelCtrl = null;
+    _thumbEntry?.remove();
+    _thumbEntry = null;
+    _thumbScrollCtrl?.dispose();
+    _thumbScrollCtrl = null;
+    _thumbCenterIndex?.dispose();
+    _thumbCenterIndex = null;
     _chromeFade.dispose();
     _barVisible.dispose();
     _panelExtent.dispose();
@@ -171,6 +194,8 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
           _photos.add(p);
         }
       }
+      // 缩略图条 itemCount 随 _photos 增长刷新（loadMore 后）。
+      _thumbEntry?.markNeedsBuild();
     }
   }
 
@@ -298,6 +323,164 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
         _chromeFade.value = 1.0;
       }
     });
+  }
+
+  /// 插入底栏缩略图条（对标系统相册 photo_page ThumbLine）。独立 OverlayEntry，
+  /// 插入到 _barEntry 之下：后续 _panelEntry（详情面板）也 below _barEntry 插入 →
+  /// 落在缩略图条之上，面板展开时自然覆盖缩略图条区域。显隐由 _chromeFade ×
+  /// _panelExtent 组合驱动（顶栏同款逻辑）。
+  void _insertThumbLine() {
+    if (_photos.isEmpty) return;
+    _thumbScrollCtrl = ScrollController();
+    _thumbCenterIndex = ValueNotifier<int>(_index);
+    _thumbScrollCtrl!.addListener(_onThumbScroll);
+    _thumbEntry = OverlayEntry(
+      builder: (_) => Positioned(
+        bottom: _kBottomChromeHeight,
+        left: 0,
+        right: 0,
+        height: _kThumbLineHeight,
+        child: ValueListenableBuilder<double>(
+          // 面板占比 → 缩略图条淡出（上滑详情时随顶栏一起隐藏）。
+          valueListenable: _panelExtent,
+          builder: (_, extent, strip) {
+            final thumbVis = (1 - extent / _kDetailInitial).clamp(0.0, 1.0);
+            return AnimatedBuilder(
+              animation: _chromeFade,
+              builder: (_, child) {
+                final vis = _chromeFade.value * thumbVis;
+                // 下滑滑出 + 淡出，比纯 alpha 更有"沉下去"的丝滑感。
+                final dy = (1 - vis) * _kThumbLineHeight;
+                return Transform.translate(
+                  offset: Offset(0, dy),
+                  child: Opacity(
+                    opacity: vis,
+                    child: IgnorePointer(
+                      ignoring: vis < 0.5,
+                      child: child,
+                    ),
+                  ),
+                );
+              },
+              // child 不随显隐重建 → ListView/缩略图不重复构造。
+              child: strip,
+            );
+          },
+          // 稳定 child：缩略图条本体。
+          child: _ThumbLineStrip(
+            photos: _photos,
+            controller: _thumbScrollCtrl!,
+            centerIndex: _thumbCenterIndex!,
+            onTap: _onThumbTap,
+            onScrollEnd: _onThumbScrollEnd,
+          ),
+        ),
+      ),
+    );
+    // below _barEntry：底栏 z 序更高（面板后插入会覆盖缩略图条）。
+    final bar = _barEntry;
+    if (bar != null) {
+      Overlay.of(context).insert(_thumbEntry!, below: bar);
+    } else {
+      Overlay.of(context).insert(_thumbEntry!);
+    }
+    // 首帧定位到当前 index 居中（等 layout 就绪）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctrl = _thumbScrollCtrl;
+      if (mounted && ctrl != null && ctrl.hasClients) {
+        ctrl.jumpTo(_thumbOffsetForCenter(_index));
+      }
+    });
+  }
+
+  /// 缩略图条滚动中：实时算离视口中心最近的项，更新高亮 + 跟手联动主图。
+  /// 主图即时 jumpToPage（不 setState 避免主 build 频繁重建）；_index 直接赋值 →
+  /// 主图 onPageChanged 命中 `i == _index` 守卫，不回弹缩略图条。
+  void _onThumbScroll() {
+    if (_thumbSyncing) return;
+    final ctrl = _thumbScrollCtrl;
+    final ci = _thumbCenterIndex;
+    if (ctrl == null || ci == null || !ctrl.hasClients) return;
+    final newCenter = _thumbComputeCenter();
+    if (newCenter == ci.value) return;
+    ci.value = newCenter; // 高亮跟手
+    if (newCenter == _index) return;
+    // 跟手联动主图：直接赋值 _index（不 setState）+ jumpToPage 即时切换 +
+    // markNeedsBuild 刷顶栏计数器。松手 snap 由 _onThumbScrollEnd 接管。
+    _index = newCenter;
+    widget.onIndexChanged?.call(newCenter);
+    _barEntry?.markNeedsBuild();
+    if (_pageCtrl.hasClients) _pageCtrl.jumpToPage(newCenter);
+    _maybeLoadMore();
+  }
+
+  /// 缩略图条滚动停止（fling 减速结束）：吸附最近项到正中 + 联动主图。
+  void _onThumbScrollEnd() {
+    final ctrl = _thumbScrollCtrl;
+    if (ctrl == null || !ctrl.hasClients || _thumbSyncing) return;
+    final target = _thumbComputeCenter();
+    final offset = _thumbOffsetForCenter(target);
+    if ((ctrl.offset - offset).abs() > 0.5) {
+      ctrl.animateTo(offset,
+          duration: _kThumbSnapDuration, curve: Curves.easeOut);
+    }
+    if (target != _index) _onThumbPageChanged(target);
+  }
+
+  /// 点按缩略图单项 → 主图跳转 + 缩略图条吸附居中。
+  void _onThumbTap(int i) {
+    if (i == _index) return;
+    _onThumbPageChanged(i);
+    final ctrl = _thumbScrollCtrl;
+    if (ctrl != null && ctrl.hasClients) {
+      _thumbSyncing = true;
+      ctrl
+          .animateTo(_thumbOffsetForCenter(i),
+              duration: _kThumbSnapDuration, curve: Curves.easeOut)
+          .then((_) => _thumbSyncing = false);
+    }
+  }
+
+  /// 离视口中心最近的 item index（padding=vw/2−ext/2 时 = round(offset/ext)）。
+  int _thumbComputeCenter() {
+    final ctrl = _thumbScrollCtrl;
+    if (ctrl == null || !ctrl.hasClients) return _index;
+    return (ctrl.offset / _kThumbItemExtent)
+        .round()
+        .clamp(0, _photos.length - 1);
+  }
+
+  /// 让 item i 居中所需的 scroll offset（= i × itemExtent）。
+  double _thumbOffsetForCenter(int i) => i * _kThumbItemExtent;
+
+  /// 缩略图条滚动停止/点按 → 主图跟随。靠 `i == _index` 天然防回环。
+  void _onThumbPageChanged(int i) {
+    if (i == _index) return;
+    setState(() => _index = i);
+    widget.onIndexChanged?.call(i);
+    _barEntry?.markNeedsBuild();
+    _thumbCenterIndex?.value = i;
+    if (_pageCtrl.hasClients) {
+      _pagerDrivenByThumb = true;
+      // 兜底:万一主图 animateToPage 未触发 target onPageChanged,超时复位防 flag 卡死。
+      Future.delayed(_kThumbSyncDuration + const Duration(milliseconds: 80),
+          () => _pagerDrivenByThumb = false);
+      _pageCtrl.animateToPage(i,
+          duration: _kThumbSyncDuration, curve: Curves.easeOut);
+    }
+    _maybeLoadMore();
+  }
+
+  /// 主图翻页 → 缩略图条居中跟随（程序滚动，_thumbSyncing 防回环）。
+  void _syncThumbTo(int i) {
+    final ctrl = _thumbScrollCtrl;
+    if (ctrl == null || !ctrl.hasClients) return;
+    _thumbSyncing = true;
+    _thumbCenterIndex?.value = i;
+    ctrl
+        .animateTo(_thumbOffsetForCenter(i),
+            duration: _kThumbSyncDuration, curve: Curves.easeOut)
+        .then((_) => _thumbSyncing = false);
   }
 
   Future<void> _deleteCurrent() async {
@@ -519,6 +702,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
       Future.microtask(() {
         if (mounted && _pageCtrl.hasClients) {
           _pageCtrl.jumpToPage(_index);
+          _syncThumbTo(_index); // jumpToPage 触发的 onPageChanged 命中 i==_index 不回弹,故手动同步
         }
       });
     }
@@ -617,9 +801,17 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
                       itemCount: _photos.length,
                       canScrollPage: _canScrollPage,
                       onPageChanged: (i) {
+                        if (_pagerDrivenByThumb) {
+                          // 缩略图条驱动主图:跨多页时中间页 onPageChanged 忽略,不回弹缩略图条;
+                          // 到达 target(i==_index) 复位 flag。
+                          if (i == _index) _pagerDrivenByThumb = false;
+                          return;
+                        }
+                        if (i == _index) return;
                         setState(() => _index = i);
                         widget.onIndexChanged?.call(i);
                         _barEntry?.markNeedsBuild();
+                        _syncThumbTo(i);
                         _maybeLoadMore();
                       },
                       itemBuilder: (ctx, i) {
@@ -1473,3 +1665,132 @@ const double _kDetailInitial = 0.5;
 /// 图片上推量 = 面板像素高度 × 此系数。0.5 使图片居中主体落在面板上方可见区,
 /// 且可见区无大面积空白(图像刚好覆盖,见 _showDetails 设计推导)。
 const double _kImagePushFactor = 0.5;
+
+// ─────────────── 底栏缩略图条(ThumbLine,对标系统相册 photo_page)───────────────
+
+/// 缩略图条高度(竖屏):容纳放大后的当前项(42dp)+上下边距。
+const double _kThumbLineHeight = 44.0;
+
+/// 每个 item 的固定布局宽度(含间距)。紧凑:对标系统相册 item 21.3dp + 4dp 间距。
+/// 用固定 itemExtent 让 ListView 自由 fling(甩一下滚多张减速,非 PageView 一页一停)
+/// 且 offset 连续不跳。当前项靠 [AnimatedContainer] 整体放大+底部对齐强调。
+const double _kThumbItemExtent = 32.0;
+
+/// 当前(中心)项宽:比普通项(23)大 ~30% = 30。
+const double _kThumbCenterW = 30.0;
+
+/// 当前项高:比普通项(32)大 ~30% = 42。底部对齐 → 顶部高出普通项 10dp(强调)。
+const double _kThumbCenterH = 42.0;
+
+/// 普通项宽:正常大小。
+const double _kThumbNormalW = 23.0;
+
+/// 普通项高:正常大小(32dp)。
+const double _kThumbItemH = 32.0;
+
+/// 中心/普通项圆角。
+const double _kThumbRadiusCenter = 4.0;
+const double _kThumbRadiusNormal = 2.5;
+
+/// 缩略图加载尺寸(px):复用 buildThumbnailProvider,两级渐进(128 占位→96 清晰)。
+const int _kThumbLoadSize = 96;
+
+/// 缩略图条→主图联动动画时长(主图翻页跟随缩略图条滚动停止/点按)。
+const Duration _kThumbSyncDuration = Duration(milliseconds: 220);
+
+/// 缩略图条滚动停止后吸附居中时长(略短,手感利落)。
+const Duration _kThumbSnapDuration = Duration(milliseconds: 180);
+
+/// 底栏缩略图条(对标系统相册 photo_page ThumbLine)。
+///
+/// 横向 ListView + 固定紧凑 itemExtent,自由 fling(甩一下滚多张慢慢减速,非 PageView 的
+/// 一页一停)。居中即选中:[controller] 实时算离视口中心最近的项 → [centerIndex] 高亮;
+/// 滚动停止(fling 减速结束)→ [onScrollEnd] 吸附该项到正中 + 联动主图。点按单项 →
+/// [onTap] 跳转。系统相册用自定义 ThumbLineLayoutManager 居中对齐(非 SnapHelper),
+/// Flutter 用 ListView + ScrollController + 手写吸附等价实现。
+class _ThumbLineStrip extends StatelessWidget {
+  const _ThumbLineStrip({
+    required this.photos,
+    required this.controller,
+    required this.centerIndex,
+    required this.onTap,
+    required this.onScrollEnd,
+  });
+
+  final List<MsImageInfo> photos;
+  final ScrollController controller;
+
+  /// 当前居中项(滚动中实时更新,驱动单项高亮)。
+  final ValueListenable<int> centerIndex;
+
+  /// 点按单项 → 主图跳转。
+  final ValueChanged<int> onTap;
+
+  /// 滚动停止(fling 减速结束)→ 吸附居中 + 联动主图。
+  final VoidCallback onScrollEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    // padding 让首尾项能滚到视口正中(每侧留 vw/2 − itemExtent/2)。
+    final vw = MediaQuery.sizeOf(context).width;
+    final pad = (vw - _kThumbItemExtent) / 2;
+    // 黑底:与底栏视觉一体,缩略图条覆盖在图片上(图片在下层被黑底遮)。
+    return ColoredBox(
+      color: Colors.black,
+      child: NotificationListener<ScrollEndNotification>(
+        onNotification: (_) {
+          onScrollEnd();
+          return false;
+        },
+        child: ListView.builder(
+          controller: controller,
+          scrollDirection: Axis.horizontal,
+          itemExtent: _kThumbItemExtent,
+          padding: EdgeInsets.symmetric(horizontal: pad),
+          itemCount: photos.length,
+          itemBuilder: (ctx, i) {
+            final info = photos[i];
+            return ValueListenableBuilder<int>(
+              valueListenable: centerIndex,
+              builder: (_, center, _) {
+                final isCenter = i == center;
+                final w = isCenter ? _kThumbCenterW : _kThumbNormalW;
+                // 中心项方形(矮),普通项竖条(高出一截):尺寸对比代替间距对比。
+                final h = isCenter ? _kThumbCenterH : _kThumbItemH;
+                final r = isCenter ? _kThumbRadiusCenter : _kThumbRadiusNormal;
+                return GestureDetector(
+                  onTap: () => onTap(i),
+                  behavior: HitTestBehavior.opaque,
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Opacity(
+                      opacity: isCenter ? 1.0 : 0.5,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 120),
+                        width: w,
+                        height: h,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(r),
+                          border: isCenter
+                              ? Border.all(color: AppColors.text, width: 1.5)
+                              : null,
+                          image: DecorationImage(
+                            image: buildThumbnailProvider(
+                              imageRefFromMediaStoreId(info.id),
+                              size: _kThumbLoadSize,
+                            ),
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
