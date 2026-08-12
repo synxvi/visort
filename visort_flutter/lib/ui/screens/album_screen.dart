@@ -505,15 +505,15 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             ),
           ],
         ),
-        // 日期视图拖拽手柄：useActualExtent（实际可滚范围），到底=100%。
-        // 全量加载后 itemCount 固定 → maxScrollExtent 稳定，手柄不跳。
+        // 日期视图拖拽手柄：单调化 maxScrollExtent（变高项滚动估算抖 →
+        // 记录见过的最大值作分母，只增不退 → 手柄不抖且准确）。
         ScrollDragHandle(
           controller: _timelineScrollCtrl,
           totalItems: totalItems,
           rowExtent: cellH,
           columns: cols,
           viewportRows: 5,
-          useActualExtent: true,
+          monotonicExtent: true,
         ),
       ],
     );
@@ -1265,24 +1265,31 @@ class _DateGroup {
   final List<MsImageInfo> photos;
   final int startIndex;
 }
-
-/// 日期分组视图的日期行（随内容滚动，无背景）。
+/// 日期分组视图的日期行（随内容滚动，无背景）。固定高 30（稳定 SliverList
+/// extent 估算 —— 变高项的 maxScrollExtent 滚动中抖，手柄用 monotonicExtent
+/// 单调化分母消除抖；组头固定高让估算更快收敛）。
 class _DateHeaderRow extends StatelessWidget {
   const _DateHeaderRow({required this.label});
   final String label;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-      child: Text(
-        label,
-        style: const TextStyle(
-          fontFamily: 'Space Mono',
-          fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-          color: AppColors.text,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
+    return SizedBox(
+      height: 30,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontFamily: 'Space Mono',
+              fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+              color: AppColors.text,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ),
       ),
     );

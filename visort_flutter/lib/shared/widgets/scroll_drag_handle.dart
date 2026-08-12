@@ -26,6 +26,7 @@ class ScrollDragHandle extends StatefulWidget {
     this.columns = 3,
     this.viewportRows = 5,
     this.useActualExtent = false,
+    this.monotonicExtent = false,
     this.margin = const EdgeInsets.only(right: 8),
   });
 
@@ -41,6 +42,10 @@ class ScrollDragHandle extends StatefulWidget {
   /// true=进度/拖拽基于实际 maxScrollExtent（到底=100%，适合日期分组）；
   /// false=基于全量几何分母（loadMore 不跳，适合沉浸均匀网格）。
   final bool useActualExtent;
+  /// 单调化 maxScrollExtent：变高项 SliverList 的 maxScrollExtent 滚动中估算抖
+  /// → 手柄慢拖"先退再进"；记录滚动中见过的最大值（只增不减）作分母，消除抖动。
+  /// 比 useActualExtent 稳（不抖），比几何估算准（用 SliverList 自身 layout 值）。
+  final bool monotonicExtent;
   final EdgeInsets margin;
 
   @override
@@ -54,6 +59,17 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
   static const _bottomSafe = 24.0;
   // 由 LayoutBuilder 记录的 track 实际高度，供拖拽 1:1 跟手换算用
   double _trackH = 0.0;
+  /// monotonicExtent 模式：滚动中见过的最大 maxScrollExtent（只增不减）。
+  double _maxEverExtent = 0.0;
+
+  /// 刷新单调分母（monotonicExtent 模式用）。
+  void _refreshMaxEver() {
+    final c = widget.controller;
+    if (c.hasClients && c.position.hasViewportDimension) {
+      final me = c.position.maxScrollExtent;
+      if (me > _maxEverExtent) _maxEverExtent = me;
+    }
+  }
 
   bool get _shouldShow {
     if (_dragging) return true;
@@ -68,8 +84,11 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
     final c = widget.controller;
     if (!c.hasClients) return 0.0;
     final pos = c.position;
+    if (widget.monotonicExtent) {
+      if (_maxEverExtent <= 0) return 0.0;
+      return (pos.pixels / _maxEverExtent).clamp(0.0, 1.0);
+    }
     if (widget.useActualExtent) {
-      if (!pos.hasViewportDimension) return 0.0;
       final me = pos.maxScrollExtent;
       if (me <= 0) return 0.0;
       return (pos.pixels / me).clamp(0.0, 1.0);
@@ -87,7 +106,10 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
     return (pos.pixels / denom).clamp(0.0, 1.0);
   }
 
-  void _update() => setState(() {});
+  void _update() {
+    _refreshMaxEver();
+    setState(() {});
+  }
 
   @override
   void initState() {
@@ -120,7 +142,10 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
         (_trackH - _handleH - _bottomSafe).clamp(1.0, double.infinity);
     // 列表的总可滚动像素（与 build 的 _progress 分母一致）
     final double maxPixels;
-    if (widget.useActualExtent) {
+    if (widget.monotonicExtent) {
+      _refreshMaxEver();
+      maxPixels = _maxEverExtent;
+    } else if (widget.useActualExtent) {
       maxPixels = pos.maxScrollExtent;
     } else {
       final h = widget.rowExtent;
@@ -134,8 +159,7 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
     if (maxPixels <= 0) return;
     // 1:1 跟手：手指 Δy → 手柄移动 Δy → 对应列表滚动 Δy/maxPixels 比例
     final deltaRatio = details.delta.dy / handleMovable;
-    final target =
-        (pos.pixels + deltaRatio * maxPixels).clamp(0.0, pos.maxScrollExtent);
+    final target = (pos.pixels + deltaRatio * maxPixels).clamp(0.0, maxPixels);
     pos.jumpTo(target);
   }
 
