@@ -244,10 +244,14 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
     if (scale <= 1.0) return true;
     final vw = details.layoutRect?.width ?? 0;
     final sw = vw * scale;
+    // 放大后仍窄于视口宽（竖图宽度不足）：水平方向无内容可平移，允许翻页。
     if (sw <= vw) return true;
-    final maxDx = (sw - vw) / 2;
-    final dx = details.offset?.dx ?? 0;
-    return dx.abs() >= maxDx - 0.5;
+    // 放大且宽于视口：仅当 pan 到水平边界（左/右到底）才允许翻页，其余平移图片。
+    // 必须用 boundary 而非 offset.dx 判定：GestureDetails.offset 的零点是「放大
+    // 居中」而非视口左缘，水平平移范围是 [-2·maxDx, 0]（左缘≈0、右缘≈-2·maxDx），
+    // 用 |offset.dx|>=maxDx 会在左缘误判未到边 → onDragUpdate 被拦 → 无法上一页
+    // （右缘 |dx|=2·maxDx 恰好通过，造成左右不对称）。boundary 与 movePage 同源、对称。
+    return details.boundary.left || details.boundary.right;
   }
 
   void _insertBars() {
@@ -1360,7 +1364,8 @@ class _BigImageState extends State<_BigImage>
         duration: const Duration(milliseconds: 300),
       )..addListener(_onDoubleTapTick);
   Tween<double>? _doubleTapTween;
-  Offset _doubleTapPos = Offset.zero;
+  Offset _doubleTapStartOffset = Offset.zero;
+  Offset _doubleTapEndOffset = Offset.zero;
   bool _fullLoaded = false;
   bool _hdTriggered = false;
   late final bool _isGif;
@@ -1395,10 +1400,121 @@ class _BigImageState extends State<_BigImage>
     final state = _gestureState;
     final tween = _doubleTapTween;
     if (state == null || tween == null) return;
-    state.handleDoubleTap(
-      scale: tween.evaluate(_dblTapAnim),
-      doubleTapPosition: _doubleTapPos,
+    // scale 与 offset 用同一动画进度(anim.value 已含 decelerate 曲线)同步插值:
+    // 像素位置 = p·scale + offset 随进度线性滑动 → 无飞出、无跳变(逐帧公式在
+    // 图像跨过铺满尺寸那一帧有整幅跳变,表现为抖动)。等价于 InteractiveViewer
+    // 社区「以点击点为不动点的矩阵插值」在 GestureDetails 上的分解。
+    final f = _dblTapAnim.value;
+    final scale = tween.evaluate(_dblTapAnim);
+    final offset = Offset.lerp(_doubleTapStartOffset, _doubleTapEndOffset, f);
+    if (offset == null) return;
+    // 不传 gestureDetails(prev):新 GestureDetails 的 boundary flag 默认 false,
+    // paint 期 clamp 不会干扰插值。否则缩小动画会继承放大终态的 flag(如
+    // 上方点击后 rect.top=0 → fv=true),每帧把图像钉回 top=0,直到图像高度
+    // 小于视口时 flag 翻转、突然释放 → 一帧大跳 = "恢复动画闪烁一次"。
+    // 动画结束后的 paint 会按实际 rect 重算 flag,边界约束(拖动 clamp、翻页
+    // 裁决)随即恢复。
+    state.gestureDetails = GestureDetails(
+      offset: offset,
+      totalScale: scale,
+      actionType: ActionType.zoom,
     );
+  }
+
+  /// 双击动画:一次性算好终态(scale + 铺满锚定偏移),动画期间同步插值。
+  void _onDoubleTap(ExtendedImageGestureState state) {
+    _gestureState = state;
+    final pointerDown = state.pointerDownPosition;
+    if (pointerDown == null) return;
+    final details = state.gestureDetails;
+    final begin = details?.totalScale ?? 1.0;
+    final zooming = begin <= 1.01;
+    final targetScale = zooming ? _computeDoubleTapTarget() : 1.0;
+    _doubleTapStartOffset = details?.offset ?? Offset.zero;
+    _doubleTapEndOffset = _computeDoubleTapEndOffset(
+      state,
+      _globalToLayoutLocal(state, pointerDown),
+      targetScale,
+    );
+    _doubleTapTween = Tween(begin: begin, end: targetScale);
+    _dblTapAnim
+      ..stop()
+      ..value = 0.0;
+    // animateTo 而非 fling：fling(0.4) 经 ClampingSimulation 实际约 1.5s，
+    _dblTapAnim.animateTo(
+      1.0,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.decelerate,
+    );
+  }
+
+  /// 全局坐标 → 布局局部坐标（layoutRect 所在空间 = RenderImage 父容器的局部
+  /// 坐标;不能用 RenderImage 自身的 globalToLocal——自身局部坐标差一个父内偏移）。
+  Offset _globalToLayoutLocal(
+    ExtendedImageGestureState state,
+    Offset global,
+  ) {
+    final RenderBox? box = state.context.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return global;
+    final RenderBox? parentBox = box.parent is RenderBox
+        ? box.parent as RenderBox
+        : null;
+    return parentBox != null
+        ? parentBox.globalToLocal(global)
+        : box.globalToLocal(global);
+  }
+
+  /// 双击终态偏移 = 锚点偏移(点击像素停在落点, p·(1−s)) + 铺满 clamp
+  /// (图像 ≥ 视口的轴把边推到视口边)。效果:
+  /// - 点击图像内部 → 像素精确钉在落点,放大后无黑边(图像铺满);
+  /// - 点击图像边缘(如右下角)→ 角落滑到屏幕边缘,铺满且无需拖拽即可看到;
+  /// - 缩小 → 终态偏移 0,回到 scale=1 的居中态。
+  Offset _computeDoubleTapEndOffset(
+    ExtendedImageGestureState state,
+    Offset tapLocal,
+    double targetScale,
+  ) {
+    if (targetScale <= 1.0) return Offset.zero;
+    final details = state.gestureDetails;
+    final layout = details?.layoutRect;
+    final dest = details?.destinationRect;
+    if (layout == null || dest == null || dest.isEmpty) {
+      // 几何未就绪:退化为纯锚点(与旧自研 toScene 算法一致)。
+      return Offset(
+        tapLocal.dx * (1 - targetScale),
+        tapLocal.dy * (1 - targetScale),
+      );
+    }
+    final Dc = dest.center;
+    var off = Offset(
+      tapLocal.dx * (1 - targetScale),
+      tapLocal.dy * (1 - targetScale),
+    );
+    final w = dest.width * targetScale;
+    final h = dest.height * targetScale;
+    final center = Offset(
+      Dc.dx * targetScale + off.dx,
+      Dc.dy * targetScale + off.dy,
+    );
+    final left = center.dx - w / 2, right = center.dx + w / 2;
+    final top = center.dy - h / 2, bottom = center.dy + h / 2;
+    if (w >= layout.width) {
+      if (left > layout.left) {
+        off = Offset(off.dx - (left - layout.left), off.dy);
+      }
+      if (right < layout.right) {
+        off = Offset(off.dx + (layout.right - right), off.dy);
+      }
+    }
+    if (h >= layout.height) {
+      if (top > layout.top) {
+        off = Offset(off.dx, off.dy - (top - layout.top));
+      }
+      if (bottom < layout.bottom) {
+        off = Offset(off.dx, off.dy + (layout.bottom - bottom));
+      }
+    }
+    return off;
   }
 
   @override
@@ -1436,27 +1552,6 @@ class _BigImageState extends State<_BigImage>
 
   /// 目标倍率自适应：未放大 → max(2.5, coverRatio) 铺满屏幕消除黑边；
   /// 与旧自研 toScene + clamp 算法效果一致）。
-  void _onDoubleTap(ExtendedImageGestureState state) {
-    _gestureState = state;
-    final pointerDown = state.pointerDownPosition;
-    if (pointerDown == null) return;
-    final begin = state.gestureDetails?.totalScale ?? 1.0;
-    final zooming = begin <= 1.01;
-    final targetScale = zooming ? _computeDoubleTapTarget() : 1.0;
-    _doubleTapPos = pointerDown;
-    _doubleTapTween = Tween(begin: begin, end: targetScale);
-    _dblTapAnim
-      ..stop()
-      ..value = 0.0;
-    // animateTo 而非 fling：fling(0.4) 经 ClampingSimulation 实际约 1.5s，
-    _dblTapAnim.animateTo(
-      1.0,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.decelerate,
-    );
-  }
-
-  //  coverRatio = max(imgAspect/vpAspect, vpAspect/imgAspect) = cover/contain 倍率，
   double _computeDoubleTapTarget() {
     final ia = _imageAspect;
     // viewport = ExtendedImage 区域：屏宽 - 8（两侧 4px 间隙）、屏高。

@@ -158,6 +158,16 @@ class GestureDetails {
     }
     //var offset = editAction.paintOffset(this.offset);
     if (totalScale! > 1.0) {
+      // [visort patch] 仅当 boundary flag 全为 false(即双击动画帧——app 侧
+      // photo_viewer 的 tick 故意不传 prev gestureDetails)时双轴应用 offset。
+      // 原实现在 flag 全 false 时 return destinationRect.center,会丢弃 offset,
+      // 导致双击锚点(尤其 letterbox 轴/垂直锚点)失效。
+      // 用 flag 而非 actionType 区分:双指捏合也是 ActionType.zoom,但其 flag 由
+      // prev 复制(通常 true),必须走下方原库分轴+clamp 逻辑,否则捏合 offset 双轴
+      // 无约束 → 图像被拖出视口/映射到空白、多次捏合乱跳。
+      if (!_computeHorizontalBoundary && !_computeVerticalBoundary) {
+        return destinationRect.center * totalScale! + offset!;
+      }
       if (_computeHorizontalBoundary && _computeVerticalBoundary) {
         return destinationRect.center * totalScale! + offset!;
       } else if (_computeHorizontalBoundary) {
@@ -184,6 +194,13 @@ class GestureDetails {
 
   Offset _getFixedOffset(Rect destinationRect, Offset center) {
     if (totalScale! > 1.0) {
+      // [visort patch] 与 _getCenter 配套:仅 flag 全 false(双击动画帧)时双轴
+      // 写回 offset(恒等保持,因 center = Dc·s + offset)。原 else 分支返回
+      // center - destinationRect.center 会把 offset 改写成 Dc·(s-1)+offset 破坏
+      // 双击终态。双指捏合(flag true)走下方原库分轴写回。
+      if (!_computeHorizontalBoundary && !_computeVerticalBoundary) {
+        return center - destinationRect.center * totalScale!;
+      }
       if (_computeHorizontalBoundary && _computeVerticalBoundary) {
         return center - destinationRect.center * totalScale!;
       } else if (_computeHorizontalBoundary) {
@@ -225,8 +242,21 @@ class GestureDetails {
     rawDestinationRect = destinationRect;
 
     final Offset? temp = offset;
+    // [visort patch] 记住进入时的 boundary flag:双击动画帧(app 侧 tick 不传 prev
+    // → flag 全 false)。第一次 _innerCalculate 会按铺满情况重算 flag(可能变 true),
+    // 若第二次沿用,会走原库分轴 _getCenter——在垂直铺满临界点(h·s==layoutH)
+    // fv 翻转时丢弃 off.y → rect.y 跳变,表现为「放大快结束时往下掉/往上弹」。
+    // 方形图 dest 短,临界 s≈layoutH/destH≈2.25 < target 2.5 → 必跨临界 → 必触发;
+    // 扁图 dest 更扁,临界 s≈4.0 > target 2.5 → 全程不翻转 → 不触发。双指捏合帧
+    // flag 非 false,不进此分支,保留原库 clamp 行为。
+    final bool initNoBoundary =
+        !_computeHorizontalBoundary && !_computeVerticalBoundary;
     _innerCalculateFinalDestinationRect(layoutRect, destinationRect);
     offset = temp;
+    if (initNoBoundary) {
+      _computeHorizontalBoundary = false;
+      _computeVerticalBoundary = false;
+    }
     Rect result = _innerCalculateFinalDestinationRect(
       layoutRect,
       destinationRect,

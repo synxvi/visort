@@ -195,7 +195,15 @@ class ExtendedImageGesturePageViewState
     if (value != null && !value.mounted) {
       return;
     }
-    extendedImageGestureStates.add(value!);
+    // [visort patch] remove+add 把 state 移到集合末尾，使 getter 的 lastWhere
+    // 返回最近交互的（当前可见）页。原 add 对已存在元素是 no-op，末尾由 build
+    // 顺序决定——allowImplicitScrolling 预渲染的相邻（未放大）页可能排到末尾，
+    // 导致 canHorizontalOrVerticalDrag / canScrollPage 误读相邻页 totalScale=1，
+    // 放大态仍允许翻页 drag（本应平移图片）。_handlePointerDown 绑在 Listener
+    // （gesture arena 之前）调本 setter，把当前页推到末尾，修正后续判定。
+    extendedImageGestureStates
+      ..remove(value)
+      ..add(value!);
   }
 
   final Set<ExtendedImageGestureState?> extendedImageGestureStates =
@@ -348,7 +356,20 @@ class ExtendedImageGesturePageViewState
       pageSnapping: widget.pageSnapping,
       allowImplicitScrolling: widget.allowImplicitScrolling,
       physics: widget.physics,
-      onPageChanged: widget.onPageChanged,
+      onPageChanged: (i) {
+        // [visort patch] 翻页时重置所有页缩放：allowImplicitScrolling 保活预渲染页的
+        // State，离开页 _gestureDetails 会残留放大态；统一重置为默认（新当前页本就
+        // scale=1 无影响），翻回时即回到默认状态（对标系统相册）。
+        for (final gs in extendedImageGestureStates) {
+          if (gs != null && gs.mounted) {
+            gs.gestureDetails = GestureDetails(
+              totalScale: 1.0,
+              offset: Offset.zero,
+            );
+          }
+        }
+        widget.onPageChanged?.call(i);
+      },
     );
 
     if (widget.physics.parent == null ||
