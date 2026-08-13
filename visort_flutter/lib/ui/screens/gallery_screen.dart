@@ -200,9 +200,12 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
       'bucketName': widget.bucket.name,
       'bucketCount': widget.bucket.count,
     };
-    if (rect != null) {
-      pushAlbumGrow(context,
+    if (rect != null && widget.bucket.coverId != null) {
+      pushAlbumFlight(
+          context,
           args: args,
+          cellRect: rect,
+          coverId: widget.bucket.coverId!,
           coverAlignment:
               albumCoverAlignment(rect, MediaQuery.sizeOf(context)));
     } else {

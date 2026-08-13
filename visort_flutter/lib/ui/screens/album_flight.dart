@@ -1,80 +1,151 @@
-// 相册网格由小变大 route —— 进入 AlbumScreen(缩略图网格)
-//
-// 对标系统相册：点击相册一瞬间画面就是缩略图网格（小尺寸），整个网格
-// 由小变大放大到全屏（grow + fade）。不是封面单图拉伸——飞行层封面
-// 方案被用户否决（封面图拉伸变形 + 动画结束瞬切网格，感知更卡）。
-//
-// 实现：
-//   - PageRouteBuilder.transitionsBuilder（route 过渡动画，ColorOS 不降帧）
-//   - child（AlbumScreen 网格）整体 Transform.scale(0.6→1) + Opacity(0.4→1)，
-//     缩放锚点 = 点击的封面位置（网格从封面处"长"出来）
-//   - opaque: false → pop 返回时网格缩小回封面位置，底下页面全程可见
-//     （COUI 式，无"黑→页面瞬现"）
-//
-// 注意：动画期间 AlbumScreen 照常渲染（query 在动画窗口内完成，网格 + 缩略图
-// 渐进可见）——动画主体是网格本身，而不是等待动画结束才显示内容。
+// 相册进入 route —— 网格缩放方案:
+//   - push: page grow(AlbumScreen 网格从小变大 + 淡入,首帧即网格)。
+//   - pop: 网格由大缩小,飞行层用「静态网格快照」(pop 开始 RepaintBoundary.toImage)。
+//     直接缩小实时 AlbumScreen 会因 GridView viewport 变小 → offset clamp + cell
+//     重排,网格滚动一屏以上时飞行层杂乱;快照是静态图,缩小不重排、稳定。
+//     末段封面缩略图淡入接管(与相册 cell 同 provider 同位置,无缝)。
+
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
+import '../../core/fs/image_loader.dart';
 import '../../core/theme/app_animations.dart';
 import 'album_screen.dart';
 import '../router_android.dart';
 
-/// 网格由小变大进入相册。
-///
-/// [args]：与 AlbumRoutes.album 的 pushNamed arguments 相同
-/// （bucketId/bucketName/bucketCount/favoritesOnly/trashedOnly）。
-/// [coverAlignment]：缩放锚点（点击的封面位置，网格从此处放大到全屏）。
-Future<void> pushAlbumGrow(
-  BuildContext context, {
-  required Map<String, dynamic> args,
-  Alignment coverAlignment = Alignment.center,
-}) {
-  return Navigator.of(context).push(PageRouteBuilder<void>(
-    transitionDuration: const Duration(milliseconds: 250),
-    reverseTransitionDuration: const Duration(milliseconds: 180),
-    // pop 返回动画期间底下页面（Home/Gallery）参与合成并可见
-    opaque: false,
-    pageBuilder: (_, _, _) => AlbumScreen(
-      bucketId: args['bucketId']?.toString() ?? '',
-      bucketName: args['bucketName']?.toString(),
-      bucketCount: (args['bucketCount'] as num?)?.toInt(),
-      favoritesOnly: args['favoritesOnly'] == true,
-      trashedOnly: args['trashedOnly'] == true,
-    ),
-    transitionsBuilder: (ctx, anim, _, child) {
-      final isReverse = anim.status == AnimationStatus.reverse;
-      // COUIMoveEase 强 ease-out：网格"冲"到全屏（一加手感）
-      final t = AppCurves.couiMoveEase.transform(anim.value);
-      // 网格由小变大 + 淡入：起点即见（小尺寸半透明），点击瞬间是缩略图
-      final scale = 0.6 + 0.4 * t;
-      final fade = 0.4 + 0.6 * t;
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          // push 垫黑（网格缩小期留白纯黑，与全屏网格背景衔接一致）；
-          // pop 不垫 → 露出底下页面（COUI 式返回）
-          if (!isReverse) const ColoredBox(color: Colors.black),
-          Opacity(
-            opacity: fade,
-            child: Transform.scale(
-              scale: scale,
-              alignment: coverAlignment,
-              child: child,
-            ),
-          ),
-        ],
-      );
-    },
-    settings: const RouteSettings(name: AlbumRoutes.album),
-  ));
-}
-
-/// 封面屏幕 Rect → 缩放锚点 Alignment（封面中心相对屏幕，范围 -1..1）。
-/// 网格将从封面位置"长"出来。
+/// 封面屏幕 Rect → 缩放锚点 Alignment(封面中心相对屏幕,范围 -1..1)。
+/// push 时网格从此处"长"出来,pop 时网格缩回此处。
 Alignment albumCoverAlignment(Rect coverRect, Size screenSize) {
   return Alignment(
     (coverRect.center.dx / screenSize.width) * 2 - 1,
     (coverRect.center.dy / screenSize.height) * 2 - 1,
   );
+}
+
+/// 进入相册网格。
+///
+/// [args]:与 AlbumRoutes.album 的 pushNamed arguments 相同
+///        (bucketId/bucketName/bucketCount/favoritesOnly/trashedOnly)。
+/// [cellRect]:封面缩略图显示区域的全局坐标(pop 飞行层缩回此处)。
+/// [coverId]:封面图 _ID(MsBucket.coverId),pop 末段封面接管 + 预加载。
+/// [coverAlignment]:缩放锚点(封面位置),push 网格从处长出 / pop 网格缩回。
+Future<void> pushAlbumFlight(
+  BuildContext context, {
+  required Map<String, dynamic> args,
+  required Rect cellRect,
+  required String coverId,
+  required Alignment coverAlignment,
+}) {
+  // 静态网格快照:pop 开始 toImage 截图当前网格(用户看到的滚动状态),
+  // 截图完成后飞行层用快照(RawImage cover),避免缩小中 GridView 重排杂乱。
+  final gridKey = GlobalKey();
+  ui.Image? snapshot;
+  var capturing = false;
+  // pop 开始预加载封面(与相册 cell 同 thumbSize),动画期间就绪无跳变。
+  var _precached = false;
+
+  return Navigator.of(context).push(PageRouteBuilder<void>(
+    transitionDuration: const Duration(milliseconds: 400),
+    reverseTransitionDuration: const Duration(milliseconds: 300),
+    // pop 返回时底下相册列表参与合成并可见(COUI 式返回)。
+    opaque: false,
+    pageBuilder: (_, _, _) => RepaintBoundary(
+      key: gridKey,
+      child: AlbumScreen(
+        bucketId: args['bucketId']?.toString() ?? '',
+        bucketName: args['bucketName']?.toString(),
+        bucketCount: (args['bucketCount'] as num?)?.toInt(),
+        favoritesOnly: args['favoritesOnly'] == true,
+        trashedOnly: args['trashedOnly'] == true,
+      ),
+    ),
+    transitionsBuilder: (ctx, anim, _, child) {
+      final size = MediaQuery.sizeOf(ctx);
+      final fullRect = Rect.fromLTWH(0, 0, size.width, size.height);
+      final isReverse = anim.status == AnimationStatus.reverse;
+
+      // pop 开始:截图当前网格(静态飞行层)。截图完成前短暂用实时网格。
+      if (isReverse && !capturing) {
+        capturing = true;
+        final rb = gridKey.currentContext?.findRenderObject()
+            as RenderRepaintBoundary?;
+        if (rb != null && rb.attached) {
+          rb.toImage(pixelRatio: MediaQuery.devicePixelRatioOf(ctx))
+              .then((img) => snapshot = img);
+        }
+      }
+
+      if (!isReverse) {
+        // push: page grow(网格从小变大 + 淡入,锚 coverAlignment)。
+        final t = AppCurves.couiMoveEase.transform(anim.value);
+        final scale = 0.6 + 0.4 * t;
+        final fade = 0.4 + 0.6 * t;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            const ColoredBox(color: Colors.black),
+            Opacity(
+              opacity: fade,
+              child: Transform.scale(
+                scale: scale,
+                alignment: coverAlignment,
+                child: child,
+              ),
+            ),
+          ],
+        );
+      }
+
+      // pop。
+      final dpr = MediaQuery.devicePixelRatioOf(ctx);
+      final thumbSize = (cellRect.width * dpr).round().clamp(96, 512);
+      if (!_precached) {
+        _precached = true;
+        precacheImage(
+          buildThumbnailProvider(
+              imageRefFromMediaStoreId(coverId), size: thumbSize),
+          ctx,
+        );
+      }
+      final t = AppCurves.couiMoveEase.transform(anim.value); // pop 1→0
+      // Positioned layout 缩放(photo viewer 大图→网格同款,不触发 Transform culling)。
+      // rect 从全屏(anim=1)线性缩到 cellRect 四顶点(anim=0)。
+      final rect = Rect.lerp(fullRect, cellRect, 1.0 - t)!;
+      // 飞行层上下沿与缩略图网格对齐(t 接近 0)时,封面缩略图在 cellRect 淡入
+      // 接管——与相册 cell 同 provider 同图同位置,route 移除后无缝衔接。
+      final coverFade = ((0.25 - t) / 0.25).clamp(0.0, 1.0);
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          // 飞行层:截图完成后用静态快照(不随缩小重排);完成前短暂用实时网格。
+          if (snapshot != null)
+            Positioned.fromRect(
+              rect: rect,
+              child: RawImage(image: snapshot!, fit: BoxFit.cover),
+            )
+          else
+            Positioned.fromRect(rect: rect, child: child),
+          // 封面缩略图:缩到 cellRect 对齐时淡入(同 provider 同位置,无缝接管)。
+          if (coverFade > 0)
+            Positioned.fromRect(
+              rect: cellRect,
+              child: Opacity(
+                opacity: coverFade,
+                child: Image(
+                  image: buildThumbnailProvider(
+                      imageRefFromMediaStoreId(coverId), size: thumbSize),
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) =>
+                      const ColoredBox(color: Color(0xFF2A2A2A)),
+                ),
+              ),
+            ),
+        ],
+      );
+    },
+    settings: const RouteSettings(name: AlbumRoutes.album),
+  ));
 }

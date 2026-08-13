@@ -119,19 +119,29 @@ Future<T?> showSpringPopupFromAnchor<T>({
   final dx = anchorGlobalDx - menuLeft;
   final dy = anchorGlobalDy - menuTop;
 
-  // 用自定义 _SpringPopupRoute：override reverseTransitionDuration = 500ms，
-  // 让“展开 1250ms(弹簧) / 收回 500ms”分开（showGeneralDialog 正反共用时长，做不到）。
+  // 用自定义 _SpringPopupRoute：override reverseTransitionDuration = 450ms,
+  // 让“展开 1000ms(弹簧) / 收回 450ms”分开（showGeneralDialog 正反共用时长，做不到）。
   return Navigator.of(context, rootNavigator: true).push<T>(
     _SpringPopupRoute<T>(
       barrierDismissible: dismissible,
       barrierLabel: barrierLabel,
       barrierColor: barrierColor,
-      transitionDuration: const Duration(milliseconds: 1250),
+      transitionDuration: const Duration(milliseconds: 1000),
       // pageBuilder 返回全屏 Stack，菜单用 Positioned 精确定位。
       // ⚠️ 弹簧缩放必须作用在 Positioned.child（菜单本体）上，不能作用在整个 Stack
       // （Stack 左上角是屏幕 0,0，会导致锚点错位——早期 bug：从挖孔弹出）。
       pageBuilder: (ctx, anim, _) => Stack(
         children: [
+          if (dismissible)
+            // 底层屏障：tap / 滑动松手都收回。RawDialogRoute barrier 仅响应 tap，
+            // 此处接管手势让 drag(pan) 松手也 pop（视同点击外部）。
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.of(ctx).maybePop(),
+                onPanEnd: (_) => Navigator.of(ctx).maybePop(),
+              ),
+            ),
           Positioned(
             left: menuLeft,
             top: menuTop,
@@ -180,7 +190,7 @@ class _SpringAnchorScale extends StatelessWidget {
       animation: animation,
       builder: (ctx, _) {
         final sim = AppSprings.simulation(from: 0.0, to: 1.0, spring: spring);
-        final tSec = animation.value * 1.25;
+        final tSec = animation.value * 1.0;
         final s = sim.x(tSec).clamp(0.0, 1.2);
         return Transform(
           alignment: Alignment.topLeft,
@@ -196,7 +206,7 @@ class _SpringAnchorScale extends StatelessWidget {
   }
 }
 
-/// 弹簧弹窗路由：展开用 transitionDuration（1250ms 弹簧），收回独立 500ms。
+/// 弹簧弹窗路由：展开用 transitionDuration（1000ms 弹簧），收回独立 450ms。
 /// showGeneralDialog / RawDialogRoute 的 reverseTransitionDuration 默认 = transitionDuration，
 /// 无法分别设；此处 override getter 让收回独立缩短。
 class _SpringPopupRoute<T> extends RawDialogRoute<T> {
@@ -210,5 +220,5 @@ class _SpringPopupRoute<T> extends RawDialogRoute<T> {
   });
 
   @override
-  Duration get reverseTransitionDuration => const Duration(milliseconds: 500);
+  Duration get reverseTransitionDuration => const Duration(milliseconds: 450);
 }

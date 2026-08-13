@@ -157,10 +157,26 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             .enterBucket(widget.bucketId);
       }
     });
+    // 飞行层稳定性:返回(pop,route reverse)开始时冻结网格滚动——停止滚动惯性
+    // 动画,飞行层(Positioned 缩小的实时渲染)保持静态网格,不与缩小叠加闪烁。
+    _routeAnim = ModalRoute.of(context)?.animation;
+    _routeAnim?.addStatusListener(_onRouteStatus);
+  }
+
+  Animation<double>? _routeAnim;
+
+  void _onRouteStatus(AnimationStatus status) {
+    if (status == AnimationStatus.reverse) {
+      if (_scrollCtrl.hasClients) {
+        // 冻结:跳到当前位置停止惯性滚动;缩小时 viewport 变化不再叠加滚动位移。
+        _scrollCtrl.position.jumpTo(_scrollCtrl.offset);
+      }
+    }
   }
 
   @override
   void dispose() {
+    _routeAnim?.removeStatusListener(_onRouteStatus);
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
     _timelineScrollCtrl.removeListener(_onTimelineScroll);
@@ -1018,8 +1034,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     _flightEndRect = cellRect;
     Navigator.of(context).push(
       PageRouteBuilder(
-        transitionDuration: const Duration(milliseconds: 300),
-        reverseTransitionDuration: const Duration(milliseconds: 200),
+        transitionDuration: const Duration(milliseconds: 400),
+        reverseTransitionDuration: const Duration(milliseconds: 300),
         // ⚠️ opaque: false —— pop 返回动画期间底下 album 网格参与合成并可见
         // （COUI 式返回：viewer 淡出 + 飞行层缩回时网格全程在底下，动画结束
         // 无"黑→网格瞬现"）。push 期网格被下方恒黑垫底层盖住，观感不变；

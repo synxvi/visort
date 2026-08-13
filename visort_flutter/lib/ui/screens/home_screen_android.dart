@@ -1770,10 +1770,12 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
       'bucketName': widget.bucket.name,
       'bucketCount': widget.bucket.count,
     };
-    if (rect != null) {
-      await pushAlbumGrow(
+    if (rect != null && widget.bucket.coverId != null) {
+      await pushAlbumFlight(
         context,
         args: args,
+        cellRect: rect,
+        coverId: widget.bucket.coverId!,
         coverAlignment: albumCoverAlignment(rect, MediaQuery.sizeOf(context)),
       );
     } else {
@@ -1796,9 +1798,10 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
               fit: StackFit.expand,
               children: [
                 GestureDetector(
-                  onTap: () => _openAlbum(coverContext: context),
+                  onTap: _openAlbum,
                   child: LayoutBuilder(
                     builder: (ctx, c) => _CoverThumb(
+                      key: _coverKey,
                       coverId: widget.bucket.coverId,
                       size: c.maxWidth,
                     ),
@@ -1853,7 +1856,7 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
           ),
           const SizedBox(height: 4),
           GestureDetector(
-            onTap: () => _openAlbum(coverContext: context),
+            onTap: _openAlbum,
             behavior: HitTestBehavior.opaque,
             child: Text(
               widget.bucket.name,

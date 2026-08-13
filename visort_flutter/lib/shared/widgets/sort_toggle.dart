@@ -4,7 +4,7 @@
 // 菜单分两段（中间分隔线）：上段 = 维度（3 项），下段 = 方向（2 项），当前选中项打勾。
 //
 // 弹出方式：showSpringPopupFromAnchor —— 从按钮中心 × 菜单顶边弹簧展开，
-// 与首页三点菜单 / 设置选择器动画完全统一（展开 1250ms 弹簧 / 收回 500ms）。
+// 与首页三点菜单 / 设置选择器动画完全统一（展开 1000ms 弹簧 / 收回 450ms）。
 // 不用 PopupMenuButton：它的 showMenu 起点在屏幕边缘、转场是系统默认 fade。
 
 import 'package:flutter/material.dart';

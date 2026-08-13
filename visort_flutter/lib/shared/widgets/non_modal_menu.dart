@@ -141,9 +141,9 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
     super.initState();
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1250),
-      // 收回 500ms（linear 曲线下匀速、看得清又利落；与设置弹窗收回统一）。
-      reverseDuration: const Duration(milliseconds: 500),
+      duration: const Duration(milliseconds: 1000),
+      // 收回 450ms（linear 曲线下匀速、看得清又利落；与弹簧弹窗收回统一）。
+      reverseDuration: const Duration(milliseconds: 450),
     );
     // 展开：弹簧曲线（一加浮动手环：stiffness 158, dampingRatio 0.6）。
     // 收回：couiOutEase（快速起步、极慢收尾 → "嗖"地收回）。
@@ -261,6 +261,8 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: _dismissOnOutsideTap,
+            // 滑动(pan)其他地方松手也收回——视同点击外部(drag 不会触发 onTap)。
+            onPanEnd: (_) => _dismissOnOutsideTap(),
           ),
         ),
         Positioned(
@@ -307,7 +309,7 @@ class _SpringCurve extends Curve {
   @override
   double transformInternal(double t) {
     final sim = AppSprings.simulation(from: 0.0, to: 1.0);
-    final tSec = t * 1.25;
+    final tSec = t * 1.0;
     return sim.x(tSec).clamp(0.0, 1.2);
   }
 }

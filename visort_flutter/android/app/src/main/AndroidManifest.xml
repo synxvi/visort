@@ -51,11 +51,13 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-        <!-- Impeller 渲染后端：临时禁用切回 Skia,排查自定义字体(SpaceMono)在 Impeller
-             下加载失败 fallback 成 sans 的问题(实测字母不等宽)。验证后决定恢复或修 ttf。 -->
+        <!-- Impeller 渲染后端:Skia 下 route transition 缩小(Transform.scale/
+             Positioned)触发 layer culling,整个 route 渲染层中途消失(飞行层
+             缩到一半不见)。Impeller 无此问题,启用。(SpaceMono 字体 fallback
+             问题另行处理。) -->
         <meta-data
             android:name="io.flutter.embedding.android.EnableImpeller"
-            android:value="false" />
+            android:value="true" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
