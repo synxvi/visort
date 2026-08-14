@@ -48,7 +48,7 @@ Future<void> pushAlbumFlight(
 
   return Navigator.of(context).push(PageRouteBuilder<void>(
     transitionDuration: const Duration(milliseconds: 400),
-    reverseTransitionDuration: const Duration(milliseconds: 300),
+    reverseTransitionDuration: const Duration(milliseconds: 280),
     // pop 返回时底下相册列表参与合成并可见(COUI 式返回)。
     opaque: false,
     pageBuilder: (_, _, _) => RepaintBoundary(
@@ -126,7 +126,11 @@ Future<void> pushAlbumFlight(
               child: RawImage(image: snapshot!, fit: BoxFit.cover),
             )
           else
-            Positioned.fromRect(rect: rect, child: child),
+            // 截图完成前:实时网格保持全屏(不随 rect 缩小)。直接用 rect 缩小会让
+            // SliverGrid 的 cell 随 viewport 等比缩小 → 行高变 → 可见行数跳变 →
+            // 内容重排跳动(沉浸抖;日期 SliverList cell 高固定不抖)。全屏保持到
+            // 截图就绪,再切 RawImage 缩小(静态快照不重排)。
+            Positioned.fromRect(rect: fullRect, child: child),
           // 封面缩略图:缩到 cellRect 对齐时淡入(同 provider 同位置,无缝接管)。
           if (coverFade > 0)
             Positioned.fromRect(

@@ -166,12 +166,11 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   Animation<double>? _routeAnim;
 
   void _onRouteStatus(AnimationStatus status) {
-    if (status == AnimationStatus.reverse) {
-      if (_scrollCtrl.hasClients) {
-        // 冻结:跳到当前位置停止惯性滚动;缩小时 viewport 变化不再叠加滚动位移。
-        _scrollCtrl.position.jumpTo(_scrollCtrl.offset);
-      }
-    }
+    // pop(reverse)开始时曾用 _scrollCtrl.jumpTo(offset) 冻结滚动惯性,但 jumpTo
+    // 即使值相同也会触发 ScrollPosition.notifyListeners() → GridView /
+    // ScrollDragHandle 重算 → 动画一开始内容上下跳一下(沉浸抖;日期视图的
+    // _timelineScrollCtrl 不 jumpTo 故不抖)。飞行层用静态截图(RawImage),
+    // 惯性只影响截图完成前 1-2 帧,可忽略,故移除。
   }
 
   @override
@@ -1035,7 +1034,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     Navigator.of(context).push(
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 400),
-        reverseTransitionDuration: const Duration(milliseconds: 300),
+        reverseTransitionDuration: const Duration(milliseconds: 280),
         // ⚠️ opaque: false —— pop 返回动画期间底下 album 网格参与合成并可见
         // （COUI 式返回：viewer 淡出 + 飞行层缩回时网格全程在底下，动画结束
         // 无"黑→网格瞬现"）。push 期网格被下方恒黑垫底层盖住，观感不变；
@@ -1053,9 +1052,12 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           // overlay 盖住）。栏黑底不参与淡入（见 photo_viewer _insertBars），故
           // 飞行层图进栏区域、completed 切换均不闪。
           final fullRect = Rect.fromLTWH(4, 0, size.width - 8, size.height);
-          // COUIMoveEase 替代原 linear：强 ease-out，图"冲"到全屏而非匀速滑入。
-          // 原 linear 已验证可用但略机械；couiMoveEase 更贴近一加手感。
-          final t = AppCurves.couiMoveEase.transform(anim.value);
+          // rect/black 用 Material 标准曲线 Curves.fastOutSlowIn（Cubic(0.4,0,0.2,1)）
+          // —— Flutter/Android 官方共享元素与缩放过渡的标配。比 couiMoveEase 温和
+          // （起步不冲 → 第一行竖图 cellRect.top≈targetRect.top 时 size 不"喷出抖动"），
+          // 比 couiEase 自然（偏 ease-out，收尾不拖沓）。baseBlack 飞行层淡入仍 linear。
+          final t = anim.value; // baseBlack 飞行层淡入（linear）
+          final tEase = Curves.fastOutSlowIn.transform(anim.value); // rect/black
           final endRect = _flightEndRect;
           // 飞行层：图 cover 填满渲染矩形（无 contain 留白方向跳变重影），渲染矩形
           // 从 cellRect 线性插值到 containFullRect（图在全屏的实际占位）。
@@ -1083,7 +1085,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           } else {
             targetRect = fullRect;
           }
-          final rect = Rect.lerp(endRect ?? targetRect, targetRect, t)!;
+          final rect = Rect.lerp(endRect ?? targetRect, targetRect, tEase)!;
           // ⚠️ showFlight 必须用 status 判断（不能用 anim.value < 1）：
           // completed 后 transitionsBuilder 不再 rebuild，若黑底留在树里会
           // 永远盖住 viewer。pop 触发时 status 变 reverse → 飞行层重新出现。
@@ -1104,7 +1106,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           // ⚠️ pop 返回时 black=0：配合 opaque:false 让底下相册网格全程可见
           // （COUI 式返回），viewer 淡出 + 飞行层缩回时网格透出，动画结束
           // 无"黑→网格瞬现"。
-          final black = isReverse ? 0.0 : (1.0 - t).clamp(0.0, 1.0) * 0.95;
+          final black = isReverse ? 0.0 : (1.0 - tEase).clamp(0.0, 1.0) * 0.95;
           return Stack(
             fit: StackFit.expand,
             children: [
