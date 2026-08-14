@@ -148,12 +148,27 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 由 PageView 之外捕获再分发到当前页）。
   final Map<int, void Function(Offset globalPosition)> _doubleTapHandlers =
       <int, void Function(Offset)>{};
+
+  /// 顶/底栏/缩略图条/详情面板挂 root Overlay（Hero 飞行层之上）：
+  /// Hero flight overlay 插在 Navigator overlay 最上，页面 Stack 内的栏
+  /// 会被飞行层盖住（高图飞行满屏时图片冒到栏上、结束又落回栏下的闪烁）。
+  /// initState postFrame 注册晚于 HeroController 的 postFrame（didChangeTop
+  /// 在 push 事务中先注册）→ entry 插入在 flight overlay 之上（主分支
+  /// _barEntry 同款时序）。
+  OverlayEntry? _chromeEntry;
   Offset? _lastDoubleTapDown;
 
   @override
   void initState() {
     super.initState();
     _files = List.of(widget.files);
+    // 栏入 root Overlay（时序注释见 _chromeEntry 声明）。postFrame：
+    // Overlay.of 需要 mounted context。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _chromeEntry = OverlayEntry(builder: _buildChromeOverlay);
+      Overlay.of(context).insert(_chromeEntry!);
+    });
     _selectedIndexNotifier = ValueNotifier(widget.initialIndex);
     _pageController = PageController(initialPage: widget.initialIndex);
     _thumbScrollCtrl = ScrollController()..addListener(_onThumbScroll);
@@ -170,8 +185,42 @@ class _DetailPageState extends ConsumerState<DetailPage>
     });
   }
 
+  Animation<double>? _routeAnimation;
+  bool _routeStatusHooked = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // route 动画 status 监听（只挂一次）：dismissed → 移除栏。
+    if (!_routeStatusHooked) {
+      final anim = ModalRoute.of(context)?.animation;
+      if (anim != null) {
+        _routeStatusHooked = true;
+        _routeAnimation = anim;
+        anim.addStatusListener(_onRouteAnimationStatus);
+      }
+    }
+  }
+
+
+  void _onRouteAnimationStatus(AnimationStatus status) {
+    // 返回动画结束：立即移除栏。PageRouteBuilder(opaque:false) 下页面
+    // dispose 延迟甚至不触发，栏挂 root Overlay 不随 route 消失，必须
+    // 主动 remove（否则返回相册后栏残留覆盖网格）。
+    if (status == AnimationStatus.dismissed) {
+      _removeChromeEntry();
+    }
+  }
+
+  void _removeChromeEntry() {
+    _chromeEntry?.remove();
+    _chromeEntry = null;
+  }
+
   @override
   void dispose() {
+    _routeAnimation?.removeStatusListener(_onRouteAnimationStatus);
+    _removeChromeEntry();
     isZoomedNotifier.removeListener(_onZoomedForImmersive);
     _pageController.dispose();
     _selectedIndexNotifier.dispose();
@@ -213,8 +262,33 @@ class _DetailPageState extends ConsumerState<DetailPage>
     return _files[index];
   }
 
+  /// 栏 OverlayEntry 内容（与原 Stack 顺序一致：filmstrip < 顶栏 < 底栏 <
+  /// 面板；面板 z 序最高，展开时覆盖缩略图条区域）。Material 提供栏组件
+  /// 的默认文本/ink 语境（原在 Scaffold 内）。
+  Widget _buildChromeOverlay(BuildContext _) {
+    return Material(
+      type: MaterialType.transparency,
+      child: Stack(
+        children: [
+          // 底栏缩略图条（filmstrip）
+          _buildThumbLine(),
+          // 顶栏
+          _buildTopBar(),
+          // 底栏 + 详情面板
+          _buildBottomOverlay(),
+          if (_detailsOpen && _panelCtrl != null)
+            _buildPanelOverlay(_selectedFile),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // 页面 setState（栏相关字段：_detailsOpen/_panelCtrl/_files 等）顺带
+    // 刷新栏 entry（OverlayEntry 不随页面 rebuild；ValueListenable 部分
+    // 由内嵌 ValueListenableBuilder 自行响应）。
+    _chromeEntry?.markNeedsBuild();
     if (_files.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) Navigator.maybePop(context);
@@ -260,14 +334,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
                   },
                   child: _buildPageView(),
                 ),
-                // 底栏缩略图条（filmstrip）
-                _buildThumbLine(),
-                // 顶栏
-                _buildTopBar(),
-                // 底栏 + 详情面板（面板 z 序最高，展开时覆盖缩略图条区域）
-                _buildBottomOverlay(),
-                if (_detailsOpen && _panelCtrl != null)
-                  _buildPanelOverlay(_selectedFile),
               ],
             ),
           ),
