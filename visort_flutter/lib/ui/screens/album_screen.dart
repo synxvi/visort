@@ -155,11 +155,25 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     });
     // 飞行层稳定性:返回(pop,route reverse)开始时冻结网格滚动——停止滚动惯性
     // 动画,飞行层(Positioned 缩小的实时渲染)保持静态网格,不与缩小叠加闪烁。
-    _routeAnim = ModalRoute.of(context)?.animation;
-    _routeAnim?.addStatusListener(_onRouteStatus);
+    // ModalRoute.of 依赖 _ModalScopeStatus(inherited)，initState 调用会触发
+    // dependOnInheritedWidgetOfExactType assert（debug 构建）→ didChangeDependencies。
   }
 
   Animation<double>? _routeAnim;
+  bool _routeStatusHooked2 = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_routeStatusHooked2) {
+      final anim = ModalRoute.of(context)?.animation;
+      if (anim != null) {
+        _routeStatusHooked2 = true;
+        _routeAnim = anim;
+        anim.addStatusListener(_onRouteStatus);
+      }
+    }
+  }
 
   void _onRouteStatus(AnimationStatus status) {
     // pop(reverse)开始时曾用 _scrollCtrl.jumpTo(offset) 冻结滚动惯性,但 jumpTo

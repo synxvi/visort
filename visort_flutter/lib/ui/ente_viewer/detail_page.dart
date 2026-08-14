@@ -168,6 +168,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
       if (!mounted) return;
       _chromeEntry = OverlayEntry(builder: _buildChromeOverlay);
       Overlay.of(context).insert(_chromeEntry!);
+      // filmstrip 在 overlay 内：本帧插入、下一帧才 build——嵌套一个
+      // postFrame 等它挂载后再居中（_centerThumbOnce 幂等，多路径安全）。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _centerThumbOnce();
+      });
       // pop flight（SDK patch HeroController.didPop 同步启动）的 overlay
       // 插在最上，会盖住栏——flight 插入后同帧重插栏（保持栏在飞行层
       // 之上，消失时机不变）。
@@ -180,13 +185,25 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // 沉浸模式：进入缩放（双击/双指放大）→ 隐藏顶/底栏/缩略图条；
     // 退出缩放 → 恢复进入前的显示状态（手动全屏过则保持全屏）。
     isZoomedNotifier.addListener(_onZoomedForImmersive);
-    // 首帧定位到当前 index 居中（等 layout 就绪）。
+    // 首帧定位到当前 index 居中。注意：filmstrip 在 OverlayEntry 里
+    //（_chromeEntry postFrame 才插入，下一帧才 build）——postFrame 里
+    // hasClients 恒 false（跳过早于挂载），改由 ScrollController 检测
+    // 首次 attach（hasClients 翻转）后居中，覆盖任意 build 时序。
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ctrl = _thumbScrollCtrl;
-      if (mounted && ctrl != null && ctrl.hasClients) {
-        ctrl.jumpTo(_thumbOffsetForCenter(widget.initialIndex));
-      }
+      _centerThumbOnce();
     });
+  }
+
+  bool _thumbCentered = false;
+
+  /// filmstrip 首次就绪（hasClients）后居中到进入时的图片（只执行一次）。
+  void _centerThumbOnce() {
+    final ctrl = _thumbScrollCtrl;
+    if (_thumbCentered || ctrl == null || !ctrl.hasClients) return;
+    final pos = ctrl.position;
+    if (!pos.hasContentDimensions) return;
+    _thumbCentered = true;
+    ctrl.jumpTo(_thumbOffsetForCenter(widget.initialIndex));
   }
 
   Animation<double>? _routeAnimation;
