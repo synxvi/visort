@@ -124,7 +124,8 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
     } else {
       _allowFull = tr.status == AnimationStatus.completed;
     }
-    // 顶/底栏插入 Navigator Overlay（route 之上）：点击打开立即浮现（50ms 淡入），
+    // 顶/底栏 + 缩略图条 postFrame 立即插入（动画开始就出现）——用户要求。
+    // 扁图打开中段卡顿与栏无关（延迟插入后仍卡），另行排查。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _insertBars();
@@ -138,10 +139,14 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
     if (status == AnimationStatus.completed && mounted && !_allowFull) {
       setState(() => _allowFull = true);
     }
-    // 返回动画一开始(reverse)就淡出顶/底栏——缩放飞行期间栏立即消失,不再
-    // 拖到动画结束后(dismissed)才 remove,消除"栏滞留到最后一刻"的延迟感。
+    // 返回动画一开始(reverse)顶/底栏**立即隐藏**（value 跳到 0，不淡出）——
+    // Hero 缩放飞行期画面只留图片。若走 _chromeFade.reverse() 的 200ms 淡出，
+    // 栏淡出与飞行层并行，返回瞬间多元素同帧变化，观感是"闪烁竞争"。
+    // （编程 pop 的 Hero pop flight 由 SDK patch 的 HeroController.didPop 补启动，
+    // 见 packages/flutter/src/widgets/heroes.dart——手动 didStartUserGesture 方案
+    // 因 pop 状态 willBePresent=false 找不到 viewer route 而无效，已废弃。）
     if (status == AnimationStatus.reverse) {
-      _chromeFade.reverse();
+      _chromeFade.value = 0.0;
     }
     // 返回动画结束（dismissed）：立即移除栏。PageRouteBuilder(opaque:false) 下
     // page 的 dispose 会延迟甚至不触发，而栏挂在 root Overlay 不随 route 消失，
@@ -754,6 +759,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
 
   @override
   Widget build(BuildContext context) {
+    final cols = ref.watch(configProvider).photoGridColumns;
     _viewerTargetWidth = computeViewerTargetWidth(
       MediaQuery.sizeOf(context).width * MediaQuery.devicePixelRatioOf(context),
     );
@@ -831,6 +837,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
                           child: _BigImage(
                             info: info,
                             active: i == _index,
+                            gridCols: cols,
                             loadFull: _allowFull,
                             onTapChrome: _toggleChrome,
                             onSwipeUp: () => _showDetails(info),
@@ -1330,6 +1337,7 @@ class _BigImage extends StatefulWidget {
   const _BigImage({
     required this.info,
     required this.active,
+    required this.gridCols,
     required this.onTapChrome,
     this.loadFull = false,
     this.onZoomStateChanged,
@@ -1338,6 +1346,10 @@ class _BigImage extends StatefulWidget {
   });
   final MsImageInfo info;
   final bool active;
+
+  /// 网格列数：计算与相册 cell 完全一致的缩略图尺寸（ImageCache key 相同 →
+  /// 飞行层/Hero shuttle 首帧直接命中 cell 已加载的缩略图,不重新解码）。
+  final int gridCols;
   final VoidCallback onTapChrome;
 
   /// _openViewer 的 precacheImage 在点击瞬间发起，此处只门控原图层进树时机。
@@ -1586,8 +1598,7 @@ class _BigImageState extends State<_BigImage>
         : null;
     final screen = MediaQuery.sizeOf(context);
     final vpW = screen.width - 8;
-    final vpH = screen.height;
-    // contain 尺寸（图在 (w-8,h) 内 contain 的实际占位）。Hero destination 用此
+    final vpH = screen.height;    // contain 尺寸（图在 (w-8,h) 内 contain 的实际占位）。Hero destination 用此
     // SizedBox 包 ExtendedImage → destination bounds = contain rect（非全屏布局
     // 区域），飞行层 cover contain rect = contain（无溢出），避免 cover 全屏 →
     // completed contain 的"先大后小"过冲。
@@ -1613,6 +1624,9 @@ class _BigImageState extends State<_BigImage>
             tag: widget.active
                 ? 'photo_${widget.info.id}'
                 : 'viewonly_${widget.info.id}',
+            // 编程 pop 需手动模拟 user gesture 触发 flight（见 _onTransitionStatus
+            // reverse 分支），Hero 默认 transitionOnUserGestures=false 会拒绝收集。
+            transitionOnUserGestures: true,
             createRectTween: (begin, end) {
               // begin/end 一个是 cellRect(小),一个是 ExtendedImage 全屏 bounds。
               // 把全屏(≥vpW×vpH)改写为 containRect → 飞行层 cover contain = 无溢出,
@@ -1635,15 +1649,59 @@ class _BigImageState extends State<_BigImage>
                 widget.info.id,
                 extension: extOf(widget.info.name),
               );
-              return Image(
-                image: widget.loadFull
-                    ? _providerFor(heroRef)
-                    : buildThumbnailProvider(heroRef, size: 300),
+              // 底层与网格 cell 完全同款缩略图:cache key 一致 → 飞行层首帧直接
+              // 命中 cell 已加载的图,立即有内容(否则重新解码,黑遮罩先出、动画
+              // 后开始,且解码渐清晰与缩放打架)。
+              final cellThumb = Image(
+                image: buildThumbnailProvider(heroRef,
+                    size: _cellThumbSize(flightContext)),
                 // 全程 cover:push destination=containRect(viewer createRectTween fix)、
                 // pop source=containRect(cell createRectTween fix),cover containRect=
                 // contain 无溢出,cover cellRect=与 cell 一致无末段 contain→cover 跳变。
                 fit: BoxFit.cover,
                 gaplessPlayback: true,
+              );
+              // push：动画前 85% 用 cell 缩略图（零解码零上传，流畅）——但
+              // flight 移除前 shuttle 还盖在 viewer 上，completed 瞬间缩略图
+              // → 原图跳变 = "进去后一两帧模糊"。末段（value>0.85）提前切
+              // 原图（precache 命中立即）→ completed 时 shuttle 已是原图，
+              // 与 viewer 无缝。pop 才可能叠原图（且仅 cache 命中时）。
+              if (type == HeroFlightDirection.push || !widget.loadFull) {
+                if (type == HeroFlightDirection.pop) return cellThumb;
+                final fullProvider = _providerFor(heroRef);
+                final hit = PaintingBinding.instance.imageCache
+                    .containsKey(fullProvider);
+                return AnimatedBuilder(
+                  animation: animation,
+                  builder: (_, __) => Image(
+                    image: (hit && animation.value > 0.85)
+                        ? fullProvider
+                        : buildThumbnailProvider(heroRef,
+                            size: _cellThumbSize(flightContext)),
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  ),
+                );
+              }
+              // pop:清晰图叠在缩略图上——但**仅当原图已在 ImageCache**时才叠：
+              // 第一次打开时 precache 的 IO+解码可能未在 push 动画内完成 → pop 时
+              // miss → 若叠上去会重新解码，与 280ms 返回动画并行 → 返回动画卡
+              // （用户观察"第一次返回不流畅、第二次 cache 命中后流畅"）。
+              // miss 时只用缩略图：返回动画零解码流畅优先，原图下次打开命中。
+              final fullProvider = _providerFor(heroRef);
+              if (!PaintingBinding.instance.imageCache.containsKey(fullProvider)) {
+                return cellThumb;
+              }
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  cellThumb,
+                  Image(
+                    image: fullProvider,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  ),
+                ],
               );
             },
             // Hero 在 contain 尺寸 SizedBox 内 → Hero bounds = contain rect(非全屏),
@@ -1652,7 +1710,7 @@ class _BigImageState extends State<_BigImage>
             child: ExtendedImage(
         image: widget.loadFull
             ? _providerFor(ref)
-            : buildThumbnailProvider(ref, size: 300),
+            : buildThumbnailProvider(ref, size: _cellThumbSize(context)),
         fit: BoxFit.contain,
         // 用户反馈"采样分辨率特别差"）；medium 与 InteractiveViewer 时代观感一致。
         filterQuality: FilterQuality.medium,
@@ -1680,7 +1738,7 @@ class _BigImageState extends State<_BigImage>
           if (state.extendedImageLoadState == LoadState.loading) {
             state.returnLoadStateChangedWidget = true;
             return Image(
-              image: buildThumbnailProvider(ref, size: 300),
+              image: buildThumbnailProvider(ref, size: _cellThumbSize(context)),
               fit: BoxFit.contain,
               gaplessPlayback: true,
               errorBuilder: (ctx, error, stack) => const Center(
@@ -1767,11 +1825,24 @@ class _BigImageState extends State<_BigImage>
     _trackLast = null;
   }
 
+  /// 与相册网格 cell 完全一致的缩略图尺寸（cell 宽 × dpr,clamp 160~512）。
+  /// ImageCache key 由 provider+size 决定——与 cell 同款才能命中 cell 已
+  /// 加载的缩略图，避免飞行层/Hero shuttle 首帧重新解码（黑屏/先黑再动画）。
+  int _cellThumbSize(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final cellW = (mq.size.width - 8 - (widget.gridCols - 1) * 3) / widget.gridCols;
+    return (cellW * mq.devicePixelRatio).round().clamp(160, 512);
+  }
+
   ImageProvider _providerFor(ImageRef ref) {
     if (_isGif || _hdTriggered) {
       return buildImageProvider(ref, targetWidth: null);
     }
-    if (_fullLoaded) {
+    // loadFull（route completed）后直接原图：点击瞬间 precache 已提前解码，
+    // ImageCache 命中 → 立即清晰（不再等 _fullLoaded 的"缩略图先显示→postFrame
+    // 再切原图"两帧延迟——那是动画结束后模糊一两帧的根因，即使 cache 已命中）。
+    // 原图 miss（罕见）时由 loadStateChanged 的 loading 分支用缩略图兜底。
+    if (widget.loadFull || _fullLoaded) {
       return buildImageProvider(
         ref,
         targetWidth: computeViewerTargetWidth(
@@ -1780,7 +1851,7 @@ class _BigImageState extends State<_BigImage>
         ),
       );
     }
-    return buildThumbnailProvider(ref, size: 300);
+    return buildThumbnailProvider(ref, size: _cellThumbSize(context));
   }
 }
 

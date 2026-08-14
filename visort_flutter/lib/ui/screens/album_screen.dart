@@ -903,16 +903,50 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// - 翻回原位 → 恢复打开时的网格视口
   /// 滚动在 viewer 打开期间后台执行（用户无感），返回时目标行已在正确位置
   ///（缩略图也随滚动预加载）。
+  /// 沉浸视图(双轴 GridView)与日期视图(单 SliverList:组头 30 + 行 cellH)
+  /// 布局不同,各用独立 ScrollController,目标 offset 需按视图计算。
   void _scrollToCellRow(int index) {
-    if (!_scrollCtrl.hasClients) return;
     final cols = ref.read(configProvider).photoGridColumns;
     final gridBox = _gridKey.currentContext?.findRenderObject();
     if (gridBox is! RenderBox) return;
     final cellW = (gridBox.size.width - 8 - (cols - 1) * 3) / cols;
+    final ctrl = _timelineView ? _timelineScrollCtrl : _scrollCtrl;
+    if (!ctrl.hasClients) return;
+    final viewportH = gridBox.size.height;
+    double target;
+    if (_timelineView) {
+      // 日期视图:累加 photos[index] 所在行之前的 item 高度(组头 30 / 行 cellH)
+      // 得该行顶部 offset。
+      final cellH = cellW + 3;
+      var offset = 0.0;
+      for (var j = 0; j < _flat.length; j++) {
+        final f = _flat[j];
+        if (f < 0) {
+          offset += 30; // _DateHeaderRow 固定高
+          continue;
+        }
+        if (index >= f && index < _flatRowEnd[j]) {
+          double t;
+          if (index == _openViewerIndex) {
+            t = _openScrollOffset;
+          } else if (index > _openViewerIndex) {
+            // 贴底：目标行成为视口最后一行（最小滚动）
+            final viewportRows = (viewportH / cellH).floor();
+            t = offset - (viewportRows - 1) * cellH;
+          } else {
+            // 贴顶：目标行成为视口第一行
+            t = offset;
+          }
+          _jumpToCell(ctrl, t);
+          return;
+        }
+        offset += cellH;
+      }
+      return;
+    }
     final rowExtent = cellW + 3;
     final row = index ~/ cols;
-    final viewportRows = (gridBox.size.height / rowExtent).floor();
-    double target;
+    final viewportRows = (viewportH / rowExtent).floor();
     if (index == _openViewerIndex) {
       target = _openScrollOffset;
     } else if (index > _openViewerIndex) {
@@ -922,7 +956,11 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       // 贴顶：目标行成为视口第一行
       target = row * rowExtent;
     }
-    _scrollCtrl.jumpTo(target.clamp(0.0, _scrollCtrl.position.maxScrollExtent));
+    _jumpToCell(ctrl, target);
+  }
+
+  void _jumpToCell(ScrollController ctrl, double target) {
+    ctrl.jumpTo(target.clamp(0.0, ctrl.position.maxScrollExtent));
   }
 
   void _openViewer(
@@ -933,7 +971,28 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     Rect? cellRect,
   ) {
     _openViewerIndex = index;
-    _openScrollOffset = _scrollCtrl.hasClients ? _scrollCtrl.offset : 0;
+    // 按视图记录打开时的滚动 offset（日期视图用独立 controller，翻回原位时恢复）。
+    _openScrollOffset = _timelineView
+        ? (_timelineScrollCtrl.hasClients ? _timelineScrollCtrl.offset : 0)
+        : (_scrollCtrl.hasClients ? _scrollCtrl.offset : 0);
+    // 点击瞬间发起原图（1152 物理宽下采样，~1MP）precache：IO+解码与 400ms 动画
+    // 并行，动画结束（completed）时 cache 命中 → viewer 立即清晰。此前试过移除
+    // precache 或延后到动画尾部——动画结束后明显模糊（渐进加载），且扁图卡顿
+    // 与 precache 无关（移除后仍卡，另行排查），故恢复点击瞬间版。
+    // targetWidth 必须与 photo_viewer computeViewerTargetWidth 同值（ImageCache key）。
+    final info = photos[index];
+    final imgRef = imageRefFromMediaStoreId(
+        info.id, extension: extOf(info.name));
+    precacheImage(
+      buildImageProvider(
+        imgRef,
+        targetWidth: computeViewerTargetWidth(
+          MediaQuery.sizeOf(context).width *
+              MediaQuery.devicePixelRatioOf(context),
+        ),
+      ),
+      context,
+    );
     Navigator.of(context).push(
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 400),
@@ -1020,6 +1079,9 @@ class _PhotoCell extends StatelessWidget {
         children: [
             Hero(
               tag: 'photo_${info.id}',
+              // 编程 pop 需手动模拟 user gesture 触发 flight（viewer _onTransitionStatus
+              // reverse 分支），Hero 默认 transitionOnUserGestures=false 会拒绝收集。
+              transitionOnUserGestures: true,
               // pop 时 destination=cell,source=viewer 全屏 bounds。把全屏 fix 成
               // containRect(与 viewer createRectTween 同款)→ flightShuttleBuilder 全程
               // cover:cover containRect=contain 无溢出,cover cellRect=与 cell 一致,
