@@ -371,8 +371,11 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     /// 设备总内存（MB）。[ente 对齐] 解码防崩阈值：RAM < 5GB → 24MP 上限，
     /// 否则 100MP（ente zoomable_image _maxImagePixels，防 flutter/flutter#110331）。
     private fun handleTotalRamMb(result: Result) {
+        val act = activity ?: run {
+            result.error(MsError.InvalidArg("Activity 未绑定").code, null, null); return
+        }
         try {
-            val am = context.getSystemService(android.content.Context.ACTIVITY_SERVICE)
+            val am = act.getSystemService(android.content.Context.ACTIVITY_SERVICE)
                 as android.app.ActivityManager
             val info = android.app.ActivityManager.MemoryInfo()
             am.getMemoryInfo(info)

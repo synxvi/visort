@@ -19,6 +19,7 @@ import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/shared/widgets/press_scale.dart';
+import 'album_flight.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/ui/router_android.dart';
 
@@ -213,13 +214,27 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
   final GlobalKey _coverKey = GlobalKey();
 
   void _open() {
+    // 封面缩略图的屏幕坐标：grow 飞行层动画起点（封面放大到全屏）。
+    final box = _coverKey.currentContext?.findRenderObject();
+    final rect = (box is RenderBox && box.attached)
+        ? box.localToGlobal(Offset.zero) & box.size
+        : null;
     final args = {
       'bucketId': widget.bucket.id,
       'bucketName': widget.bucket.name,
       'bucketCount': widget.bucket.count,
     };
-    // 动画对齐 ente：统一 200ms 淡入（原封面 grow 飞行层已移除）。
-    Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
+    if (rect != null && widget.bucket.coverId != null) {
+      pushAlbumFlight(
+        context,
+        args: args,
+        cellRect: rect,
+        coverId: widget.bucket.coverId!,
+        coverAlignment: albumCoverAlignment(rect, MediaQuery.sizeOf(context)),
+      );
+    } else {
+      Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
+    }
   }
 
   @override

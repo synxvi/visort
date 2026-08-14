@@ -26,8 +26,8 @@ import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 
+import 'package:visort_flutter/ui/ente_viewer/detail_page.dart';
 import 'album_common.dart';
-import 'photo_viewer.dart';
 
 class AlbumScreen extends ConsumerStatefulWidget {
   const AlbumScreen({
@@ -1027,14 +1027,12 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 200),
         reverseTransitionDuration: const Duration(milliseconds: 200),
-        // opaque:false —— pop 返回时底下相册网格参与合成可见(COUI 式返回)。
+        // opaque:false —— pop 返回时底下相册网格参与合成可见。
         opaque: false,
-        // Hero 接管缩放飞行(网格 cell Hero → viewer _BigImage Hero)。viewer route
-        // 仅用 status 门控可见性——飞行期(forward/reverse)viewer 隐藏(Hero 飞行层
-        // 在 overlay 独占),completed 后显现。这样避免 PageView allowImplicitScrolling
-        // 预渲染的 ±1 页 ExtendedImage 随 fade 一起淡入(看起来多张图飞行)。
-        // 黑遮罩(push 期)盖底层 album 的 cell 空缺(Hero source 移到 overlay)+ 网格;
-        // pop 不盖(opaque:false 下网格全程可见,COUI 式返回)。
+        // Hero 接管缩放飞行(网格 cell Hero → DetailPage 的 photo_view Hero)。
+        // viewer route 仅用 status 门控可见性——飞行期(forward/reverse)viewer
+        // 隐藏(Hero 飞行层在 overlay 独占),completed 后显现。
+        // 黑遮罩(push 期)盖底层 album 的 cell 空缺;pop 不盖(网格全程可见)。
         transitionsBuilder: (ctx, anim, _, child) {
           final status = anim.status;
           final isCompleted = status == AnimationStatus.completed;
@@ -1048,17 +1046,11 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             ],
           );
         },
-        // pageBuilder 的 anim 与 transitionsBuilder 的 anim 是同一个 route 动画：
-        // 传给 viewer 用于门控 2880 原图加载时机（completed 前不加载，见 PhotoViewer）。
-        pageBuilder: (_, anim, _) => PhotoViewer(
-          photos: photos,
+        // pageBuilder 的 anim 与 transitionsBuilder 的 anim 是同一个 route 动画。
+        pageBuilder: (_, anim, _) => DetailPage(
+          files: photos,
           initialIndex: index,
-          hasMore: ref.read(galleryControllerProvider).hasMore,
-          totalCount: widget.bucketCount,
-          onLoadMore: () =>
-              ref.read(galleryControllerProvider.notifier).loadMore(),
           onIndexChanged: _onViewerIndexChanged,
-          transition: anim,
         ),
         settings: const RouteSettings(name: AlbumRoutes.photoViewer),
         fullscreenDialog: true,

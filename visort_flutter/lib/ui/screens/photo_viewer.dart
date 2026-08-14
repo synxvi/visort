@@ -1574,7 +1574,18 @@ class _BigImageState extends State<_BigImage>
               return RectTween(begin: fb, end: fe);
             },
             // 飞行层用普通 Image(非 ExtendedImage):gesture state 在 overlay 飞行
-            // 期间异常(缩放/位移残留)。普通 Image cover 填满飞行 rect。
+            // 期间异常(缩放/位移残留)。
+            //
+            // [ente 对齐] 关键修复：shuttle 全程 fit: contain（原 cover）。
+            // 根因：Hero 飞行层 Overlay 用 Positioned(left/right/top/bottom)
+            // 强制拉伸 shuttle 填满飞行矩形（heroes.dart _buildOverlay）。
+            // cover 时图片内容随矩形（方形 cell → contain 矩形）持续重排裁剪
+            // = "由大到小/中间插帧变形"；且终点 cover 与 viewer 的 contain
+            // 不一致 → completed 瞬间跳变。ente photo_view 的 shuttle（Image
+            // fit: contain + 固定尺寸）内容不变形、矩形线性过渡 = 丝滑。
+            // 双层：缩略图 contain 底层（cache 命中立即有图，防空白）+ 原图
+            // contain 上层（缓存命中立即覆盖；miss 时飞行中渐进解码，与
+            // ente 一致）。终点与 viewer 首层同 provider 同 contain → 无缝。
             flightShuttleBuilder:
                 (flightContext, animation, type, fromHeroContext, toHeroContext) {
               final heroRef = imageRefFromMediaStoreId(
@@ -1587,41 +1598,15 @@ class _BigImageState extends State<_BigImage>
               final cellThumb = Image(
                 image: buildThumbnailProvider(heroRef,
                     size: _cellThumbSize(flightContext)),
-                // 全程 cover:push destination=containRect(viewer createRectTween fix)、
-                // pop source=containRect(cell createRectTween fix),cover containRect=
-                // contain 无溢出,cover cellRect=与 cell 一致无末段 contain→cover 跳变。
-                fit: BoxFit.cover,
+                fit: BoxFit.contain,
                 gaplessPlayback: true,
               );
-              // push：动画前 85% 用 cell 缩略图（零解码零上传，流畅）——但
-              // flight 移除前 shuttle 还盖在 viewer 上，completed 瞬间缩略图
-              // → 原图跳变 = "进去后一两帧模糊"。末段（value>0.85）提前切
-              // 原图（precache 命中立即）→ completed 时 shuttle 已是原图，
-              // 与 viewer 无缝。pop 才可能叠原图（且仅 cache 命中时）。
-              if (type == HeroFlightDirection.push || !widget.loadFull) {
-                if (type == HeroFlightDirection.pop) return cellThumb;
-                final fullProvider = _providerFor(heroRef);
-                final hit = PaintingBinding.instance.imageCache
-                    .containsKey(fullProvider);
-                return AnimatedBuilder(
-                  animation: animation,
-                  builder: (_, __) => Image(
-                    image: (hit && animation.value > 0.85)
-                        ? fullProvider
-                        : buildThumbnailProvider(heroRef,
-                            size: _cellThumbSize(flightContext)),
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                  ),
-                );
-              }
-              // pop:清晰图叠在缩略图上——但**仅当原图已在 ImageCache**时才叠：
-              // 第一次打开时 precache 的 IO+解码可能未在 push 动画内完成 → pop 时
-              // miss → 若叠上去会重新解码，与 280ms 返回动画并行 → 返回动画卡
-              // （用户观察"第一次返回不流畅、第二次 cache 命中后流畅"）。
-              // miss 时只用缩略图：返回动画零解码流畅优先，原图下次打开命中。
               final fullProvider = _providerFor(heroRef);
-              if (!PaintingBinding.instance.imageCache.containsKey(fullProvider)) {
+              // pop：清晰图叠层**仅当原图已在 ImageCache**——miss 时叠上去会
+              // 重新解码，与返回动画并行 → 返回卡顿（既有策略，保持）。
+              if (type == HeroFlightDirection.pop &&
+                  !PaintingBinding.instance.imageCache
+                      .containsKey(fullProvider)) {
                 return cellThumb;
               }
               return Stack(
@@ -1630,7 +1615,7 @@ class _BigImageState extends State<_BigImage>
                   cellThumb,
                   Image(
                     image: fullProvider,
-                    fit: BoxFit.cover,
+                    fit: BoxFit.contain,
                     gaplessPlayback: true,
                   ),
                 ],

@@ -9,6 +9,7 @@
 //   Sort 底部按钮 = folders（两种模式统一）
 //   Run 按 RELATIVE_PATH 分组批量 moveBatch（createWriteRequest）
 
+import 'album_flight.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -1773,21 +1774,39 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
     if (_interceptIfEditing()) return;
     widget.onCheckToggle();
   }
-  Future<void> _openAlbum() async {
+  Future<void> _openAlbum({BuildContext? coverContext}) async {
     if (_interceptIfEditing()) return;
     // 选择模式（本组已有相册勾选）：点击改为勾选/取消本相册，不进入浏览
     if (widget.selectionMode) {
       widget.onCheckToggle();
       return;
     }
+    // 封面缩略图的屏幕坐标：list 模式取 _coverKey 挂载的封面；grid 模式
+    // 由调用方传封面区域的 context（GestureDetector/名称区）。网格动画
+    // 从封面位置"长"出来（由小变大）。
+    final ctx = coverContext ?? _coverKey.currentContext;
+    final box = ctx?.findRenderObject();
+    final rect = (box is RenderBox && box.attached)
+        ? box.localToGlobal(Offset.zero) & box.size
+        : null;
     final args = {
       'bucketId': widget.bucket.id,
       'bucketName': widget.bucket.name,
       'bucketCount': widget.bucket.count,
     };
-    // 动画对齐 ente：相册打开统一 200ms 淡入（原封面 grow 飞行层已移除，
-    // git 历史可回溯 album_flight.dart）。
-    await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
+    // 恢复封面 grow 飞行层：相册进入从封面位置放大涌出（用户要求，
+    // 纯 fade 不符预期）。封面不可用时回退 pushNamed（fade 路由）。
+    if (rect != null && widget.bucket.coverId != null) {
+      await pushAlbumFlight(
+        context,
+        args: args,
+        cellRect: rect,
+        coverId: widget.bucket.coverId!,
+        coverAlignment: albumCoverAlignment(rect, MediaQuery.sizeOf(context)),
+      );
+    } else {
+      await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
+    }
     // 从相册返回：刷新封面/数量（相册内可能删除了图片/改了排序）
     widget.onAlbumReturned?.call();
   }
