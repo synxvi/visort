@@ -168,6 +168,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
       if (!mounted) return;
       _chromeEntry = OverlayEntry(builder: _buildChromeOverlay);
       Overlay.of(context).insert(_chromeEntry!);
+      // pop flight（SDK patch HeroController.didPop 同步启动）的 overlay
+      // 插在最上，会盖住栏——flight 插入后同帧重插栏（保持栏在飞行层
+      // 之上，消失时机不变）。
+      HeroController.onPopFlightStarted = _reinsertChromeAboveFlight;
     });
     _selectedIndexNotifier = ValueNotifier(widget.initialIndex);
     _pageController = PageController(initialPage: widget.initialIndex);
@@ -213,8 +217,19 @@ class _DetailPageState extends ConsumerState<DetailPage>
   }
 
   void _removeChromeEntry() {
+    if (HeroController.onPopFlightStarted == _reinsertChromeAboveFlight) {
+      HeroController.onPopFlightStarted = null;
+    }
     _chromeEntry?.remove();
     _chromeEntry = null;
+  }
+
+  /// pop flight overlay 已插入（最上）→ 同帧把栏 entry 重插到它之上。
+  void _reinsertChromeAboveFlight() {
+    final entry = _chromeEntry;
+    if (entry == null || !mounted) return;
+    entry.remove();
+    Overlay.of(context).insert(entry);
   }
 
   @override
