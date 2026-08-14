@@ -40,6 +40,9 @@ class HomeScreenAndroid extends ConsumerStatefulWidget {
 
 class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     with WidgetsBindingObserver {
+  /// 飞行目标 tag（父级全局）：点击相册瞬间置位，所有 tile 的 HeroMode
+  /// 据此屏蔽非目标 tile（含屏外预构建）；push 返回后清除。
+  String? _flightTag;
   static const _channel = MediaStoreChannel();
   static const _keyOrder = 'ABCDEFGHIJ'; // 目标相册/子目录的快捷键分配
   /// 右上角 ⋮ 按钮 key：Overlay 菜单定位（从按钮下方弹出，不遮挡按钮）
@@ -1000,6 +1003,8 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             onAlbumReturned: _refreshCovers,
             grid: isGrid,
             selectionMode: selectedIds.isNotEmpty,
+            flightTag: _flightTag,
+            onFlightStart: (tag) => setState(() => _flightTag = tag),
           ),
         )
         .toList();
@@ -1570,6 +1575,8 @@ class _HomeBucketTile extends StatefulWidget {
     this.onAlbumReturned,
     this.grid = false,
     this.selectionMode = false,
+    this.flightTag,
+    this.onFlightStart,
   });
   final MsBucket bucket;
   final bool selected;
@@ -1580,6 +1587,10 @@ class _HomeBucketTile extends StatefulWidget {
 
   /// 从相册浏览返回后的回调（刷新封面/数量——删除/恢复会改变它们）。
   final VoidCallback? onAlbumReturned;
+  /// 父级飞行目标 tag（点击相册瞬间非 null，用于 HeroMode 屏蔽本 tile）。
+  final String? flightTag;
+  /// 点击时通知父级置位飞行目标（父级 setState 后本 tile rebuild）。
+  final ValueChanged<String>? onFlightStart;
   final bool grid;
 
   /// 本组已进入选择模式（至少一个相册被勾选）：此时点击 tile 改为勾选/取消本相册，
@@ -1596,9 +1607,6 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
   final GlobalKey _coverKey = GlobalKey();
   /// 封面 Hero tag：动态取「网格排序后第一张」的 id（ente 封面↔第一张配对）。
   String? _heroTag;
-  /// 飞行目标 tag：点击后置位，仅本 tile 的 Hero 启用（屏蔽屏外预构建 tile
-  /// 的 coverId 与目标相册网格撞车产生的额外 flight）；push 返回后清除。
-  String? _flightTag;
 
   // 选中波动环：selected 由 false→true 时播放一次（从圆点向外扩散并淡出）。
   late final AnimationController _ripple = AnimationController(
@@ -1649,7 +1657,7 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                       coverId: widget.bucket.coverId,
                       heroTag: _heroTag,
                       heroEnabled:
-                          _flightTag == null || _flightTag == _heroTag,
+                          widget.flightTag == null || widget.flightTag == _heroTag,
                       size: 44,
                     ),
                     const SizedBox(width: 12),
@@ -1800,10 +1808,8 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
     final photos = container.read(galleryControllerProvider).photos;
     if (photos.isNotEmpty) {
       final tag = 'photo_${photos[0].id}';
-      setState(() {
-        _heroTag = tag;
-        _flightTag = tag;
-      });
+      setState(() => _heroTag = tag);
+      widget.onFlightStart?.call(tag);
     }
     final args = {
       'bucketId': widget.bucket.id,
@@ -1811,7 +1817,7 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
       'bucketCount': widget.bucket.count,
     };
     await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
-    if (mounted) setState(() => _flightTag = null);
+    if (mounted) widget.onFlightStart?.call(''); // 清除
     // 从相册返回：刷新封面/数量（相册内可能删除了图片/改了排序）
     widget.onAlbumReturned?.call();
   }
@@ -1836,7 +1842,7 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                       coverId: widget.bucket.coverId,
                       heroTag: _heroTag,
                       heroEnabled:
-                          _flightTag == null || _flightTag == _heroTag,
+                          widget.flightTag == null || widget.flightTag == _heroTag,
                       size: c.maxWidth,
                     ),
                   ),

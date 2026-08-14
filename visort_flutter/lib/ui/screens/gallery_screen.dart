@@ -30,6 +30,9 @@ class GalleryScreen extends ConsumerStatefulWidget {
 }
 
 class _GalleryScreenState extends ConsumerState<GalleryScreen> {
+  /// 飞行目标 tag（父级全局）：点击相册瞬间置位，所有 tile 的 HeroMode
+  /// 据此屏蔽非目标 tile（含屏外预构建）；push 返回后清除。
+  String? _flightTag;
   @override
   void initState() {
     super.initState();
@@ -124,7 +127,11 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
         itemBuilder: (ctx, i) {
           if (i == 0) return const _FavoritesTile();
           if (i == 1) return const _TrashTile();
-          return _AlbumTile(bucket: buckets[i - 2]);
+          return _AlbumTile(
+            bucket: buckets[i - 2],
+            flightTag: _flightTag,
+            onFlightStart: (tag) => setState(() => _flightTag = tag),
+          );
         },
       ),
     );
@@ -201,8 +208,16 @@ class _TrashTile extends ConsumerWidget {
 
 /// 单个相册行：左封面 + 名称 + 总数 → 点击进相册；右侧 Checkbox（预留勾选）
 class _AlbumTile extends ConsumerStatefulWidget {
-  const _AlbumTile({required this.bucket});
+  const _AlbumTile({
+    required this.bucket,
+    this.flightTag,
+    this.onFlightStart,
+  });
   final MsBucket bucket;
+  /// 父级飞行目标 tag（点击相册瞬间非 null，用于 HeroMode 屏蔽本 tile）。
+  final String? flightTag;
+  /// 点击时通知父级置位飞行目标（父级 setState 后本 tile rebuild）。
+  final ValueChanged<String>? onFlightStart;
 
   @override
   ConsumerState<_AlbumTile> createState() => _AlbumTileState();
@@ -212,10 +227,6 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
   /// 封面 Hero tag：动态取「网格排序后第一张」的 id（ente 封面↔第一张配对）。
   /// coverId 是 listBuckets 的封面（排序可能与相册内不同）→ 必须用 photos[0]。
   String? _heroTag;
-  /// 飞行目标 tag：点击后置位，**仅本 tile 的 Hero 启用**（HeroMode 屏蔽
-  /// 列表 cacheExtent 预构建的其他 tile，防止其 coverId 与目标相册网格撞车
-  /// 产生额外 flight 乱飞）；push 返回后清除。
-  String? _flightTag;
 
   Future<void> _open() async {
     // [ente 对齐] 相册打开 = 200ms fade + 封面 Hero 飞行（封面↔网格第一张图）。
@@ -228,10 +239,8 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
     final photos = ref.read(galleryControllerProvider).photos;
     if (photos.isNotEmpty) {
       final tag = 'photo_${photos[0].id}';
-      setState(() {
-        _heroTag = tag;
-        _flightTag = tag;
-      });
+      setState(() => _heroTag = tag);
+      widget.onFlightStart?.call(tag);
     }
     final args = {
       'bucketId': widget.bucket.id,
@@ -239,7 +248,7 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
       'bucketCount': widget.bucket.count,
     };
     await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
-    if (mounted) setState(() => _flightTag = null);
+    if (mounted) widget.onFlightStart?.call(''); // 清除
   }
 
   @override
@@ -252,7 +261,13 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
         child: Row(
           children: [
             // 封面缩略图
-            _CoverThumb(coverId: bucket.coverId, heroTag: _heroTag, heroEnabled: _flightTag == null || _flightTag == _heroTag, size: 56),
+            _CoverThumb(
+              coverId: bucket.coverId,
+              heroTag: _heroTag,
+              heroEnabled:
+                  widget.flightTag == null || widget.flightTag == _heroTag,
+              size: 56,
+            ),
             const SizedBox(width: 14),
             // 名称
             Expanded(
