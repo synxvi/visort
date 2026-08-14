@@ -22,6 +22,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
+import 'package:visort_flutter/core/i18n/i18n.dart' show configProvider;
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 
 import 'detail_page_state.dart';
@@ -136,6 +137,8 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         final fileContent = ZoomableImage(
           file,
           tagPrefix: 'photo',
+          // 与相册网格同列数：cell 缩略图尺寸一致（ImageCache key 命中）。
+          gridCols: ref.watch(configProvider).photoGridColumns,
           shouldDisableScroll: (value) {
             if (_shouldDisableScroll != value) {
               setState(() => _shouldDisableScroll = value);

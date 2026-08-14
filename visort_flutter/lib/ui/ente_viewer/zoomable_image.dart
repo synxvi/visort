@@ -25,6 +25,7 @@ import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 
 import '../screens/album_common.dart' show extOf;
 import 'detail_page_state.dart';
+import 'gallery_groups.dart' show GalleryGroups;
 
 /// ente 常量（core/constants.dart dragSensitivity = 8）：上滑详情/下滑关闭阈值。
 const double _kDragSensitivity = 8.0;
@@ -39,9 +40,14 @@ class ZoomableImage extends StatefulWidget {
   /// 原图（下采样）就绪回调（外层记录 id，退出时 evict 缓存）。
   final ValueChanged<String>? onFullLoaded;
 
+  /// 网格列数：cell 缩略图尺寸与网格 cell 完全一致（ImageCache key 命中，
+  /// 飞行层/Hero shuttle 首帧不重新解码）。
+  final int gridCols;
+
   const ZoomableImage(
     this.photo, {
     super.key,
+    this.gridCols = 4,
     this.shouldDisableScroll,
     this.tagPrefix,
     this.backgroundDecoration,
@@ -79,13 +85,14 @@ class _ZoomableImageState extends State<ZoomableImage> {
   @override
   void initState() {
     super.initState();
-    // 网格 cell 已加载的缩略图（同 provider 同尺寸）直接复用 → 首帧有图。
-    final cellThumb = buildThumbnailProvider(_ref, size: _cellThumbSize());
-    if (PaintingBinding.instance.imageCache.containsKey(cellThumb)) {
-      _imageProvider = cellThumb;
-      _loadedSmallThumbnail = true;
-      _notifyReadyOnce();
-    }
+    // 无条件设 cell 同款缩略图 provider → PhotoView（含 Hero）首帧必存在，
+    // push 飞行层才能启动（否则 imageProvider 未就绪时 build 的是 loading，
+    // 无 Hero → flight 不启动 → 黑屏后加载，真机复现）。
+    // ImageCache 命中（网格刚显示过 cell）立即有图；miss 时 loadingBuilder
+    // 显示占位，大图渐进。
+    _imageProvider = buildThumbnailProvider(_ref, size: _cellThumbSize());
+    _loadedSmallThumbnail = true;
+    _notifyReadyOnce();
     _scaleStateChangedCallback = (value) {
       if (widget.shouldDisableScroll != null) {
         widget.shouldDisableScroll!(value != PhotoViewScaleState.initial);
@@ -354,9 +361,9 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// 避免飞行层/Hero shuttle 首帧重新解码。
   int _cellThumbSize() {
     final mq = MediaQuery.of(context);
-    // 与 album_screen 网格一致：4×2 padding + (cols-1)*3 间距。
-    const cols = 4;
-    final cellW = (mq.size.width - 8 - (cols - 1) * 3) / cols;
+    final cols = widget.gridCols;
+    // 与 album_screen 网格一致：4×2 padding + (cols-1)*2 间距（ente Gallery）。
+    final cellW = (mq.size.width - 8 - (cols - 1) * GalleryGroups.spacing) / cols;
     return (cellW * mq.devicePixelRatio).round().clamp(160, 512);
   }
 }

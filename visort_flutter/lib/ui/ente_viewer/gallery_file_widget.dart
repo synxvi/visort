@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 
+import 'gallery_groups.dart' show GalleryGroups;
 import 'selected_files.dart';
 import 'thumbnail_widget.dart';
 
@@ -80,10 +81,20 @@ class _GalleryFileWidgetState extends State<GalleryFileWidget> {
 
   Widget _buildFileContent(BuildContext context) {
     final String heroTag = 'photo_${widget.file.id}';
+    // [visort 适配] 缩略图尺寸：cell 逻辑宽 × dpr（clamp 160~512），与
+    // viewer zoomable_image/_cellThumbSize 同公式 → ImageCache key 一致，
+    // 飞行层/Hero 首帧直接命中。原 ente 固定 256（列数≥4）在 4 列高 dpr
+    // 真机（cell 物理 ~316px）欠采样发糊。
+    final mq = MediaQuery.of(context);
+    final cellW =
+        (mq.size.width - 8 - (widget.photoGridSize - 1) * GalleryGroups.spacing) /
+        widget.photoGridSize;
+    final thumbSize =
+        (cellW * mq.devicePixelRatio).round().clamp(160, 512);
     final Widget thumbnailWidget = ThumbnailWidget(
       widget.file,
       key: Key(heroTag),
-      thumbnailSize: widget.photoGridSize < 4 ? 512 : 256,
+      thumbnailSize: thumbSize,
     );
     final Widget hero = Hero(
       tag: heroTag,

@@ -47,8 +47,9 @@ Future<void> pushAlbumFlight(
   var _precached = false;
 
   return Navigator.of(context).push(PageRouteBuilder<void>(
-    transitionDuration: const Duration(milliseconds: 400),
-    reverseTransitionDuration: const Duration(milliseconds: 280),
+    // [ente 对齐] 页面转场时长 200ms（ente routeToPage 同款；原 400/280 偏长）。
+    transitionDuration: const Duration(milliseconds: 200),
+    reverseTransitionDuration: const Duration(milliseconds: 200),
     // pop 返回时底下相册列表参与合成并可见(COUI 式返回)。
     opaque: false,
     pageBuilder: (_, _, _) => RepaintBoundary(
