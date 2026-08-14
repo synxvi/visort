@@ -315,12 +315,26 @@ class _DetailPageState extends ConsumerState<DetailPage>
     );
   }
 
+  /// 页面 build 后的栏刷新调度：build 阶段直接 markNeedsBuild 会触发
+  /// "setState() called during build"（OverlayEntry 非页面祖先——翻页
+  /// rebuild 时 _chromeEntry 已存在 → 红屏）。postFrame 标脏，去重。
+  bool _chromeRefreshScheduled = false;
+
+  void _scheduleChromeRefresh() {
+    if (_chromeRefreshScheduled) return;
+    _chromeRefreshScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _chromeRefreshScheduled = false;
+      _chromeEntry?.markNeedsBuild();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     // 页面 setState（栏相关字段：_detailsOpen/_panelCtrl/_files 等）顺带
     // 刷新栏 entry（OverlayEntry 不随页面 rebuild；ValueListenable 部分
     // 由内嵌 ValueListenableBuilder 自行响应）。
-    _chromeEntry?.markNeedsBuild();
+    _scheduleChromeRefresh();
     if (_files.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) Navigator.maybePop(context);

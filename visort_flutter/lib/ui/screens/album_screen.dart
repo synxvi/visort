@@ -190,9 +190,6 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     _scrollCtrl.dispose();
     _timelineScrollCtrl.removeListener(_onTimelineScroll);
     _timelineScrollCtrl.dispose();
-    // 退出相册：保存桶快照（同桶重进秒出）+ 重查相册列表（返回首页刷新
-    // count/封面，删除/恢复后不残留旧数据）。
-    ref.read(galleryControllerProvider.notifier).exitBucket();
     super.dispose();
   }
 
@@ -222,7 +219,16 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     return PopScope(
       canPop: !_selectMode,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _selectMode) _exitSelectMode();
+        if (!didPop && _selectMode) {
+          _exitSelectMode();
+          return;
+        }
+        if (didPop) {
+          // 退出相册：保存桶快照（同桶重进秒出）+ 重查相册列表（返回首页
+          // 刷新 count/封面）。不能在 dispose 里 ref.read——riverpod 断言
+          // "Cannot use ref after the widget was disposed"（debug 红屏）。
+          ref.read(galleryControllerProvider.notifier).exitBucket();
+        }
       },
       child: Scaffold(
         backgroundColor: AppColors.bg,
@@ -840,18 +846,23 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     double target;
     if (_timelineView) {
       final photos = ref.read(galleryControllerProvider).photos;
+      // 行顶 offset：按"组"累加（组头 32 + 组内行数 ceil(张数/cols)×cellH）。
+      // 不能用"满 cols 张才累加行高"的按张循环——组尾不满行（组 < cols 张
+      // 时每组 1 行）会漏算 → offset 低估 → target 全负 clamp 0 → 网格从不
+      // 滚动（返回飞行终点 cell 不在视口，主分支按 _flat 行项遍历规避）。
       var offset = 0.0;
-      var rowInGroup = 0;
+      var photosInGroup = 0;
       for (var i = 0; i <= index && i < photos.length; i++) {
-        if (i == 0 ||
+        if (i > 0 &&
             !GroupType.day.areFromSameGroup(photos[i - 1], photos[i])) {
-          offset += 32; // 组头高
-          rowInGroup = 0;
+          // 上一组结束：组头 + 该组行数（ceil，含不满尾行）。
+          offset += 32 + ((photosInGroup + cols - 1) ~/ cols) * cellH;
+          photosInGroup = 0;
         }
-        if (i == index) break;
-        if (rowInGroup % cols == cols - 1) offset += cellH;
-        rowInGroup++;
+        photosInGroup++;
       }
+      // index 所在组：组头 + index 之前的行数。
+      offset += 32 + ((photosInGroup - 1) ~/ cols) * cellH;
       if (index == _openViewerIndex) {
         target = _openScrollOffset;
       } else if (index > _openViewerIndex) {

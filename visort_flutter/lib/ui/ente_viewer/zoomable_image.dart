@@ -101,14 +101,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
   @override
   void initState() {
     super.initState();
-    // 无条件设 cell 同款缩略图 provider → PhotoView（含 Hero）首帧必存在，
-    // push 飞行层才能启动（否则 imageProvider 未就绪时 build 的是 loading，
-    // 无 Hero → flight 不启动 → 黑屏后加载，真机复现）。
-    // ImageCache 命中（网格刚显示过 cell）立即有图；miss 时 loadingBuilder
-    // 显示占位，大图渐进。
-    _imageProvider = buildThumbnailProvider(_ref, size: _cellThumbSize());
-    _loadedSmallThumbnail = true;
-    _notifyReadyOnce();
     _scaleStateChangedCallback = (value) {
       if (widget.shouldDisableScroll != null) {
         widget.shouldDisableScroll!(value != PhotoViewScaleState.initial);
@@ -135,6 +127,19 @@ class _ZoomableImageState extends State<ZoomableImage> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // 无条件设 cell 同款缩略图 provider → PhotoView（含 Hero）首帧必存在，
+    // push 飞行层才能启动（否则 imageProvider 未就绪时 build 的是 loading，
+    // 无 Hero → flight 不启动 → 黑屏后加载，真机复现）。
+    // ImageCache 命中（网格刚显示过 cell）立即有图；miss 时 loadingBuilder
+    // 显示占位，大图渐进。
+    // 注意：_cellThumbSize 依赖 MediaQuery——initState 里调用会触发
+    // dependOnInheritedWidgetOfExactType assert（红屏）；didChangeDependencies
+    // 在 initState 之后、首帧 build 之前执行，Hero 首帧不受影响。
+    if (_imageProvider == null) {
+      _imageProvider = buildThumbnailProvider(_ref, size: _cellThumbSize());
+      _loadedSmallThumbnail = true;
+      _notifyReadyOnce();
+    }
     _inherited = InheritedDetailPageState.maybeOf(context);
     final idx = widget.pageIndex;
     if (idx != null) {
