@@ -888,30 +888,20 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       context,
     );
     Navigator.of(context).push(
+      // [ente 移植] 完全复刻 ente routeToPage（navigation_util _buildPageRoute）：
+      // Align + FadeTransition 200ms + opaque:false。无黑遮罩、无门控——
+      // viewer（含 PageView 预渲染 ±1 页）随 fade 一起淡入 = 中间图淡入淡出、
+      // 上下图随之淡入的观感；Hero 飞行层在 overlay 独立负责 cell→大图缩放。
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 200),
         reverseTransitionDuration: const Duration(milliseconds: 200),
-        // opaque:false —— pop 返回时底下相册网格参与合成可见。
         opaque: false,
-        // Hero 接管缩放飞行(网格 cell Hero → DetailPage 的 photo_view Hero)。
-        // viewer route 仅用 status 门控可见性——飞行期(forward/reverse)viewer
-        // 隐藏(Hero 飞行层在 overlay 独占),completed 后显现。
-        // 黑遮罩(push 期)盖底层 album 的 cell 空缺;pop 不盖(网格全程可见)。
         transitionsBuilder: (ctx, anim, _, child) {
-          final status = anim.status;
-          final isCompleted = status == AnimationStatus.completed;
-          final isReverse = status == AnimationStatus.reverse;
-          return Stack(
-            fit: StackFit.expand,
-            children: [
-              if (!isReverse && !isCompleted)
-                const ColoredBox(color: Colors.black),
-              Opacity(opacity: isCompleted ? 1.0 : 0.0, child: child),
-            ],
+          return Align(
+            child: FadeTransition(opacity: anim, child: child),
           );
         },
-        // pageBuilder 的 anim 与 transitionsBuilder 的 anim 是同一个 route 动画。
-        pageBuilder: (_, anim, _) => DetailPage(
+        pageBuilder: (_, _, _) => DetailPage(
           files: photos,
           initialIndex: index,
           onIndexChanged: _onViewerIndexChanged,
