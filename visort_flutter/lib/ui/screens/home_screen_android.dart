@@ -21,6 +21,7 @@ import 'package:visort_flutter/core/fs/android_mediastore_file_system.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
+import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/scan/scan_controller.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
@@ -28,7 +29,6 @@ import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/router.dart';
 import 'package:visort_flutter/ui/router_android.dart';
-import 'album_flight.dart';
 
 class HomeScreenAndroid extends ConsumerStatefulWidget {
   const HomeScreenAndroid({super.key});
@@ -545,7 +545,29 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                 // 的间距，与选择器 top:10（到顶栏）相等，故不再加额外 SizedBox。
                 const Divider(color: AppColors.border, height: 1),
                 // 主体（在分隔线下方滚动，不进入分隔线区域 → 不被遮挡）
-                Expanded(child: _buildBody()),
+                // [ente 对齐] 相册排序切换内容交叉淡入 150ms（easeInQuart/easeOutExpo）。
+                Expanded(
+                  child: AnimatedSwitcher(
+                    duration: AppDurations.enteContentSwitch,
+                    switchInCurve: Curves.easeInQuart,
+                    switchOutCurve: Curves.easeOutExpo,
+                    layoutBuilder: (currentChild, previousChildren) => Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        for (final previous in previousChildren)
+                          Positioned.fill(child: previous),
+                        if (currentChild != null)
+                          Positioned.fill(child: currentChild),
+                      ],
+                    ),
+                    transitionBuilder: (child, animation) =>
+                        FadeTransition(opacity: animation, child: child),
+                    child: KeyedSubtree(
+                      key: ValueKey((config.albumSortBy, config.albumSortAsc)),
+                      child: _buildBody(),
+                    ),
+                  ),
+                ),
                 // 底部 Start
                 _buildBottomBar(),
               ],
@@ -775,6 +797,8 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         return false;
       },
       child: ListView(
+        // 动画对齐 ente：iOS 式回弹滚动物理。
+        physics: const BouncingScrollPhysics(),
         // 分隔线（固定在上）到源相册 header 内容 = 10：top:5 + 源相册 header top:5
         padding: const EdgeInsets.only(top: 5),
         children: [
@@ -1749,38 +1773,21 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
     if (_interceptIfEditing()) return;
     widget.onCheckToggle();
   }
-
-  Future<void> _openAlbum({BuildContext? coverContext}) async {
+  Future<void> _openAlbum() async {
     if (_interceptIfEditing()) return;
     // 选择模式（本组已有相册勾选）：点击改为勾选/取消本相册，不进入浏览
     if (widget.selectionMode) {
       widget.onCheckToggle();
       return;
     }
-    // 封面缩略图的屏幕坐标：list 模式取 _coverKey 挂载的封面；grid 模式
-    // 由调用方传封面区域的 context（GestureDetector/名称区）。网格动画
-    // 从封面位置"长"出来（由小变大）。
-    final ctx = coverContext ?? _coverKey.currentContext;
-    final box = ctx?.findRenderObject();
-    final rect = (box is RenderBox && box.attached)
-        ? box.localToGlobal(Offset.zero) & box.size
-        : null;
     final args = {
       'bucketId': widget.bucket.id,
       'bucketName': widget.bucket.name,
       'bucketCount': widget.bucket.count,
     };
-    if (rect != null && widget.bucket.coverId != null) {
-      await pushAlbumFlight(
-        context,
-        args: args,
-        cellRect: rect,
-        coverId: widget.bucket.coverId!,
-        coverAlignment: albumCoverAlignment(rect, MediaQuery.sizeOf(context)),
-      );
-    } else {
-      await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
-    }
+    // 动画对齐 ente：相册打开统一 200ms 淡入（原封面 grow 飞行层已移除，
+    // git 历史可回溯 album_flight.dart）。
+    await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
     // 从相册返回：刷新封面/数量（相册内可能删除了图片/改了排序）
     widget.onAlbumReturned?.call();
   }

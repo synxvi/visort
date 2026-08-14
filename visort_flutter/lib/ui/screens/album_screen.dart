@@ -17,6 +17,7 @@ import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
+import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/ui/router_android.dart';
@@ -286,7 +287,33 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                     ),
                 ],
         ),
-        body: SafeArea(child: _buildBody(gallery)),
+        // [ente 对齐] 排序/视图切换内容交叉淡入 150ms
+        //（albums_tab _kContentTransitionDuration：easeInQuart 进 / easeOutExpo 出）。
+        body: SafeArea(
+          child: AnimatedSwitcher(
+            duration: AppDurations.enteContentSwitch,
+            switchInCurve: Curves.easeInQuart,
+            switchOutCurve: Curves.easeOutExpo,
+            layoutBuilder: (currentChild, previousChildren) => Stack(
+              fit: StackFit.expand,
+              children: [
+                for (final previous in previousChildren)
+                  Positioned.fill(child: previous),
+                if (currentChild != null) Positioned.fill(child: currentChild),
+              ],
+            ),
+            transitionBuilder: (child, animation) =>
+                FadeTransition(opacity: animation, child: child),
+            child: KeyedSubtree(
+              key: ValueKey((
+                gallery.effectivePhotoSortBy,
+                gallery.photoSortAsc,
+                _timelineView,
+              )),
+              child: _buildBody(gallery),
+            ),
+          ),
+        ),
         // 批量选择模式：底部操作栏（按视图模式提供不同批量操作）
         bottomNavigationBar: _selectMode ? _buildBatchBar(gallery) : null,
       ),
@@ -372,6 +399,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         GridView.builder(
           key: _gridKey,
           controller: _scrollCtrl,
+          // 动画对齐 ente：iOS 式回弹滚动物理（ente 安卓网格同为 Bouncing）。
+          physics: const BouncingScrollPhysics(),
           padding: const EdgeInsets.all(4),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: cols,
@@ -454,6 +483,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         CustomScrollView(
           key: _gridKey,
           controller: _timelineScrollCtrl,
+          physics: const BouncingScrollPhysics(),
           slivers: [
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
@@ -995,8 +1025,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     );
     Navigator.of(context).push(
       PageRouteBuilder(
-        transitionDuration: const Duration(milliseconds: 400),
-        reverseTransitionDuration: const Duration(milliseconds: 280),
+        transitionDuration: const Duration(milliseconds: 200),
+        reverseTransitionDuration: const Duration(milliseconds: 200),
         // opaque:false —— pop 返回时底下相册网格参与合成可见(COUI 式返回)。
         opaque: false,
         // Hero 接管缩放飞行(网格 cell Hero → viewer _BigImage Hero)。viewer route

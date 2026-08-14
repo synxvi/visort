@@ -289,30 +289,28 @@ class ExtendedImageGestureState extends State<ExtendedImageGesture>
       return;
     }
 
+    // [visort patch] 动画对齐 ente（photo_view onScaleEnd）：回弹动画固定
+    // fling(velocity:0.4)——临界阻尼弹簧（mass 1/stiffness 500/ratio 1.0），
+    // 干脆不拖沓。原实现 velocity=超界比例（超界小则回弹慢，手感不一致）。
+    // 硬边界（animationMin/Max==min/max）下正常手势不会触发回弹，仅防御
+    // 程序性/极端场景。
+
     //animate back to maxScale if gesture exceeded the maxScale specified
     if (_gestureDetails!.totalScale!.greaterThan(_gestureConfig!.maxScale)) {
-      final double velocity =
-          (_gestureDetails!.totalScale! - _gestureConfig!.maxScale) /
-          _gestureConfig!.maxScale;
-
       _gestureAnimation.animationScale(
         _gestureDetails!.totalScale,
         _gestureConfig!.maxScale,
-        velocity,
+        0.4,
       );
       return;
     }
 
     //animate back to minScale if gesture fell smaller than the minScale specified
     if (_gestureDetails!.totalScale!.lessThan(_gestureConfig!.minScale)) {
-      final double velocity =
-          (_gestureConfig!.minScale - _gestureDetails!.totalScale!) /
-          _gestureConfig!.minScale;
-
       _gestureAnimation.animationScale(
         _gestureDetails!.totalScale,
         _gestureConfig!.minScale,
-        velocity,
+        0.4,
       );
       return;
     }

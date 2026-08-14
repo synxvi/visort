@@ -69,16 +69,11 @@ class RouteNameObserver extends NavigatorObserver {
 Route<dynamic>? onGenerateRoute(RouteSettings settings) {
   switch (settings.name) {
     case AppRoutes.home:
-      // 根路由（首屏，实际无可见转场）。
-      // 安卓保持 couiFade（pushAndRemoveUntil 场景 / 相册返回首页时的克制过渡；
-      // ⚠️ 不用 couiSlideRoute：其被推页视差会让相册返回时首页整体滑动）。
-      // 桌面 MaterialPageRoute 走平台默认。
+      // 根路由（首屏，实际无可见转场；popTo Home / 相册返回首页时 200ms 淡入）。
       Widget homeBuilder(BuildContext _) => Platform.isAndroid
           ? const HomeScreenAndroid()
           : const HomeScreen();
-      return Platform.isAndroid
-          ? couiFadeRoute(builder: homeBuilder, settings: settings)
-          : MaterialPageRoute(builder: homeBuilder, settings: settings);
+      return enteFadeRoute(builder: homeBuilder, settings: settings);
     case AppRoutes.sort:
       return _platformRoute(
         builder: (_) => const SortScreen(),
@@ -106,26 +101,17 @@ Route<dynamic>? onGenerateRoute(RouteSettings settings) {
   }
 }
 
-/// 平台分叉路由转场工厂。
-/// - 安卓：用 COUI 转场（一加相册手感，sort/review/results 用 slide，其余按需）。
-/// - 桌面（Windows/macOS/linux）：MaterialPageRoute，走 Theme.pageTransitionsTheme
-///   的平台默认（桌面 = 快速淡入，无位移视差，符合桌面惯例且更流畅）。
+/// 路由转场工厂 —— 全平台统一 ente 式 200ms 交叉淡入（enteFadeRoute）。
 ///
-/// 解耦背景：COUI 转场是为安卓触屏调校（350ms 视差位移），桌面端大屏套用会显得
-/// 拖沓且合成开销高。让"一加手感"留在安卓侧，桌面走平台原生惯例。
+/// 历史：安卓曾用 COUI 350ms 视差转场、桌面 MaterialPageRoute；动画对齐
+/// ente 后统一 fade（ente 桌面 iOS 侧用 SwipeableRouteBuilder，Windows 无
+/// 手势返回场景，fade 统一即可）。
 Route<T> _platformRoute<T>({
   required WidgetBuilder builder,
   required RouteSettings? settings,
   bool fullscreenDialog = false,
 }) {
-  if (Platform.isAndroid) {
-    return couiSlideRoute<T>(
-      builder: builder,
-      settings: settings,
-      fullscreenDialog: fullscreenDialog,
-    );
-  }
-  return MaterialPageRoute<T>(
+  return enteFadeRoute<T>(
     builder: builder,
     settings: settings,
     fullscreenDialog: fullscreenDialog,

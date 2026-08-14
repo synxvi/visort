@@ -15,12 +15,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
+import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/shared/widgets/press_scale.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/ui/router_android.dart';
-import 'album_flight.dart';
 
 class GalleryScreen extends ConsumerStatefulWidget {
   const GalleryScreen({super.key});
@@ -60,7 +60,28 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
           ),
         ],
       ),
-      body: SafeArea(child: _buildBody(gallery)),
+      // [ente 对齐] 排序切换内容交叉淡入 150ms（easeInQuart / easeOutExpo）。
+      body: SafeArea(
+        child: AnimatedSwitcher(
+          duration: AppDurations.enteContentSwitch,
+          switchInCurve: Curves.easeInQuart,
+          switchOutCurve: Curves.easeOutExpo,
+          layoutBuilder: (currentChild, previousChildren) => Stack(
+            fit: StackFit.expand,
+            children: [
+              for (final previous in previousChildren)
+                Positioned.fill(child: previous),
+              if (currentChild != null) Positioned.fill(child: currentChild),
+            ],
+          ),
+          transitionBuilder: (child, animation) =>
+              FadeTransition(opacity: animation, child: child),
+          child: KeyedSubtree(
+            key: ValueKey((gallery.albumSortBy, gallery.albumSortAsc)),
+            child: _buildBody(gallery),
+          ),
+        ),
+      ),
     );
   }
 
@@ -96,6 +117,8 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
       onRefresh: () =>
           ref.read(galleryControllerProvider.notifier).loadBuckets(),
       child: ListView.builder(
+        // 动画对齐 ente：iOS 式回弹滚动物理。
+        physics: const BouncingScrollPhysics(),
         padding: const EdgeInsets.symmetric(vertical: 8),
         itemCount: buckets.length + 2,
         itemBuilder: (ctx, i) {
@@ -190,27 +213,13 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
   final GlobalKey _coverKey = GlobalKey();
 
   void _open() {
-    // 封面缩略图的屏幕坐标：网格动画从封面位置"长"出来（由小变大）
-    final box = _coverKey.currentContext?.findRenderObject();
-    final rect = (box is RenderBox && box.attached)
-        ? box.localToGlobal(Offset.zero) & box.size
-        : null;
     final args = {
       'bucketId': widget.bucket.id,
       'bucketName': widget.bucket.name,
       'bucketCount': widget.bucket.count,
     };
-    if (rect != null && widget.bucket.coverId != null) {
-      pushAlbumFlight(
-          context,
-          args: args,
-          cellRect: rect,
-          coverId: widget.bucket.coverId!,
-          coverAlignment:
-              albumCoverAlignment(rect, MediaQuery.sizeOf(context)));
-    } else {
-      Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
-    }
+    // 动画对齐 ente：统一 200ms 淡入（原封面 grow 飞行层已移除）。
+    Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
   }
 
   @override

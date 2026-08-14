@@ -276,6 +276,8 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             "requestPermission" -> handleRequestPermission(result)
             "hasManageMedia" -> result.success(hasManageMediaPermission())
             "requestManageMedia" -> handleRequestManageMedia(result)
+            // [ente 对齐] 设备总内存（MB）：解码防崩阈值用（<5GB → 24MP 上限）。
+            "totalRamMb" -> handleTotalRamMb(result)
             else -> result.notImplemented()
         }
     }
@@ -363,6 +365,20 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             result.success(true)
         } catch (e: Exception) {
             result.error(MsError.QueryFailed("无法跳转媒体管理设置: ${e.message}").code, e.message, null)
+        }
+    }
+
+    /// 设备总内存（MB）。[ente 对齐] 解码防崩阈值：RAM < 5GB → 24MP 上限，
+    /// 否则 100MP（ente zoomable_image _maxImagePixels，防 flutter/flutter#110331）。
+    private fun handleTotalRamMb(result: Result) {
+        try {
+            val am = context.getSystemService(android.content.Context.ACTIVITY_SERVICE)
+                as android.app.ActivityManager
+            val info = android.app.ActivityManager.MemoryInfo()
+            am.getMemoryInfo(info)
+            result.success((info.totalMem / (1024L * 1024L)).toInt())
+        } catch (e: Exception) {
+            result.error(MsError.QueryFailed("读取内存失败: ${e.message}").code, e.message, null)
         }
     }
 

@@ -6,6 +6,7 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -75,6 +76,22 @@ int computeViewerTargetWidth(double screenWidthPx) {
   return target < 960 ? 960 : target;
 }
 
+/// [ente 对齐] 超大图解码防崩阈值（flutter/flutter#110331）：
+/// RAM < 5GB → 24MP，否则 100MP；再 clamp 到 50MP（ente zoomable_image
+/// _maxImagePixels + min(50MP) 同款）。超过阈值的图在 decode getTargetSize
+/// 中等比降采样，避免超大图（如 200MP 全景）全分辨率解码 OOM/崩溃。
+/// RAM 查询失败（null）时按高内存设备处理（100MP）。
+int _cachedMaxDecodePixels = 100000000; // 100MP 默认，首次解码前刷新
+
+/// main() 后台预热（不阻塞首帧）；RAM 查询失败时保持默认（幂等跳过）。
+Future<void> initMaxDecodePixels() async {
+  final ramMb = await MediaStoreChannel().totalRamMb();
+  if (ramMb == null) return;
+  final base = ramMb < 5 * 1024 ? 24000000 : 100000000;
+  _cachedMaxDecodePixels =
+      base < 50000000 ? base : 50000000; // min(50MP, base)
+}
+
 /// 安卓端从 MediaStore 读字节的 ImageProvider。
 class _AndroidBytesImageProvider
     extends ImageProvider<_AndroidBytesImageProvider> {
@@ -134,9 +151,23 @@ class _AndroidBytesImageProvider
         return ui.TargetImageSize(width: tw);
       });
     }
-    return decode(buffer);
+    // [ente 对齐] 全分辨率路径（HD/GIF）解码兜底：超过防崩阈值
+    //（RAM 相关，见 _initMaxDecodePixels）等比降采样；未超阈值返回原始
+    // 尺寸（getTargetSize 非空返回，等效全分辨率解码）。
+    return decode(buffer,
+        getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
+      final px = intrinsicWidth * intrinsicHeight;
+      final max = _cachedMaxDecodePixels;
+      if (px <= max) {
+        return ui.TargetImageSize(
+            width: intrinsicWidth, height: intrinsicHeight);
+      }
+      final aspect = intrinsicWidth / intrinsicHeight;
+      final targetH = math.sqrt(max / aspect);
+      final targetW = (aspect * targetH).round();
+      return ui.TargetImageSize(width: targetW, height: targetH.round());
+    });
   }
-
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;

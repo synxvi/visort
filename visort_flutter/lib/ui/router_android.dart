@@ -44,22 +44,19 @@ const albumNoiseDisabledRoutes = {
 /// 生成安卓相册浏览链的路由。
 ///
 /// 由共享 [onGenerateRoute] 的 default 分支委托调用；桌面端因永不 push 这些路由名，
-/// 不会进入本函数。
+/// 不会进入本函数。转场统一 ente 式 200ms 淡入（enteFadeRoute）。
 Route<dynamic>? onGenerateAlbumRoute(RouteSettings settings) {
   switch (settings.name) {
     case AlbumRoutes.gallery:
-      // 相册浏览链（与 album 的 grow 动画配套）：被推页无位移——
-      // slide 的被推页视差会让相册返回时列表页整体滑动。
-      return couiFadeRoute(
+      return enteFadeRoute(
         builder: (_) => const GalleryScreen(),
         settings: settings,
       );
     case AlbumRoutes.album:
       // 参数通过 settings.arguments（Map）传入 bucketId / bucketName / bucketCount。
-      // 用快速浮现（fade + 轻缩放）：比 slide 更轻盈，适合内容浏览切换。
       final args = settings.arguments;
       if (args is Map) {
-        return couiFadeRoute(
+        return enteFadeRoute(
           builder: (_) => AlbumScreen(
             bucketId: args['bucketId']?.toString() ?? '',
             bucketName: args['bucketName']?.toString(),

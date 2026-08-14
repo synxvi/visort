@@ -4,6 +4,7 @@
 //   - 删除后从列表移除当前项，自动跳到下一张（或末尾）。
 
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
@@ -715,8 +716,14 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
     if (_pageCtrl.hasClients) {
       Future.microtask(() {
         if (mounted && _pageCtrl.hasClients) {
-          _pageCtrl.jumpToPage(_index);
-          _syncThumbTo(_index); // jumpToPage 触发的 onPageChanged 命中 i==_index 不回弹,故手动同步
+          // [ente 对齐] 删除后补位动画：animateToPage 200ms easeInOut
+          //（ente DetailPage._onFileRemoved 同款；原 jumpToPage 无动画）。
+          _pageCtrl.animateToPage(
+            _index,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeInOut,
+          );
+          _syncThumbTo(_index); // 目标页 onPageChanged 命中 i==_index 不回弹,故手动同步
         }
       });
     }
@@ -812,7 +819,7 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
                     child: ExtendedImageGesturePageView.builder(
                       controller: _pageCtrl,
                       allowImplicitScrolling: true, // 预渲染±1 页：相邻页图片提前解码，翻页时已就绪，减少"某张大图解码慢→手势丢帧→要滑多次"
-                      physics: const _SnapSpringPhysics(),
+                      physics: const _FastScrollPhysics(),
                       itemCount: _photos.length,
                       canScrollPage: _canScrollPage,
                       onPageChanged: (i) {
@@ -840,8 +847,9 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
                             gridCols: cols,
                             loadFull: _allowFull,
                             onTapChrome: _toggleChrome,
-                            onSwipeUp: () => _showDetails(info),
                             onZoomStateChanged: _onZoomStateChanged,
+                            onSwipeUp: () => _showDetails(info),
+                            onSwipeDown: () => Navigator.maybePop(context),
                             onFullLoaded: (id) => _viewedIds.add(id),
                           ),
                         );
@@ -1343,6 +1351,7 @@ class _BigImage extends StatefulWidget {
     this.onZoomStateChanged,
     this.onFullLoaded,
     this.onSwipeUp,
+    this.onSwipeDown,
   });
   final MsImageInfo info;
   final bool active;
@@ -1358,7 +1367,11 @@ class _BigImage extends StatefulWidget {
 
   /// 原图（下采样）加载完成时回调，外层记录 id 用于退出时 evict。
   final void Function(String mediaStoreId)? onFullLoaded;
+
   final VoidCallback? onSwipeUp;
+
+  /// 下滑关闭 viewer（ente zoomable_image：未放大时下拖 → Navigator.maybePop）。
+  final VoidCallback? onSwipeDown;
 
   @override
   State<_BigImage> createState() => _BigImageState();
@@ -1383,6 +1396,11 @@ class _BigImageState extends State<_BigImage>
   Tween<double>? _doubleTapTween;
   Offset _doubleTapStartOffset = Offset.zero;
   Offset _doubleTapEndOffset = Offset.zero;
+  // 动画对齐 ente 双击循环（photo_view defaultScaleStateCycle）：
+  // initial(1.0) → covering → originalSize → initial。
+  // initGestureConfigHandler 里按图片宽高实时更新。
+  double _coveringScale = 2.5; // covered/contained 相对倍数（铺满屏幕）
+  double _originalScale = 2.5; // 1:1 物理像素相对倍数（clamp 到边界内）
   bool _fullLoaded = false;
   bool _hdTriggered = false;
   late final bool _isGif;
@@ -1438,101 +1456,34 @@ class _BigImageState extends State<_BigImage>
     );
   }
 
-  /// 双击动画:一次性算好终态(scale + 铺满锚定偏移),动画期间同步插值。
+  /// 双击动画 —— 动画对齐 ente（photo_view）：
+  /// - 循环 defaultScaleStateCycle：initial(1.0) → covering（铺满屏幕）
+  ///   → originalSize（1:1 物理像素，clamp 边界内）→ initial。
+  /// - 位置一律归零（ente animateOnScaleStateUpdate 同时 position→zero）。
+  /// - 动画 = fling(velocity 0.4)（临界阻尼弹簧，与 photo_view
+  ///   _scaleAnimationController.fling(velocity: 0.4) 一致；原 300ms
+  ///   decelerate + 落点锚定已移除，git 历史可回溯）。
   void _onDoubleTap(ExtendedImageGestureState state) {
     _gestureState = state;
-    final pointerDown = state.pointerDownPosition;
-    if (pointerDown == null) return;
     final details = state.gestureDetails;
     final begin = details?.totalScale ?? 1.0;
-    final zooming = begin <= 1.01;
-    final targetScale = zooming ? _computeDoubleTapTarget(state) : 1.0;
+    final double targetScale;
+    if (begin <= 1.01) {
+      targetScale = _coveringScale; // initial → covering
+    } else if ((begin - _coveringScale).abs() <= _coveringScale * 0.06) {
+      targetScale = _originalScale; // covering → originalSize
+    } else {
+      targetScale = 1.0; // 其余（含 originalSize/手势缩放态）→ initial
+    }
     _doubleTapStartOffset = details?.offset ?? Offset.zero;
-    _doubleTapEndOffset = _computeDoubleTapEndOffset(
-      state,
-      _globalToLayoutLocal(state, pointerDown),
-      targetScale,
-    );
+    _doubleTapEndOffset = Offset.zero; // ente：位置归零
     _doubleTapTween = Tween(begin: begin, end: targetScale);
     _dblTapAnim
       ..stop()
       ..value = 0.0;
-    // animateTo 而非 fling：fling(0.4) 经 ClampingSimulation 实际约 1.5s，
-    _dblTapAnim.animateTo(
-      1.0,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.decelerate,
-    );
+    _dblTapAnim.fling(velocity: 0.4);
   }
 
-  /// 全局坐标 → 布局局部坐标（layoutRect 所在空间 = RenderImage 父容器的局部
-  /// 坐标;不能用 RenderImage 自身的 globalToLocal——自身局部坐标差一个父内偏移）。
-  Offset _globalToLayoutLocal(
-    ExtendedImageGestureState state,
-    Offset global,
-  ) {
-    final RenderBox? box = state.context.findRenderObject() as RenderBox?;
-    if (box == null || !box.hasSize) return global;
-    final RenderBox? parentBox = box.parent is RenderBox
-        ? box.parent as RenderBox
-        : null;
-    return parentBox != null
-        ? parentBox.globalToLocal(global)
-        : box.globalToLocal(global);
-  }
-
-  /// 双击终态偏移 = 锚点偏移(点击像素停在落点, p·(1−s)) + 铺满 clamp
-  /// (图像 ≥ 视口的轴把边推到视口边)。效果:
-  /// - 点击图像内部 → 像素精确钉在落点,放大后无黑边(图像铺满);
-  /// - 点击图像边缘(如右下角)→ 角落滑到屏幕边缘,铺满且无需拖拽即可看到;
-  /// - 缩小 → 终态偏移 0,回到 scale=1 的居中态。
-  Offset _computeDoubleTapEndOffset(
-    ExtendedImageGestureState state,
-    Offset tapLocal,
-    double targetScale,
-  ) {
-    if (targetScale <= 1.0) return Offset.zero;
-    final details = state.gestureDetails;
-    final layout = details?.layoutRect;
-    final dest = details?.destinationRect;
-    if (layout == null || dest == null || dest.isEmpty) {
-      // 几何未就绪:退化为纯锚点(与旧自研 toScene 算法一致)。
-      return Offset(
-        tapLocal.dx * (1 - targetScale),
-        tapLocal.dy * (1 - targetScale),
-      );
-    }
-    final Dc = dest.center;
-    var off = Offset(
-      tapLocal.dx * (1 - targetScale),
-      tapLocal.dy * (1 - targetScale),
-    );
-    final w = dest.width * targetScale;
-    final h = dest.height * targetScale;
-    final center = Offset(
-      Dc.dx * targetScale + off.dx,
-      Dc.dy * targetScale + off.dy,
-    );
-    final left = center.dx - w / 2, right = center.dx + w / 2;
-    final top = center.dy - h / 2, bottom = center.dy + h / 2;
-    if (w >= layout.width) {
-      if (left > layout.left) {
-        off = Offset(off.dx - (left - layout.left), off.dy);
-      }
-      if (right < layout.right) {
-        off = Offset(off.dx + (layout.right - right), off.dy);
-      }
-    }
-    if (h >= layout.height) {
-      if (top > layout.top) {
-        off = Offset(off.dx, off.dy - (top - layout.top));
-      }
-      if (bottom < layout.bottom) {
-        off = Offset(off.dx, off.dy + (layout.bottom - bottom));
-      }
-    }
-    return off;
-  }
 
   @override
   void didChangeDependencies() {
@@ -1565,25 +1516,6 @@ class _BigImageState extends State<_BigImage>
     _chromeTapTimer?.cancel();
     _doubleTapAnim?.dispose();
     super.dispose();
-  }
-
-  /// 目标倍率自适应：未放大 → max(2.5, coverRatio) 铺满屏幕消除黑边；
-  /// 与旧自研 toScene + clamp 算法效果一致）。
-  double _computeDoubleTapTarget(ExtendedImageGestureState state) {
-    final details = state.gestureDetails;
-    final layout = details?.layoutRect;
-    final dest = details?.destinationRect;
-    // 用 ExtendedImage 实时 dest/layout 算 coverRatio（填满 layout 的 scale）,不依赖
-    // _imageAspect（async 可能首次双击未就绪 → 扁图 fallback 2.5 放大后高<屏高留白）。
-    // dest = scale=1 的 contain 矩形（图 aspect）,layout = ExtendedImage 布局区域。
-    if (layout == null || dest == null || dest.isEmpty) return 2.5;
-    final rw = layout.width / dest.width;
-    final rh = layout.height / dest.height;
-    final coverRatio = rw > rh ? rw : rh;
-    final target = coverRatio > 2.5 ? coverRatio : 2.5;
-    if (target < 1.0) return 1.0;
-    if (target > 5.0) return 5.0;
-    return target;
   }
 
   @override
@@ -1718,21 +1650,46 @@ class _BigImageState extends State<_BigImage>
         gaplessPlayback: true,
         mode: ExtendedImageMode.gesture,
         enableLoadState: true,
-        initGestureConfigHandler: (state) => GestureConfig(
-          minScale: 1.0,
-          maxScale: 5.0,
-          // 手势过程允许缩小到 0.5（双指向内拖动），松手弹回 minScale=1.0（正常大小）。
-          // extended_image: animationMinScale 是过程下限，minScale 是回弹目标。
-          animationMinScale: 0.5,
-          animationMaxScale: 5.0,
-          speed: 1.0,
-          // 单指拖拽步进 1.4×（每次拖动移动更远；捏合缩放的 speed 不受影响）。
-          panSpeed: 1.4,
-          inertialSpeed: 100,
-          initialScale: 1.0,
-          inPageView: true,
-          gestureDetailsIsChanged: _onGestureDetailsChanged,
-        ),
+        initGestureConfigHandler: (state) {
+          // 动画对齐 ente（photo_view）：
+          // - minScale = contained 基准（initialScale 1.0 即适应屏幕）
+          // - maxScale = covered × 3（按图片宽高动态算：covered/contained 相对
+          //   倍数 ×3；ente 为 PhotoViewComputedScale.covered*3.0）
+          // - strictScale 硬边界：animationMin/MaxScale == min/max，
+          //   手势过程不可超出范围（原 0.5 软回弹已移除）
+          // - panSpeed 1.0：ente 平移 1:1（原 1.4 步进已移除）
+          final info = state.extendedImageInfo;
+          var maxScale = 5.0;
+          if (info != null) {
+            final screen = MediaQuery.sizeOf(context);
+            final dpr = MediaQuery.devicePixelRatioOf(context);
+            final sw = screen.width;
+            final sh = screen.height;
+            final iw = info.image.width;
+            final ih = info.image.height;
+            if (iw > 0 && ih > 0) {
+              final contained = math.min(sw / iw, sh / ih);
+              final covered = math.max(sw / iw, sh / ih);
+              maxScale = covered / contained * 3.0;
+              // 双击循环目标（ente covering/originalSize 的相对倍数）。
+              _coveringScale = covered / contained;
+              final containW = math.min(sw, sh * iw / ih);
+              _originalScale = ((iw / dpr) / containW).clamp(1.0, maxScale);
+            }
+          }
+          return GestureConfig(
+            minScale: 1.0,
+            maxScale: maxScale,
+            animationMinScale: 1.0,
+            animationMaxScale: maxScale,
+            speed: 1.0,
+            panSpeed: 1.0,
+            inertialSpeed: 100,
+            initialScale: 1.0,
+            inPageView: true,
+            gestureDetailsIsChanged: _onGestureDetailsChanged,
+          );
+        },
         onDoubleTap: _onDoubleTap,
         loadStateChanged: (state) {
           if (state.extendedImageLoadState == LoadState.loading) {
@@ -1779,9 +1736,22 @@ class _BigImageState extends State<_BigImage>
 
   void _handleSwipeMove(PointerMoveEvent e) {
     if (e.pointer != _trackPointer) return;
+    final down = _trackDown;
     final last = _trackLast;
-    if (last == null) return;
+    if (down == null || last == null) return;
     _trackLast = e.position;
+    // [ente 对齐] 下滑关闭：未放大时累计下拖 > 32px 且垂直主导 → pop。
+    // ente zoomable_image 为 onVerticalDragUpdate 单帧增量 > dragSensitivity(8)
+    // 即 Navigator.maybePop（实际手指移动 ~20-30px 内触发）；此处 Listener 层
+    // 按累计位移等效复刻，触发后清 track 防重复触发。放大中禁用（与 ente
+    // _isZooming 时禁用一致），此时下拖是平移图片。
+    final delta = e.position - down;
+    if (_currentScale <= 1.05 &&
+        delta.dy > 32 &&
+        delta.dy > delta.dx.abs() * 1.3) {
+      _resetSwipeTrack();
+      widget.onSwipeDown?.call();
+    }
   }
 
   void _handleSwipeUp(PointerUpEvent e) {
@@ -1855,15 +1825,25 @@ class _BigImageState extends State<_BigImage>
   }
 }
 
-/// 页对齐由 _PagePosition 保证，这里只调 spring 参数。
-class _SnapSpringPhysics extends ScrollPhysics {
-  const _SnapSpringPhysics({super.parent});
+/// [visort] 动画对齐 ente FastScrollPhysics（mobile/apps/photos/lib/ui/common/
+/// fast_scroll_physics.dart）：PageScrollPhysics + ballistic velocity ×4 ——
+/// 甩动惯性 4 倍，快滑一次可跨页的观感（DetailPage 翻页同款）。
+/// 原 _SnapSpringPhysics（stiffness 300 弹簧吸附）已移除，git 历史可回溯。
+class _FastScrollPhysics extends PageScrollPhysics {
+  const _FastScrollPhysics({this.speedFactor = 4.0, super.parent});
+
+  final double speedFactor;
+
   @override
-  _SnapSpringPhysics applyTo(ScrollPhysics? ancestor) =>
-      _SnapSpringPhysics(parent: buildParent(ancestor));
+  _FastScrollPhysics applyTo(ScrollPhysics? ancestor) => _FastScrollPhysics(
+    speedFactor: speedFactor,
+    parent: buildParent(ancestor),
+  );
+
   @override
-  SpringDescription get spring =>
-      SpringDescription.withDampingRatio(mass: 1, stiffness: 300, ratio: 1.0);
+  Simulation? createBallisticSimulation(ScrollMetrics position, double velocity) {
+    return super.createBallisticSimulation(position, velocity * speedFactor);
+  }
 }
 
 // ─────────────── 详情面板(上划信息)同步动画参数 ───────────────

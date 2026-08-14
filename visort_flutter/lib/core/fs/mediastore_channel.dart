@@ -405,6 +405,16 @@ class MediaStoreChannel {
     }
   }
 
+  /// 设备总内存（MB）。[ente 对齐] 解码防崩阈值用（RAM < 5GB → 24MP 上限）。
+  Future<int?> totalRamMb() async {
+    try {
+      final raw = await _channel.invokeMethod<int>('totalRamMb');
+      return raw;
+    } on PlatformException {
+      return null;
+    }
+  }
+
   /// 存在性检查
   Future<bool> exists(String id) async {
     try {

@@ -15,7 +15,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
-
+import 'core/fs/image_loader.dart' show initMaxDecodePixels;
 import 'package:flutter/scheduler.dart';
 import 'app.dart';
 import 'core/i18n/i18n.dart';
@@ -140,6 +140,8 @@ Future<void> _setupAndroid() async {
   // 由 main() 以 unawaited 后台调用，不阻塞 runApp。
   // 授权有效性检查留给 home_screen_android（需要 UI 上下文提示重新授权）
   await SharedPreferences.getInstance();
+  // [ente 对齐] 解码防崩阈值（RAM < 5GB → 24MP）：后台预热，不阻塞首帧。
+  await initMaxDecodePixels();
 }
 
 // ───────────────────────── 窗口持久化监听器（Windows） ─────────────────────────

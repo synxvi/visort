@@ -71,6 +71,11 @@ class AppDurations {
   /// 微交互（一加 m3_sys_motion_duration_short3 = 150ms）。
   static const micro = Duration(milliseconds: 150);
 
+  /// [ente 对齐] 内容切换交叉淡入（albums_tab
+  /// _kContentTransitionDuration = 150ms；进 easeInQuart / 出 easeOutExpo）。
+  /// 排序/视图模式切换时网格内容整体 fade 过渡。
+  static const enteContentSwitch = Duration(milliseconds: 150);
+
   /// photo viewer 飞行缩放（保持原 250ms：图加载需要时间，过快会灰屏）。
   static const flight = Duration(milliseconds: 250);
 
