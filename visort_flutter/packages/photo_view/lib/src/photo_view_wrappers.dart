@@ -35,6 +35,8 @@ class ImageWrapper extends StatefulWidget {
     required this.errorBuilder,
     required this.enablePanAlways,
     required this.strictScale,
+    this.enableDoubleTap = true,
+    this.coreKey,
   }) : super(key: key);
 
   final ImageProvider imageProvider;
@@ -66,6 +68,10 @@ class ImageWrapper extends StatefulWidget {
   final bool? disableGestures;
   final bool? enablePanAlways;
   final bool? strictScale;
+
+  /// [visort fork] core 内双击开关 + core 全局键。
+  final bool enableDoubleTap;
+  final GlobalKey<State<StatefulWidget>>? coreKey;
 
   @override
   _ImageWrapperState createState() => _ImageWrapperState();
@@ -188,6 +194,7 @@ class _ImageWrapperState extends State<ImageWrapper> {
     );
 
     return PhotoViewCore(
+      key: widget.coreKey,
       imageProvider: widget.imageProvider,
       backgroundDecoration: widget.backgroundDecoration,
       semanticLabel: widget.semanticLabel,
@@ -199,6 +206,7 @@ class _ImageWrapperState extends State<ImageWrapper> {
       scaleStateController: widget.scaleStateController,
       scaleStateCycle: widget.scaleStateCycle ?? defaultScaleStateCycle,
       strictScale: widget.strictScale ?? false,
+      enableDoubleTap: widget.enableDoubleTap,
       scaleBoundaries: scaleBoundaries,
       onTapUp: widget.onTapUp,
       onTapDown: widget.onTapDown,
@@ -261,6 +269,8 @@ class CustomChildWrapper extends StatelessWidget {
     required this.disableGestures,
     required this.enablePanAlways,
     required this.strictScale,
+    this.enableDoubleTap = true,
+    this.coreKey,
   }) : super(key: key);
 
   final Widget? child;
@@ -293,6 +303,10 @@ class CustomChildWrapper extends StatelessWidget {
   final bool? enablePanAlways;
   final bool? strictScale;
 
+  /// [visort fork] core 内双击开关 + core 全局键。
+  final bool enableDoubleTap;
+  final GlobalKey<State<StatefulWidget>>? coreKey;
+
   @override
   Widget build(BuildContext context) {
     final scaleBoundaries = ScaleBoundaries(
@@ -304,6 +318,7 @@ class CustomChildWrapper extends StatelessWidget {
     );
 
     return PhotoViewCore.customChild(
+      key: coreKey,
       customChild: child,
       backgroundDecoration: backgroundDecoration,
       enableRotation: enableRotation,
@@ -314,6 +329,7 @@ class CustomChildWrapper extends StatelessWidget {
       basePosition: basePosition ?? Alignment.center,
       scaleBoundaries: scaleBoundaries,
       strictScale: strictScale ?? false,
+      enableDoubleTap: enableDoubleTap,
       onScaleEnd: onScaleEnd,
       onEdgeX: onEdgeX,
       gestureDetectorBehavior: gestureDetectorBehavior,

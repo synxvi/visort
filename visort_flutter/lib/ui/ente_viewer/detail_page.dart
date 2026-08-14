@@ -140,6 +140,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// [photo_view fork] X 边缘溢出翻页动画进行中：期间忽略重复回调防连翻。
   bool _edgePageAnimating = false;
 
+  /// 翻页滚动中显示页缘黑缝（ScrollNotification 驱动，停稳淡出）。
+  bool _pageGapVisible = false;
+
+  /// 顶层双击路由表：pageIndex → 该页 ZoomableImage 的双击处理
+  /// （Scrollable ballistic 中 ignorePointer 屏蔽页内 tap，双击必须
+  /// 由 PageView 之外捕获再分发到当前页）。
+  final Map<int, void Function(Offset globalPosition)> _doubleTapHandlers =
+      <int, void Function(Offset)>{};
+  Offset? _lastDoubleTapDown;
+
   @override
   void initState() {
     super.initState();
@@ -216,6 +226,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
       isInSharedCollectionNotifier: isInSharedCollectionNotifier,
       showingThumbnailFallbackNotifier: showingThumbnailFallbackNotifier,
       isZoomedNotifier: isZoomedNotifier,
+      doubleTapHandlers: _doubleTapHandlers,
       zoomTransformNotifier: zoomTransformNotifier,
       // 面板打开时点击图片区 → 收面板（而非切换全屏）。
       onImageTap: _detailsOpen ? _animateClose : null,
@@ -266,7 +277,35 @@ class _DetailPageState extends ConsumerState<DetailPage>
   }
 
   Widget _buildPageView() {
-    return PageView.builder(
+    return GestureDetector(
+      // [顶层双击] Scrollable ballistic/拖动中 ignorePointer 屏蔽页内 tap
+      // （翻页未停稳双击失灵的根因）——双击在 PageView 之上捕获，按当前
+      // 页索引分发到该页 ZoomableImage（→ PhotoViewCore.doubleTapZoom）。
+      // translucent：PageView ignorePointer 期间 child hit 失败，deferToChild
+      // 会让本层 hit 一并失败（双击收不到）；translucent 自身参与 hit 且
+      // 透传，滚动中 tap 仍可达。只注册 DoubleTap recognizer，不影响
+      // drag/scale；与页内 onTap 共存的单击 300ms 延迟与此前一致。
+      behavior: HitTestBehavior.translucent,
+      onDoubleTapDown: (d) => _lastDoubleTapDown = d.globalPosition,
+      onDoubleTap: () {
+        final down = _lastDoubleTapDown;
+        if (down == null) return;
+        _doubleTapHandlers[_selectedIndexNotifier.value]?.call(down);
+      },
+      child: NotificationListener<ScrollNotification>(
+      // 翻页间隙：滚动中显示页缘黑缝（相邻两页交界 8px 黑，区分两张图），
+      // 停稳后淡出——静止时图片满宽贴屏（无永久 padding，Hero 终点矩形
+      // 与网格 cell 严格一致）。depth==0：只认 PageView 自身（内部无可滚
+      // 子组件，防御性过滤）。
+      onNotification: (n) {
+        if (n.depth != 0) return false;
+        final scrolling = n is! ScrollEndNotification;
+        if (scrolling != _pageGapVisible) {
+          setState(() => _pageGapVisible = scrolling);
+        }
+        return false;
+      },
+      child: PageView.builder(
       clipBehavior: Clip.none,
       itemBuilder: (context, index) {
         final file = _files[index];
@@ -274,6 +313,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
         final fileContent = ZoomableImage(
           file,
           tagPrefix: 'photo',
+          // 页索引：顶层双击路由（Scrollable ballistic 中 ignorePointer
+          // 屏蔽页内 tap → 双击由 detail_page 顶层捕获后按索引分发）。
+          pageIndex: index,
           // 与相册网格同列数：cell 缩略图尺寸一致（ImageCache key 命中）。
           gridCols: ref.watch(configProvider).photoGridColumns,
           shouldDisableScroll: (value) {
@@ -289,17 +331,27 @@ class _DetailPageState extends ConsumerState<DetailPage>
           onEdgeX: _handleEdgePage,
           onFullLoaded: (_) {},
         );
-        final page = Padding(
-          // 相邻两页间隙（主分支同款 4px）：两侧各 4px，翻页时露出黑缝
-          // 区分两张图。PhotoView 的 scaleBoundaries.outerSize 随 padding
-          // 收窄，contain 矩形缩 8px——Hero 飞行终点同矩形，无跳变。
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          child: GestureDetector(
-            onTap: () {
-              InheritedDetailPageState.of(context).toggleFullScreenByUser();
-            },
-            child: fileContent,
-          ),
+        final pageContent = GestureDetector(
+          onTap: () {
+            InheritedDetailPageState.of(context).toggleFullScreenByUser();
+          },
+          child: fileContent,
+        );
+        // 页缘黑缝遮罩：仅滚动中可见（AnimatedOpacity 淡入淡出）。
+        // IgnorePointer 不挡下层手势。
+        final page = Stack(
+          children: [
+            Positioned.fill(child: pageContent),
+            Positioned.fill(
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  opacity: _pageGapVisible ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 150),
+                  child: const _PageGapEdges(),
+                ),
+              ),
+            ),
+          ],
         );
         return ValueListenableBuilder(
           valueListenable: _selectedIndexNotifier,
@@ -331,8 +383,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
           : const FastScrollPhysics(speedFactor: 4.0),
       controller: _pageController,
       itemCount: _files.length,
+      ),
+      ),
     );
   }
+
 
   /// [photo_view fork] 放大后 X 边缘溢出 → 翻页（dir>0 右拖→上一张，<0 左拖→下一张）。
   void _handleEdgePage(int dir) {
@@ -1308,6 +1363,24 @@ class _TrashDateLabel extends ConsumerWidget {
             fontFamilyFallback: ['Noto Sans Mono CJK SC'],
           ),
         ),
+      ],
+    );
+  }
+}
+
+/// 页缘黑缝（翻页间隙）：左右各 4px 黑条，仅 PageView 滚动中显示
+/// （AnimatedOpacity 淡入），相邻两页交界处拼成 8px 黑色间距。
+class _PageGapEdges extends StatelessWidget {
+  const _PageGapEdges();
+
+  @override
+  Widget build(BuildContext context) {
+    const gap = 4.0;
+    return const Row(
+      children: [
+        SizedBox(width: gap, child: ColoredBox(color: Colors.black)),
+        Expanded(child: SizedBox.shrink()),
+        SizedBox(width: gap, child: ColoredBox(color: Colors.black)),
       ],
     );
   }

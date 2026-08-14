@@ -57,15 +57,17 @@ class PhotoViewGestureDetector extends StatelessWidget {
       );
     }
 
-    gestures[DoubleTapGestureRecognizer] =
-        GestureRecognizerFactoryWithHandlers<DoubleTapGestureRecognizer>(
-      () => DoubleTapGestureRecognizer(debugOwner: this),
-      (DoubleTapGestureRecognizer instance) {
-        instance
-          ..onDoubleTapDown = onDoubleTapDown
-          ..onDoubleTap = onDoubleTap;
-      },
-    );
+    if (onDoubleTap != null || onDoubleTapDown != null) {
+      gestures[DoubleTapGestureRecognizer] =
+          GestureRecognizerFactoryWithHandlers<DoubleTapGestureRecognizer>(
+        () => DoubleTapGestureRecognizer(debugOwner: this),
+        (DoubleTapGestureRecognizer instance) {
+          instance
+            ..onDoubleTapDown = onDoubleTapDown
+            ..onDoubleTap = onDoubleTap;
+        },
+      );
+    }
 
     gestures[PhotoViewGestureRecognizer] =
         GestureRecognizerFactoryWithHandlers<PhotoViewGestureRecognizer>(

@@ -36,6 +36,11 @@ class InheritedDetailPageState extends InheritedWidget {
   final ValueNotifier<bool> isInSharedCollectionNotifier;
   final ValueNotifier<String?> showingThumbnailFallbackNotifier;
   final ValueNotifier<bool> isZoomedNotifier;
+
+  /// [顶层双击路由] pageIndex → 该页双击处理（global 坐标）。
+  /// Scrollable ballistic 中 ignorePointer 屏蔽页内 tap，双击由
+  /// DetailPage 顶层捕获后按当前页索引分发。
+  final Map<int, void Function(Offset globalPosition)> doubleTapHandlers;
   final ValueNotifier<ZoomTransform> zoomTransformNotifier;
 
   /// 图片区单击回调（DetailPage 注入）：详情面板打开时收面板，否则全屏切换。
@@ -49,6 +54,7 @@ class InheritedDetailPageState extends InheritedWidget {
     required this.isInSharedCollectionNotifier,
     required this.showingThumbnailFallbackNotifier,
     required this.isZoomedNotifier,
+    required this.doubleTapHandlers,
     required this.zoomTransformNotifier,
     this.onImageTap,
   });

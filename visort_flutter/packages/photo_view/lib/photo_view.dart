@@ -264,6 +264,8 @@ class PhotoView extends StatefulWidget {
     this.errorBuilder,
     this.enablePanAlways,
     this.strictScale,
+    this.enableDoubleTap = true,
+    this.coreKey,
   })  : child = null,
         childSize = null,
         super(key: key);
@@ -301,6 +303,8 @@ class PhotoView extends StatefulWidget {
     this.disableGestures,
     this.enablePanAlways,
     this.strictScale,
+    this.enableDoubleTap = true,
+    this.coreKey,
   })  : errorBuilder = null,
         imageProvider = null,
         semanticLabel = null,
@@ -421,6 +425,11 @@ class PhotoView extends StatefulWidget {
   /// Enable strictScale will restrict user scale gesture to the maxScale and minScale values.
   final bool? strictScale;
 
+  /// [visort fork] core 内双击手势开关（顶层分发模式 false）+ core state
+  /// 全局键（外层经 doubleTapZoom 驱动缩放）。
+  final bool enableDoubleTap;
+  final GlobalKey<State<StatefulWidget>>? coreKey;
+
   bool get _isCustomChild {
     return child != null;
   }
@@ -536,6 +545,8 @@ class _PhotoViewState extends State<PhotoView>
                 onTapDown: widget.onTapDown,
                 onScaleEnd: widget.onScaleEnd,
                 onEdgeX: widget.onEdgeX,
+                enableDoubleTap: widget.enableDoubleTap,
+                coreKey: widget.coreKey,
                 outerSize: computedOuterSize,
                 gestureDetectorBehavior: widget.gestureDetectorBehavior,
                 tightMode: widget.tightMode,
@@ -564,6 +575,8 @@ class _PhotoViewState extends State<PhotoView>
                 onTapDown: widget.onTapDown,
                 onScaleEnd: widget.onScaleEnd,
                 onEdgeX: widget.onEdgeX,
+                enableDoubleTap: widget.enableDoubleTap,
+                coreKey: widget.coreKey,
                 outerSize: computedOuterSize,
                 gestureDetectorBehavior: widget.gestureDetectorBehavior,
                 tightMode: widget.tightMode,

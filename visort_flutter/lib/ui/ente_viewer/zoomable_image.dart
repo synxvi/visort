@@ -19,6 +19,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:photo_view/photo_view.dart';
+import 'package:photo_view/src/core/photo_view_core.dart' show PhotoViewCoreState;
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
@@ -32,6 +33,9 @@ const double _kDragSensitivity = 8.0;
 
 class ZoomableImage extends StatefulWidget {
   final MsImageInfo photo;
+
+  /// 页索引（顶层双击路由注册键；null 时不参与顶层分发）。
+  final int? pageIndex;
   final Function(bool)? shouldDisableScroll;
   final String? tagPrefix;
   final Decoration? backgroundDecoration;
@@ -52,6 +56,7 @@ class ZoomableImage extends StatefulWidget {
   const ZoomableImage(
     this.photo, {
     super.key,
+    this.pageIndex,
     this.gridCols = 4,
     this.shouldDisableScroll,
     this.tagPrefix,
@@ -67,6 +72,10 @@ class ZoomableImage extends StatefulWidget {
 }
 
 class _ZoomableImageState extends State<ZoomableImage> {
+  /// PhotoViewCore 全局键：顶层双击 → doubleTapZoom 入口。
+  final GlobalKey<PhotoViewCoreState> _coreKey = GlobalKey<PhotoViewCoreState>();
+  InheritedDetailPageState? _inherited;
+
   ImageProvider? _imageProvider;
   bool _loadedSmallThumbnail = false;
   bool _loadingLargeThumbnail = false;
@@ -123,6 +132,24 @@ class _ZoomableImageState extends State<ZoomableImage> {
     _subscribeToZoomStream();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _inherited = InheritedDetailPageState.maybeOf(context);
+    final idx = widget.pageIndex;
+    if (idx != null) {
+      _inherited?.doubleTapHandlers[idx] = _handleTopDoubleTap;
+    }
+  }
+
+  /// 顶层双击（global）→ core 局部坐标 → 精准缩放。
+  void _handleTopDoubleTap(Offset globalPosition) {
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    _coreKey.currentState
+        ?.doubleTapZoom(box.globalToLocal(globalPosition));
+  }
+
   void _subscribeToZoomStream() {
     _zoomStreamSubscription = _photoViewController.outputStateStream.listen((
       value,
@@ -145,6 +172,10 @@ class _ZoomableImageState extends State<ZoomableImage> {
 
   @override
   void dispose() {
+    final idx = widget.pageIndex;
+    if (idx != null) {
+      _inherited?.doubleTapHandlers.remove(idx);
+    }
     _zoomStreamSubscription?.cancel();
     _photoViewController.dispose();
     _scaleStateController.dispose();
@@ -163,6 +194,10 @@ class _ZoomableImageState extends State<ZoomableImage> {
           // 切原图时 key 变化强制重建 PhotoView，让调整后的 zoom 生效
           //（ente 同款；gaplessPlayback 让同尺寸替换不闪底层）。
           key: ValueKey(_loadedFinalImage),
+          // 双击由 detail_page 顶层捕获分发（ballistic 中 ignorePointer
+          // 屏蔽页内 tap）→ core 内不注册双击手势，防双重触发。
+          enableDoubleTap: false,
+          coreKey: _coreKey,
           imageProvider: _imageProvider,
           controller: _photoViewController,
           filterQuality: FilterQuality.high,

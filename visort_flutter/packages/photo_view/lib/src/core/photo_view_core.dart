@@ -33,6 +33,7 @@ class PhotoViewCore extends StatefulWidget {
     required this.onTapDown,
     required this.onScaleEnd,
     this.onEdgeX,
+    this.enableDoubleTap = true,
     required this.gestureDetectorBehavior,
     required this.controller,
     required this.scaleBoundaries,
@@ -57,6 +58,7 @@ class PhotoViewCore extends StatefulWidget {
     this.onTapDown,
     this.onScaleEnd,
     this.onEdgeX,
+    this.enableDoubleTap = true,
     this.gestureDetectorBehavior,
     required this.controller,
     required this.scaleBoundaries,
@@ -93,6 +95,10 @@ class PhotoViewCore extends StatefulWidget {
 
   /// [visort fork] X 边缘溢出回调（+1 右拖溢出→上一张，-1 左拖溢出→下一张）。
   final ValueChanged<int>? onEdgeX;
+
+  /// [visort fork] 是否在 core 内注册双击手势（顶层分发模式置 false，
+  /// 双击由外层捕获后调 doubleTapZoom）。
+  final bool enableDoubleTap;
 
   final HitTestBehavior? gestureDetectorBehavior;
   final bool tightMode;
@@ -261,12 +267,21 @@ class PhotoViewCoreState extends State<PhotoViewCore>
   /// 屏幕像素位置 = c + p + (q - C/2)·s（c=视口中心，q=子图像素）。
   void onDoubleTap() {
     final tap = _doubleTapDownPosition;
+    _doubleTapDownPosition = null;
     final box = context.findRenderObject();
-    if (tap == null || box is! RenderBox || !box.hasSize) {
+    if (box is! RenderBox || !box.hasSize) {
       nextScaleState();
       return;
     }
-    _doubleTapDownPosition = null;
+    doubleTapZoom(tap ?? box.size.center(Offset.zero));
+  }
+
+  /// [visort fork] 顶层双击入口：Scrollable ballistic 中 ignorePointer
+  /// 屏蔽页内 tap → 外层（detail_page）捕获双击后按页索引分发到此。
+  /// [tapLocal] 为 core 局部坐标（外层 global → RenderBox.globalToLocal）。
+  void doubleTapZoom(Offset tapLocal) {
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
 
     final double begin = scale;
     final double initial = scaleBoundaries.initialScale;
@@ -274,7 +289,7 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     final double target = zooming ? _doubleTapTargetScale() : initial;
     final Offset endPos = zooming
         ? clampPosition(
-            position: _doubleTapEndPosition(tap, box.size, begin, target),
+            position: _doubleTapEndPosition(tapLocal, box.size, begin, target),
             scale: target,
           )
         : Offset.zero;
@@ -485,13 +500,15 @@ class PhotoViewCoreState extends State<PhotoViewCore>
 
             return PhotoViewGestureDetector(
               child: child,
-              onDoubleTap: onDoubleTap,
-              onDoubleTapDown: (TapDownDetails details) {
-                final box = context.findRenderObject();
-                _doubleTapDownPosition = box is RenderBox && box.hasSize
-                    ? box.globalToLocal(details.globalPosition)
-                    : null;
-              },
+              onDoubleTap: widget.enableDoubleTap ? onDoubleTap : null,
+              onDoubleTapDown: widget.enableDoubleTap
+                  ? (TapDownDetails details) {
+                      final box = context.findRenderObject();
+                      _doubleTapDownPosition = box is RenderBox && box.hasSize
+                          ? box.globalToLocal(details.globalPosition)
+                          : null;
+                    }
+                  : null,
               onScaleStart: onScaleStart,
               onScaleUpdate: onScaleUpdate,
               onScaleEnd: onScaleEnd,
