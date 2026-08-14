@@ -26,6 +26,10 @@ import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 
+import 'package:visort_flutter/ui/ente_viewer/gallery.dart' show Gallery;
+import 'package:visort_flutter/ui/ente_viewer/gallery_groups.dart';
+import 'package:visort_flutter/ui/ente_viewer/group_type.dart';
+import 'package:visort_flutter/ui/ente_viewer/selected_files.dart';
 import 'package:visort_flutter/ui/ente_viewer/detail_page.dart';
 import 'album_common.dart';
 
@@ -65,7 +69,6 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   static const _threshold = 0.7; // 滚动到 70% 触发加载更多
 
   /// 网格 GridView key：计算 cell 屏幕位置（返回飞行层终点）用。
-  final GlobalKey _gridKey = GlobalKey();
 
   /// 打开 viewer 时的照片索引与网格滚动位置：
   /// 返回定位规则（对标系统相册）——向后滑→目标行贴视口底部；
@@ -76,24 +79,16 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   // ── 批量选择模式：长按 cell 进入，勾选后底部操作栏执行批量操作 ──
   bool _selectMode = false;
   final Set<String> _selectedIds = {};
+  /// ente Gallery 选择态（勾选渲染用）；_selectedIds 保持真源，双向同步。
+  final SelectedFiles _selection = SelectedFiles();
   /// 视图模式：false=沉浸网格(默认)；true=日期分组视图。
   bool _timelineView = false;
-
-  // ── 日期分组视图扁平索引（单 SliverList 混合项：组头 / 整行照片）──
-  // 多 sliver（每组分 SliverGrid）在组数多时 build 重：进入动画帧叠加会卡顿
-  // （真机实测 1100 张/几十组明显，沉浸单 GridView 无此问题）。扁平化为单
-  // SliverList 后 build 轻（只 layout 可见项），动画流畅且直接渲染清晰缩略图
-  // （128→300 正常渐进，无低质量跳变）。全量加载后 itemCount 固定，extent 稳定。
-  List<MsImageInfo>? _flatPhotos; // 索引对应的 photos（identical 判定缓存）
-  List<int> _flat = const []; // 负=组头(-组号-1)，非负=行首 photo 全局下标
-  List<int> _flatRowEnd = const []; // 行项的末尾 photo 下标+1（组尾行不满）
-  List<int> _flatDayMs = const []; // 组头 dayMs（按组号）
-  int _flatGroupCount = 0; // 已加载组数
 
   void _enterSelectMode(String id) {
     setState(() {
       _selectMode = true;
       _selectedIds.add(id);
+      _syncSelection();
     });
   }
 
@@ -101,13 +96,23 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     setState(() {
       _selectMode = false;
       _selectedIds.clear();
+      _selection.clearAll();
     });
   }
 
   void _toggleSelect(String id) {
     setState(() {
       if (!_selectedIds.remove(id)) _selectedIds.add(id);
+      _syncSelection();
     });
+  }
+
+  /// 把 _selectedIds 同步进 ente SelectedFiles（Gallery 勾选渲染用）。
+  void _syncSelection() {
+    final photos = ref.read(galleryControllerProvider).photos;
+    _selection.replaceSelection(
+      photos.where((p) => _selectedIds.contains(p.id)).toSet(),
+    );
   }
 
   /// 切换沉浸网格/日期分组视图。切到日期视图时强制按创建日期排序
@@ -368,11 +373,6 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     }
     // 缩略图像素尺寸 = cell 逻辑宽 × dpr（物理像素对齐，对标系统相册 dp×dpr 分档）。
     // 固定 300 时代 dpr≈3.19 的 cell≈466px 物理，缩略图欠采样发糊；按 dpr 全采样更清晰。
-    final cellWidth =
-        (MediaQuery.sizeOf(context).width - 4 * 2 - (cols - 1) * 3) / cols;
-    final thumbSize = (cellWidth * MediaQuery.devicePixelRatioOf(context))
-        .round()
-        .clamp(160, 512);
     // 直接用 scanImages 的 SQL 原序（已跟随 photoSortBy 排序），与首页封面
     // （listBuckets 取该 SQL 排序首张）严格一致。不用 sortedPhotos 内存重排，
     // 避免 Dart/SQL 对日期列（DATE_ADDED）为空（NULL）行的处理差异导致首张不一致。
@@ -394,53 +394,28 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         ),
       );
     }
-    return Stack(
-      children: [
-        GridView.builder(
-          key: _gridKey,
-          controller: _scrollCtrl,
-          // 动画对齐 ente：iOS 式回弹滚动物理（ente 安卓网格同为 Bouncing）。
-          physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.all(4),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: cols,
-            crossAxisSpacing: 3,
-            mainAxisSpacing: 3,
-          ),
-          // ⚠️ 无「加载更多」占位项：滚动 70% 自动触发 loadMore，数据到达直接插入，
-          // 底部不再渲染转圈 cell。
-          itemCount: photos.length,
-          itemBuilder: (ctx, i) {
-            final info = photos[i];
-            // ⚠️ 不要用 RepaintBoundary 包 cell：滚动时每个新 cell 创建独立
-            // layer、旧 cell 销毁，频繁 layer 分配会拖慢滚动（实测滚动变卡）。
-            // cell 保持纯 InkWell + Image（与无动画版本一致，滚动流畅）。
-            return _PhotoCell(
-              info: info,
-              thumbSize: thumbSize,
-              selectMode: _selectMode,
-              selected: _selectedIds.contains(info.id),
-              onTap: (cellRect) => _selectMode
-                  ? _toggleSelect(info.id)
-                  : _openViewer(context, gallery, photos, i, cellRect),
-              onLongPress: _selectMode ? null : () => _enterSelectMode(info.id),
-            );
-          },
-        ),
-        // 右侧滚动拖拽手柄：向下滚动后出现，可拖拽跳转。
-        // 用真实图片总数（bucket.count）+ 固定单行高度算进度，
-        // 分母稳定不变 → 分页 loadMore 时手柄绝不回跳。
-        ScrollDragHandle(
-          controller: _scrollCtrl,
-          totalItems: widget.bucketCount ?? photos.length,
-          rowExtent:
-              (MediaQuery.sizeOf(context).width - 4 * 2 - (cols - 1) * 3) /
-                  cols +
-              3,
-          columns: cols,
-          viewportRows: 5,
-        ),
-      ],
+    // [ente 移植] 沉浸网格：ente Gallery（SectionedSliverList 分组网格 +
+    // 自定义滚动条 + 2px 间距；间距/布局与 ente 一致）。
+    return Gallery(
+      allFiles: photos,
+      tagPrefix: 'photo',
+      groupType: GroupType.none,
+      selectedFiles: _selectMode ? _selection : null,
+      inSelectionMode: _selectMode,
+      crossAxisCount: cols,
+      sortOrderAsc: !gallery.photoSortAsc,
+      scrollController: _scrollCtrl,
+      emptyState: const SizedBox.shrink(),
+      onFileTap: (file) {
+        final i = photos.indexOf(file);
+        if (i < 0) return;
+        _selectMode
+            ? _toggleSelect(file.id)
+            : _openViewer(context, gallery, photos, i, null);
+      },
+      onFileLongPress: (file) {
+        if (!_selectMode) _enterSelectMode(file.id);
+      },
     );
   }
 
@@ -468,147 +443,32 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         ),
       );
     }
-    final cellWidth =
-        (MediaQuery.sizeOf(context).width - 4 * 2 - (cols - 1) * 3) / cols;
-    final cellH = cellWidth + 3; // 含行距，与手柄 rowExtent 一致
-    final thumbSize = (cellWidth * MediaQuery.devicePixelRatioOf(context))
-        .round()
-        .clamp(160, 512);
-    final totalItems = widget.bucketCount ?? photos.length;
-    // 扁平索引：photos 引用变化（loadMore/刷新）时重建，否则复用（滚动/选中/
-    // 动画帧不重算 —— build 轻的关键，也是动画流畅的根因）。
-    if (!identical(_flatPhotos, photos)) _buildTimelineIndex(photos, cols);
-    return Stack(
-      children: [
-        CustomScrollView(
-          key: _gridKey,
-          controller: _timelineScrollCtrl,
-          physics: const BouncingScrollPhysics(),
-          slivers: [
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
-              sliver: SliverList(
-                delegate: SliverChildBuilderDelegate((ctx, j) {
-                  final f = _flat[j];
-                  if (f < 0) {
-                    // 组头项：随内容滚动（非 sticky，避免多组日期头叠成日期列表）
-                    return _DateHeaderRow(
-                      label: _dayLabel(_flatDayMs[-f - 1], ref),
-                    );
-                  }
-                  // 整行项：行首 photo 下标 f 起连续 cols 张（组尾行不满补空）
-                  final end = _flatRowEnd[j];
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 3),
-                    child: Row(
-                      children: [
-                        for (var pi = f; pi < end; pi++)
-                          Expanded(
-                            child: Padding(
-                              padding:
-                                  EdgeInsets.only(right: pi == end - 1 ? 0 : 3),
-                              child: SizedBox(
-                                width: double.infinity,
-                                height: cellWidth,
-                                child: _PhotoCell(
-                                  info: photos[pi],
-                                  thumbSize: thumbSize,
-                                  selectMode: _selectMode,
-                                  selected:
-                                      _selectedIds.contains(photos[pi].id),
-                                  onTap: (cellRect) => _selectMode
-                                      ? _toggleSelect(photos[pi].id)
-                                      : _openViewer(context, gallery, photos,
-                                          pi, cellRect),
-                                  onLongPress: _selectMode
-                                      ? null
-                                      : () =>
-                                          _enterSelectMode(photos[pi].id),
-                                ),
-                              ),
-                            ),
-                          ),
-                        // 组尾不完整行：补齐空位（与沉浸网格右侧留白观感一致）
-                        for (var i = end - f; i < cols; i++)
-                          const Expanded(child: SizedBox()),
-                      ],
-                    ),
-                  );
-                }, childCount: _flat.length),
-              ),
-            ),
-          ],
-        ),
-        // 日期视图拖拽手柄：单调化 maxScrollExtent（变高项滚动估算抖 →
-        // 记录见过的最大值作分母，只增不退 → 手柄不抖且准确）。
-        ScrollDragHandle(
-          controller: _timelineScrollCtrl,
-          totalItems: totalItems,
-          rowExtent: cellH,
-          columns: cols,
-          viewportRows: 5,
-          monotonicExtent: true,
-        ),
-      ],
+    // [ente 移植] 日期分组视图：ente Gallery（GroupType.day 分组 +
+    // PinnedGroupHeader 吸附头 + 自定义滚动条联动）。
+    return Gallery(
+      allFiles: photos,
+      tagPrefix: 'photo',
+      groupType: GroupType.day,
+      selectedFiles: _selectMode ? _selection : null,
+      inSelectionMode: _selectMode,
+      crossAxisCount: cols,
+      sortOrderAsc: !gallery.photoSortAsc,
+      scrollController: _timelineScrollCtrl,
+      emptyState: const SizedBox.shrink(),
+      onFileTap: (file) {
+        final i = photos.indexOf(file);
+        if (i < 0) return;
+        _selectMode
+            ? _toggleSelect(file.id)
+            : _openViewer(context, gallery, photos, i, null);
+      },
+      onFileLongPress: (file) {
+        if (!_selectMode) _enterSelectMode(file.id);
+      },
     );
   }
 
-  /// 构建日期视图扁平索引：flat（组头/整行）+ 行边界。photos 引用变化时重建。
-  void _buildTimelineIndex(List<MsImageInfo> photos, int cols) {
-    _flatPhotos = photos;
-    final groups = _groupPhotosByDay(photos);
-    _flatGroupCount = groups.length;
-    _flat = <int>[];
-    _flatRowEnd = <int>[];
-    _flatDayMs = List<int>.filled(groups.length, 0);
-    for (var gi = 0; gi < groups.length; gi++) {
-      final g = groups[gi];
-      _flatDayMs[gi] = g.dayMs;
-      _flat.add(-(gi + 1)); // 组头项
-      _flatRowEnd.add(-1);
-      final end = g.startIndex + g.photos.length;
-      for (var rowFirst = g.startIndex; rowFirst < end; rowFirst += cols) {
-        final rowEnd = rowFirst + cols < end ? rowFirst + cols : end;
-        _flat.add(rowFirst); // 行项：行首 photo 下标
-        _flatRowEnd.add(rowEnd);
-      }
-    }
-  }
-
-  /// 按天分组（保持 photos 的 SQL 排序顺序：升序旧→新 / 降序新→旧）。
-  /// [startIndex] 记录每组首项在 gallery.photos 的全局下标，供 viewer 全列表翻页。
-  List<_DateGroup> _groupPhotosByDay(List<MsImageInfo> photos) {
-    final groups = <_DateGroup>[];
-    for (var i = 0; i < photos.length; i++) {
-      final day = _dayStartMs(photos[i].dateAddedMs);
-      if (groups.isEmpty || groups.last.dayMs != day) {
-        groups.add(_DateGroup(day, [photos[i]], i));
-      } else {
-        groups.last.photos.add(photos[i]);
-      }
-    }
-    return groups;
-  }
-
-  /// 归一化到当天 0 点（毫秒）。
-  int _dayStartMs(int ms) {
-    final d = DateTime.fromMillisecondsSinceEpoch(ms);
-    return DateTime(d.year, d.month, d.day).millisecondsSinceEpoch;
-  }
-
   /// 日期标签：今天/昨天/M月d日/YYYY年M月d日（跨年带年份）。
-  String _dayLabel(int dayMs, WidgetRef ref) {
-    final day = DateTime.fromMillisecondsSinceEpoch(dayMs);
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    if (day == today) return t(ref, 'today');
-    if (day == today.subtract(const Duration(days: 1))) {
-      return t(ref, 'yesterday');
-    }
-    if (day.year == now.year) return '${day.month}月${day.day}日';
-    return '${day.year}年${day.month}月${day.day}日';
-  }
-
   /// 批量选择模式的底部操作栏：按视图模式提供不同操作。
   /// 普通相册：批量删除（移入回收站）；收藏：取消收藏 + 删除；回收站：恢复 + 彻底删除。
   Widget _buildBatchBar(GalleryState gallery) {
@@ -931,60 +791,52 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// - 向后滑（index > 打开时）→ 目标行贴视口**底部**（成为最后可见行）
   /// - 向前滑（index < 打开时）→ 目标行贴视口**顶部**（成为第一行）
   /// - 翻回原位 → 恢复打开时的网格视口
-  /// 滚动在 viewer 打开期间后台执行（用户无感），返回时目标行已在正确位置
-  ///（缩略图也随滚动预加载）。
-  /// 沉浸视图(双轴 GridView)与日期视图(单 SliverList:组头 30 + 行 cellH)
-  /// 布局不同,各用独立 ScrollController,目标 offset 需按视图计算。
+  /// 滚动在 viewer 打开期间后台执行（用户无感），返回时目标行已在正确位置。
+  /// [ente 移植] 网格已换 ente Gallery：行高 = cellW + 2px 间距；日期视图
+  /// 额外累加组头 32（GroupHeaderWidget 高），组边界用 GroupType.day 判定。
   void _scrollToCellRow(int index) {
     final cols = ref.read(configProvider).photoGridColumns;
-    final gridBox = _gridKey.currentContext?.findRenderObject();
-    if (gridBox is! RenderBox) return;
-    final cellW = (gridBox.size.width - 8 - (cols - 1) * 3) / cols;
+    final screen = MediaQuery.sizeOf(context);
+    final cellW = (screen.width - (cols - 1) * GalleryGroups.spacing) / cols;
+    final cellH = cellW + GalleryGroups.spacing;
     final ctrl = _timelineView ? _timelineScrollCtrl : _scrollCtrl;
     if (!ctrl.hasClients) return;
-    final viewportH = gridBox.size.height;
+    final viewportH = screen.height;
     double target;
     if (_timelineView) {
-      // 日期视图:累加 photos[index] 所在行之前的 item 高度(组头 30 / 行 cellH)
-      // 得该行顶部 offset。
-      final cellH = cellW + 3;
+      final photos = ref.read(galleryControllerProvider).photos;
       var offset = 0.0;
-      for (var j = 0; j < _flat.length; j++) {
-        final f = _flat[j];
-        if (f < 0) {
-          offset += 30; // _DateHeaderRow 固定高
-          continue;
+      var rowInGroup = 0;
+      for (var i = 0; i <= index && i < photos.length; i++) {
+        if (i == 0 ||
+            !GroupType.day.areFromSameGroup(photos[i - 1], photos[i])) {
+          offset += 32; // 组头高
+          rowInGroup = 0;
         }
-        if (index >= f && index < _flatRowEnd[j]) {
-          double t;
-          if (index == _openViewerIndex) {
-            t = _openScrollOffset;
-          } else if (index > _openViewerIndex) {
-            // 贴底：目标行成为视口最后一行（最小滚动）
-            final viewportRows = (viewportH / cellH).floor();
-            t = offset - (viewportRows - 1) * cellH;
-          } else {
-            // 贴顶：目标行成为视口第一行
-            t = offset;
-          }
-          _jumpToCell(ctrl, t);
-          return;
-        }
-        offset += cellH;
+        if (i == index) break;
+        if (rowInGroup % cols == cols - 1) offset += cellH;
+        rowInGroup++;
       }
-      return;
-    }
-    final rowExtent = cellW + 3;
-    final row = index ~/ cols;
-    final viewportRows = (viewportH / rowExtent).floor();
-    if (index == _openViewerIndex) {
-      target = _openScrollOffset;
-    } else if (index > _openViewerIndex) {
-      // 贴底：目标行成为视口最后一行（最小滚动）
-      target = (row - viewportRows + 1) * rowExtent;
+      if (index == _openViewerIndex) {
+        target = _openScrollOffset;
+      } else if (index > _openViewerIndex) {
+        final viewportRows = (viewportH / cellH).floor();
+        target = offset - (viewportRows - 1) * cellH;
+      } else {
+        target = offset;
+      }
     } else {
-      // 贴顶：目标行成为视口第一行
-      target = row * rowExtent;
+      final row = index ~/ cols;
+      final viewportRows = (viewportH / cellH).floor();
+      if (index == _openViewerIndex) {
+        target = _openScrollOffset;
+      } else if (index > _openViewerIndex) {
+        // 贴底：目标行成为视口最后一行（最小滚动）
+        target = (row - viewportRows + 1) * cellH;
+      } else {
+        // 贴顶：目标行成为视口第一行
+        target = row * cellH;
+      }
     }
     _jumpToCell(ctrl, target);
   }
@@ -1059,145 +911,6 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   }
 }
 
-/// 单个缩略图 cell：InkWell + cover 缩略图。
-/// 无额外动画状态（滚动性能与普通网格一致）；点击时在自身 context 里记录
-/// cell 屏幕坐标（注意：itemBuilder 的 ctx.findRenderObject() 返回的是
-/// RenderSliverGrid，强转 RenderBox 会崩——必须在 cell 自己的 context 取），
-/// 坐标传给 [_AlbumScreenState] 打开 viewer（飞行层动画在 viewer 侧播放）。
-class _PhotoCell extends StatelessWidget {
-  const _PhotoCell({
-    required this.info,
-    required this.onTap,
-    required this.thumbSize,
-    this.selectMode = false,
-    this.selected = false,
-    this.onLongPress,
-  });
-  final MsImageInfo info;
-  final ValueChanged<Rect?> onTap;
-
-  /// 缩略图像素尺寸（cell 逻辑宽 × dpr，物理对齐，替代固定 300）。
-  final int thumbSize;
-
-  /// 批量选择模式：点击切换勾选而非打开 viewer；显示右上角勾选圈。
-  final bool selectMode;
-  final bool selected;
-  final VoidCallback? onLongPress;
-
-  @override
-  Widget build(BuildContext context) {
-    final ref = imageRefFromMediaStoreId(info.id, extension: extOf(info.name));
-    return InkWell(
-      onTap: () {
-        final box = context.findRenderObject();
-        final rect = (box is RenderBox && box.attached)
-            ? box.localToGlobal(Offset.zero) & box.size
-            : null;
-        onTap(rect);
-      },
-      onLongPress: onLongPress,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-            Hero(
-              tag: 'photo_${info.id}',
-              // 编程 pop 需手动模拟 user gesture 触发 flight（viewer _onTransitionStatus
-              // reverse 分支），Hero 默认 transitionOnUserGestures=false 会拒绝收集。
-              transitionOnUserGestures: true,
-              // pop 时 destination=cell,source=viewer 全屏 bounds。把全屏 fix 成
-              // containRect(与 viewer createRectTween 同款)→ flightShuttleBuilder 全程
-              // cover:cover containRect=contain 无溢出,cover cellRect=与 cell 一致,
-              // 消除末段 contain→cover 跳变。push 不用 cell createRectTween(destination
-              // =viewer),fix 只影响 pop。
-              createRectTween: (begin, end) {
-                final screen = MediaQuery.sizeOf(context);
-                final vpW = screen.width - 8;
-                final vpH = screen.height;
-                final imgA = (info.width > 0 && info.height > 0)
-                    ? info.width / info.height
-                    : null;
-                final containW = (imgA != null && imgA > 0)
-                    ? (imgA < vpW / vpH ? vpH * imgA : vpW)
-                    : vpW;
-                final containH = (imgA != null && imgA > 0)
-                    ? (imgA < vpW / vpH ? vpH : vpW / imgA)
-                    : vpH;
-                final containRect = Rect.fromCenter(
-                  center: Offset(screen.width / 2, screen.height / 2),
-                  width: containW,
-                  height: containH,
-                );
-                Rect? fix(Rect? r) {
-                  if (r == null) return null;
-                  if (r.width >= vpW - 1 || r.height >= vpH - 1) {
-                    return containRect;
-                  }
-                  return r;
-                }
-                return RectTween(begin: fix(begin), end: fix(end));
-              },
-              child: Image(
-                image: buildThumbnailProvider(
-                  ref,
-                  size: thumbSize,
-                  dateModifiedMs: info.dateModifiedMs,
-                ),
-                fit: BoxFit.cover,
-                gaplessPlayback: true,
-                // 两级渐进（对标系统相册 xqip/EXIF 占位 → 清晰替换）：
-                // 清晰层加载中先显示小尺寸层（Kotlin 侧 ≤128px 优先 EXIF 内嵌缩略图，
-                // ~5ms 秒显，替代纯灰底等待），清晰层完成直切。磁盘缓存命中时
-                // 两层近同步完成,无感。
-                loadingBuilder: (ctx, child, progress) {
-                  if (progress == null) return child;
-                  return ColoredBox(
-                    color: AppColors.surface,
-                    child: Image(
-                      image: buildThumbnailProvider(
-                        ref,
-                        size: kThumbnailPlaceholderSize,
-                        dateModifiedMs: info.dateModifiedMs,
-                      ),
-                      fit: BoxFit.cover,
-                      gaplessPlayback: true,
-                      errorBuilder: (_, _, _) =>
-                          const ColoredBox(color: AppColors.surface),
-                    ),
-                  );
-                },
-                errorBuilder: (_, _, _) =>
-                    const ColoredBox(color: AppColors.surface),
-              ),
-            ),
-          // 批量选择模式的勾选圈：右上角，选中实心 accent + 对勾，未选空心
-          if (selectMode)
-            Positioned(
-              top: 6,
-              right: 6,
-              child: Container(
-                width: 20,
-                height: 20,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: selected
-                      ? AppColors.accent
-                      : AppColors.bg.withValues(alpha: 0.6),
-                  border: Border.all(
-                    color: selected ? AppColors.accent : Colors.white70,
-                    width: 1.5,
-                  ),
-                ),
-                child: selected
-                    ? const Icon(Icons.check, size: 14, color: AppColors.bg)
-                    : null,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
 /// 首屏加载占位：静态灰格网格（替代转圈）。数据到达后由真实网格无缝替换。
 class _ThumbGridPlaceholder extends StatelessWidget {
   const _ThumbGridPlaceholder({required this.cols});
@@ -1219,40 +932,3 @@ class _ThumbGridPlaceholder extends StatelessWidget {
   }
 }
 
-/// 日期分组：一天的照片 + 该组首项在总列表中的下标。
-class _DateGroup {
-  const _DateGroup(this.dayMs, this.photos, this.startIndex);
-  final int dayMs;
-  final List<MsImageInfo> photos;
-  final int startIndex;
-}
-/// 日期分组视图的日期行（随内容滚动，无背景）。固定高 30（稳定 SliverList
-/// extent 估算 —— 变高项的 maxScrollExtent 滚动中抖，手柄用 monotonicExtent
-/// 单调化分母消除抖；组头固定高让估算更快收敛）。
-class _DateHeaderRow extends StatelessWidget {
-  const _DateHeaderRow({required this.label});
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 30,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text(
-            label,
-            style: const TextStyle(
-              fontFamily: 'Space Mono',
-              fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-              color: AppColors.text,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
