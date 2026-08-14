@@ -137,6 +137,8 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 缩略图条驱动主图 animateToPage 期间标记:主图跨多页时中间页 onPageChanged 据此
   /// 忽略,不回弹缩略图条。到达 target 复位,另有超时兜底。
   bool _pagerDrivenByThumb = false;
+  /// [photo_view fork] X 边缘溢出翻页动画进行中：期间忽略重复回调防连翻。
+  bool _edgePageAnimating = false;
 
   @override
   void initState() {
@@ -260,6 +262,8 @@ class _DetailPageState extends ConsumerState<DetailPage>
           onSwipeUp: () => _showDetails(file),
           // 面板打开时下滑 → 收面板；否则默认返回。
           onSwipeDown: _detailsOpen ? _animateClose : null,
+          // 放大后平移到 X 边缘继续拖 → 翻页（photo_view fork onEdgeX）。
+          onEdgeX: _handleEdgePage,
           onFullLoaded: (_) {},
         );
         final page = GestureDetector(
@@ -299,6 +303,23 @@ class _DetailPageState extends ConsumerState<DetailPage>
       controller: _pageController,
       itemCount: _files.length,
     );
+  }
+
+  /// [photo_view fork] 放大后 X 边缘溢出 → 翻页（dir>0 右拖→上一张，<0 左拖→下一张）。
+  void _handleEdgePage(int dir) {
+    if (_detailsOpen || _edgePageAnimating) return;
+    if (!_pageController.hasClients) return;
+    _edgePageAnimating = true;
+    final future = dir < 0
+        ? _pageController.nextPage(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          )
+        : _pageController.previousPage(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+    unawaited(future.whenComplete(() => _edgePageAnimating = false));
   }
 
   void _preloadFiles(int index) {
