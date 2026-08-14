@@ -18,7 +18,6 @@ import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
-import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/ui/router_android.dart';
 import 'package:visort_flutter/shared/widgets/scroll_drag_handle.dart';
@@ -72,16 +71,6 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// 向前滑→贴顶部；翻回原位→恢复打开时的网格视口。
   int _openViewerIndex = 0;
   double _openScrollOffset = 0;
-
-  /// 飞行层图：跟随当前照片（翻页后返回动画缩回的是当前照片，不是初始那张）。
-  late Widget _flightImage;
-
-  /// 飞行层终点：当前照片所在 cell 的屏幕位置（翻页时滚动网格到该行后计算）。
-  Rect? _flightEndRect;
-
-  /// 飞行层当前照片宽高比：Transform 缩放精确算 cell→全屏 缩放比（避免竖图溢出）。
-  /// _buildFlightImage 每次换图时刷新。
-  double? _flightImgAspect;
 
   // ── 批量选择模式：长按 cell 进入，勾选后底部操作栏执行批量操作 ──
   bool _selectMode = false;
@@ -890,61 +879,9 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     final err = await ref
         .read(galleryControllerProvider.notifier)
         .setFavorites(ids, false);
-    if (!mounted) return;
-    _exitSelectMode();
     toast(
       context,
       err == null ? t(ref, 'unfavorited') : t(ref, 'favorite_failed'),
-    );
-  }
-
-  /// 打开大图浏览器：用 PageRouteBuilder 的 transitionsBuilder 实现
-  /// "图从 cell 位置线性放大到全屏"的缩放动画。
-  /// ⚠️ 必须用 route transition，不能用 Overlay AnimationController：
-  /// ColorOS DynamicFramerate 对 Overlay 上的自定义动画在 Choreographer 层
-  /// 降帧到 30 且粘滞不恢复（实测）；route 过渡动画是系统 push/pop 驱动，
-  /// ColorOS 不降帧（fade 版实测全程 120）。
-  /// [cellRect] 为点击 cell 的屏幕坐标；null 时无缩放动画。
-  /// 飞行层图片：跟随当前照片。
-  /// ⚠️ 必须用 size:300（网格同 key，ImageCache 已缓存）——用 1024 时动画
-  /// 250ms 内 loadThumbnail 加载不完 → 飞行层空白 → 灰屏且无缩放效果。
-  /// errorBuilder 用灰块兜底：即使加载失败也有可见内容在放大（诊断+兜底）。
-  Widget _buildFlightImage(MsImageInfo info) {
-    final imgRef = imageRefFromMediaStoreId(
-      info.id,
-      extension: extOf(info.name),
-    );
-    // 记录宽高比，供 transitionsBuilder 算 Transform 缩放比（contain 全程缩放，
-    // 避免方形 cell↔竖屏全屏 的 contain 方向跳变重影）。
-    _flightImgAspect = (info.width > 0 && info.height > 0)
-        ? info.width / info.height
-        : null;
-    // 两级飞行层：300 缩略图（网格缓存，push 立即可见）+ 下采样原图
-    // （与 viewer 用同一 computeViewerTargetWidth → pop 时命中 viewer 已加载
-    // 的缓存，返回动画清晰；push 期间解码完则无缝覆盖 300，没完也有 300 兜
-    // 底不灰屏）。之前只挂 300 → pop 时 viewer 原图已就绪却被 300 盖住、
-    // 返回发虚（用户反馈"图已加载出来不该再模糊"）。
-    // 两级飞行层：300 缩略图（网格缓存，push 立即可见）+ 下采样原图（1152，动画
-    // 期清晰）。1152 解码完用 gaplessPlayback 覆盖 300，没完则 300 兜底不模糊。
-    final tw = computeViewerTargetWidth(
-      MediaQuery.sizeOf(context).width * MediaQuery.devicePixelRatioOf(context),
-    );
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Image(
-          image: buildThumbnailProvider(imgRef, size: 300),
-          fit: BoxFit.cover,
-          gaplessPlayback: true,
-          errorBuilder: (_, _, _) => const ColoredBox(color: Color(0xFF2A2A2A)),
-        ),
-        Image(
-          image: buildImageProvider(imgRef, targetWidth: tw),
-          fit: BoxFit.cover,
-          gaplessPlayback: true,
-          errorBuilder: (_, _, _) => const SizedBox.shrink(),
-        ),
-      ],
     );
   }
 
@@ -954,10 +891,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   void _onViewerIndexChanged(int index) {
     final photos = ref.read(galleryControllerProvider).photos;
     if (index < 0 || index >= photos.length) return;
-    _flightImage = _buildFlightImage(photos[index]);
+    // 翻页时立即滚动网格到当前行(jumpTo 无动画):Hero pop 时 cell 必须在视口
+    // (GridView lazy build,视口外 cell 无 RenderObject → Hero 找不到飞回目标)。
+    // viewer 盖住网格,滚动用户无感;返回时 cell 已在正确位置 + 缩略图已预加载。
     _scrollToCellRow(index);
-    final r = _cellRectFor(index);
-    if (r != null) _flightEndRect = r;
   }
 
   /// 滚动网格让目标行可见。返回定位规则（对标系统相册）：
@@ -988,25 +925,6 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     _scrollCtrl.jumpTo(target.clamp(0.0, _scrollCtrl.position.maxScrollExtent));
   }
 
-  /// 计算网格中某 index cell 的屏幕位置。
-  /// 布局规则固定（padding 4、spacing 3、正方形 cell），与 ScrollDragHandle
-  /// 的 rowExtent 公式一致——无需 RenderObject 即可精确定位。
-  Rect? _cellRectFor(int index) {
-    final gridBox = _gridKey.currentContext?.findRenderObject();
-    if (gridBox is! RenderBox || !gridBox.attached || !_scrollCtrl.hasClients) {
-      return null;
-    }
-    final cols = ref.read(configProvider).photoGridColumns;
-    final cellW = (gridBox.size.width - 8 - (cols - 1) * 3) / cols;
-    final rowExtent = cellW + 3;
-    final row = index ~/ cols;
-    final col = index % cols;
-    final topLeft = gridBox.localToGlobal(
-      Offset(4 + col * (cellW + 3), 4 + row * rowExtent - _scrollCtrl.offset),
-    );
-    return topLeft & Size(cellW, cellW);
-  }
-
   void _openViewer(
     BuildContext context,
     GalleryState gallery,
@@ -1014,123 +932,30 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     int index,
     Rect? cellRect,
   ) {
-    final info = photos[index];
-    // 不预解码 2880：precacheImage 在 push 同帧发起大图解码+纹理上传，
-    // 与飞行动画抢 raster 线程。本诊断版移除，验证动画期纹理上传是否为掉帧根因。
-    // final imgRef =
-    //     imageRefFromMediaStoreId(info.id, extension: extOf(info.name));
-    // precacheImage(
-    //     buildImageProvider(imgRef,
-    //         targetWidth: computeViewerTargetWidth(
-    //             MediaQuery.sizeOf(context).width *
-    //                 MediaQuery.devicePixelRatioOf(context))),
-    //     context);
-    // 飞行层初始状态：当前照片 + 点击 cell 位置。
-    // 翻页后由 [_onViewerIndexChanged] 更新——返回动画跟随当前照片。
     _openViewerIndex = index;
     _openScrollOffset = _scrollCtrl.hasClients ? _scrollCtrl.offset : 0;
-    _flightImage = _buildFlightImage(info);
-    _flightEndRect = cellRect;
     Navigator.of(context).push(
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 400),
         reverseTransitionDuration: const Duration(milliseconds: 280),
-        // ⚠️ opaque: false —— pop 返回动画期间底下 album 网格参与合成并可见
-        // （COUI 式返回：viewer 淡出 + 飞行层缩回时网格全程在底下，动画结束
-        // 无"黑→网格瞬现"）。push 期网格被下方恒黑垫底层盖住，观感不变；
-        // 代价是动画期间多一层网格合成（180~250ms，Impeller 下可接受）。
+        // opaque:false —— pop 返回时底下相册网格参与合成可见(COUI 式返回)。
         opaque: false,
-        // route animation 驱动 rect 缩放：
-        // push（anim 0→1）：图从 cellRect 线性放大到全屏 contain；
-        // pop（anim 1→0）：图从全屏缩回**当前照片**的 cell 位置（翻页后更新）。
-        // child = PhotoViewer 页面（在飞行层下方）。
+        // Hero 接管缩放飞行(网格 cell Hero → viewer _BigImage Hero)。viewer route
+        // 仅用 status 门控可见性——飞行期(forward/reverse)viewer 隐藏(Hero 飞行层
+        // 在 overlay 独占),completed 后显现。这样避免 PageView allowImplicitScrolling
+        // 预渲染的 ±1 页 ExtendedImage 随 fade 一起淡入(看起来多张图飞行)。
+        // 黑遮罩(push 期)盖底层 album 的 cell 空缺(Hero source 移到 overlay)+ 网格;
+        // pop 不盖(opaque:false 下网格全程可见,COUI 式返回)。
         transitionsBuilder: (ctx, anim, _, child) {
-          // 移除每帧 debugPrint（release 下非空操作，throttle buffer 满
-          // flush logcat 会阻塞主 isolate）。
-          final size = MediaQuery.sizeOf(ctx);
-          // 终点 = 全屏 contain 区域（与 viewer 图区域一致：图延伸到栏后，由栏
-          // overlay 盖住）。栏黑底不参与淡入（见 photo_viewer _insertBars），故
-          // 飞行层图进栏区域、completed 切换均不闪。
-          final fullRect = Rect.fromLTWH(4, 0, size.width - 8, size.height);
-          // rect/black 用 Material 标准曲线 Curves.fastOutSlowIn（Cubic(0.4,0,0.2,1)）
-          // —— Flutter/Android 官方共享元素与缩放过渡的标配。比 couiMoveEase 温和
-          // （起步不冲 → 第一行竖图 cellRect.top≈targetRect.top 时 size 不"喷出抖动"），
-          // 比 couiEase 自然（偏 ease-out，收尾不拖沓）。baseBlack 飞行层淡入仍 linear。
-          final t = anim.value; // baseBlack 飞行层淡入（linear）
-          final tEase = Curves.fastOutSlowIn.transform(anim.value); // rect/black
-          final endRect = _flightEndRect;
-          // 飞行层：图 cover 填满渲染矩形（无 contain 留白方向跳变重影），渲染矩形
-          // 从 cellRect 线性插值到 containFullRect（图在全屏的实际占位）。
-          // t=0 cover cellRect = 缩略图（填满，无缝）；t=1 cover containFullRect
-          // （矩形比例=图，cover 无裁剪）= viewer contain → completed/返回终点/过程都不跳。
-          final imgA = _flightImgAspect;
-          Rect targetRect;
-          if (imgA != null && imgA > 0) {
-            final vpA = fullRect.width / fullRect.height;
-            double fullImgW, fullImgH;
-            if (imgA < vpA) {
-              // 图比 rect 更高 → 按高缩（高满，左右留白）
-              fullImgH = fullRect.height;
-              fullImgW = fullRect.height * imgA;
-            } else {
-              // 图比 rect 更宽 → 按宽缩（宽满，上下留白）
-              fullImgW = fullRect.width;
-              fullImgH = fullRect.width / imgA;
-            }
-            targetRect = Rect.fromCenter(
-              center: fullRect.center,
-              width: fullImgW,
-              height: fullImgH,
-            );
-          } else {
-            targetRect = fullRect;
-          }
-          final rect = Rect.lerp(endRect ?? targetRect, targetRect, tEase)!;
-          // ⚠️ showFlight 必须用 status 判断（不能用 anim.value < 1）：
-          // completed 后 transitionsBuilder 不再 rebuild，若黑底留在树里会
-          // 永远盖住 viewer。pop 触发时 status 变 reverse → 飞行层重新出现。
-          final showFlight =
-              endRect != null && anim.status != AnimationStatus.completed;
-          // push 与 pop 都让 viewer 隐藏、飞行层独占缩放：push 时若 viewer 可见，
-          // 其满屏图会与飞行缩略图重叠成"底下垫图 + 缩放"的双图观感；pop 时若 viewer
-          // 随 t 淡出，飞行层缩回过程中后面会叠着 viewer 全屏原图，衔接生硬（用户
-          // 反馈"两层图"）。故两种方向都 viewerOpacity=0，仅 completed 后 viewer 显现。
-          final isReverse = anim.status == AnimationStatus.reverse;
-          final viewerOpacity = showFlight ? 0.0 : 1.0;
-          // 飞行层渐显渐隐：起点/终点 15% 内淡入淡出（避免 push 突兀出现 /
-          // pop 缩回瞬间消失）。
-          final baseBlack = (t / 0.15).clamp(0.0, 1.0);
-          // 黑遮罩仅 push 期使用：viewer 半透明（t<1）时盖住底层，viewer 完全
-          // 可见（t=1）时 black=0，showFlight 移除瞬间（completed）chrome 顶/底栏
-          // 不会从"被黑盖住"突变到可见。（旧逻辑末段加深到 0.95 再整层移除 → 闪烁）
-          // ⚠️ pop 返回时 black=0：配合 opaque:false 让底下相册网格全程可见
-          // （COUI 式返回），viewer 淡出 + 飞行层缩回时网格透出，动画结束
-          // 无"黑→网格瞬现"。
-          final black = isReverse ? 0.0 : (1.0 - tEase).clamp(0.0, 1.0) * 0.95;
+          final status = anim.status;
+          final isCompleted = status == AnimationStatus.completed;
+          final isReverse = status == AnimationStatus.reverse;
           return Stack(
             fit: StackFit.expand,
             children: [
-              // ⚠️ 垫底（仅 push 期）：纯黑（= viewer Scaffold 背景），**恒不透明**——
-              // push 期 viewer 隐藏、飞行层 contain 留白透出本层；t=1 飞行层移除、
-              // viewer 显现，留白从「垫底」交接到「viewer 背景」，二者同色避免
-              // 灰→黑跳变闪烁（原 #0F0F0F 与 viewer 纯黑差 15 → 图片上下留白闪灰）。
-              // pop 返回时移除本层——opaque:false 下底层网格参与合成，viewer 淡出
-              // 即露出网格；保留本层会把网格重新盖死（又变回"瞬现"）。
-              if (!isReverse) const ColoredBox(color: Colors.black),
-              // viewer 页面：push 隐藏飞行层独占缩放;pop 走 viewerOpacity(t)淡出。
-              Opacity(opacity: viewerOpacity, child: child),
-              if (showFlight) ...[
-                if (black > 0)
-                  ColoredBox(color: Colors.black.withValues(alpha: black)),
-                // ⚠️ Positioned 必须直接作为 Stack 的 child！之前在 Opacity 里
-                // （Opacity→Positioned），release 下不报错但定位不生效、图尺寸
-                // 为 0 → 飞行层不可见 → “无缩放”（多版灰屏的根因）。
-                // 渐隐用 Positioned 内部的 Opacity 实现。
-                Positioned.fromRect(
-                  rect: rect,
-                  child: Opacity(opacity: baseBlack, child: _flightImage),
-                ),
-              ],
+              if (!isReverse && !isCompleted)
+                const ColoredBox(color: Colors.black),
+              Opacity(opacity: isCompleted ? 1.0 : 0.0, child: child),
             ],
           );
         },
@@ -1187,45 +1012,79 @@ class _PhotoCell extends StatelessWidget {
         final rect = (box is RenderBox && box.attached)
             ? box.localToGlobal(Offset.zero) & box.size
             : null;
-        debugPrint('[Flight] onTap box=$box rect=$rect');
         onTap(rect);
       },
       onLongPress: onLongPress,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Image(
-            image: buildThumbnailProvider(
-              ref,
-              size: thumbSize,
-              dateModifiedMs: info.dateModifiedMs,
-            ),
-            fit: BoxFit.cover,
-            gaplessPlayback: true,
-            // 两级渐进（对标系统相册 xqip/EXIF 占位 → 清晰替换）：
-            // 清晰层加载中先显示小尺寸层（Kotlin 侧 ≤128px 优先 EXIF 内嵌缩略图，
-            // ~5ms 秒显，替代纯灰底等待），清晰层完成直切。磁盘缓存命中时
-            // 两层近同步完成,无感。
-            loadingBuilder: (ctx, child, progress) {
-              if (progress == null) return child;
-              return ColoredBox(
-                color: AppColors.surface,
-                child: Image(
-                  image: buildThumbnailProvider(
-                    ref,
-                    size: kThumbnailPlaceholderSize,
-                    dateModifiedMs: info.dateModifiedMs,
-                  ),
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
-                  errorBuilder: (_, _, _) =>
-                      const ColoredBox(color: AppColors.surface),
+            Hero(
+              tag: 'photo_${info.id}',
+              // pop 时 destination=cell,source=viewer 全屏 bounds。把全屏 fix 成
+              // containRect(与 viewer createRectTween 同款)→ flightShuttleBuilder 全程
+              // cover:cover containRect=contain 无溢出,cover cellRect=与 cell 一致,
+              // 消除末段 contain→cover 跳变。push 不用 cell createRectTween(destination
+              // =viewer),fix 只影响 pop。
+              createRectTween: (begin, end) {
+                final screen = MediaQuery.sizeOf(context);
+                final vpW = screen.width - 8;
+                final vpH = screen.height;
+                final imgA = (info.width > 0 && info.height > 0)
+                    ? info.width / info.height
+                    : null;
+                final containW = (imgA != null && imgA > 0)
+                    ? (imgA < vpW / vpH ? vpH * imgA : vpW)
+                    : vpW;
+                final containH = (imgA != null && imgA > 0)
+                    ? (imgA < vpW / vpH ? vpH : vpW / imgA)
+                    : vpH;
+                final containRect = Rect.fromCenter(
+                  center: Offset(screen.width / 2, screen.height / 2),
+                  width: containW,
+                  height: containH,
+                );
+                Rect? fix(Rect? r) {
+                  if (r == null) return null;
+                  if (r.width >= vpW - 1 || r.height >= vpH - 1) {
+                    return containRect;
+                  }
+                  return r;
+                }
+                return RectTween(begin: fix(begin), end: fix(end));
+              },
+              child: Image(
+                image: buildThumbnailProvider(
+                  ref,
+                  size: thumbSize,
+                  dateModifiedMs: info.dateModifiedMs,
                 ),
-              );
-            },
-            errorBuilder: (_, _, _) =>
-                const ColoredBox(color: AppColors.surface),
-          ),
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                // 两级渐进（对标系统相册 xqip/EXIF 占位 → 清晰替换）：
+                // 清晰层加载中先显示小尺寸层（Kotlin 侧 ≤128px 优先 EXIF 内嵌缩略图，
+                // ~5ms 秒显，替代纯灰底等待），清晰层完成直切。磁盘缓存命中时
+                // 两层近同步完成,无感。
+                loadingBuilder: (ctx, child, progress) {
+                  if (progress == null) return child;
+                  return ColoredBox(
+                    color: AppColors.surface,
+                    child: Image(
+                      image: buildThumbnailProvider(
+                        ref,
+                        size: kThumbnailPlaceholderSize,
+                        dateModifiedMs: info.dateModifiedMs,
+                      ),
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      errorBuilder: (_, _, _) =>
+                          const ColoredBox(color: AppColors.surface),
+                    ),
+                  );
+                },
+                errorBuilder: (_, _, _) =>
+                    const ColoredBox(color: AppColors.surface),
+              ),
+            ),
           // 批量选择模式的勾选圈：右上角，选中实心 accent + 对勾，未选空心
           if (selectMode)
             Positioned(

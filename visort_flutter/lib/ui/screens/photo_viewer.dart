@@ -138,6 +138,11 @@ class _PhotoViewerState extends ConsumerState<PhotoViewer>
     if (status == AnimationStatus.completed && mounted && !_allowFull) {
       setState(() => _allowFull = true);
     }
+    // 返回动画一开始(reverse)就淡出顶/底栏——缩放飞行期间栏立即消失,不再
+    // 拖到动画结束后(dismissed)才 remove,消除"栏滞留到最后一刻"的延迟感。
+    if (status == AnimationStatus.reverse) {
+      _chromeFade.reverse();
+    }
     // 返回动画结束（dismissed）：立即移除栏。PageRouteBuilder(opaque:false) 下
     // page 的 dispose 会延迟甚至不触发，而栏挂在 root Overlay 不随 route 消失，
     // 必须主动 remove——否则返回相册/首页后顶/底栏残留覆盖网格（已实测复现）。
@@ -1429,7 +1434,7 @@ class _BigImageState extends State<_BigImage>
     final details = state.gestureDetails;
     final begin = details?.totalScale ?? 1.0;
     final zooming = begin <= 1.01;
-    final targetScale = zooming ? _computeDoubleTapTarget() : 1.0;
+    final targetScale = zooming ? _computeDoubleTapTarget(state) : 1.0;
     _doubleTapStartOffset = details?.offset ?? Offset.zero;
     _doubleTapEndOffset = _computeDoubleTapEndOffset(
       state,
@@ -1552,17 +1557,17 @@ class _BigImageState extends State<_BigImage>
 
   /// 目标倍率自适应：未放大 → max(2.5, coverRatio) 铺满屏幕消除黑边；
   /// 与旧自研 toScene + clamp 算法效果一致）。
-  double _computeDoubleTapTarget() {
-    final ia = _imageAspect;
-    // viewport = ExtendedImage 区域：屏宽 - 8（两侧 4px 间隙）、屏高。
-    final screen = MediaQuery.sizeOf(context);
-    final vp = Size(screen.width - 8, screen.height);
-    if (vp.width <= 0 || vp.height <= 0 || ia == null || ia <= 0) {
-      return 2.5; // 尺寸未就绪 fallback
-    }
-    final viewportAspect = vp.width / vp.height;
-    final r = ia / viewportAspect;
-    final coverRatio = r >= 1 ? r : 1 / r; // = max(r, 1/r) ≥ 1
+  double _computeDoubleTapTarget(ExtendedImageGestureState state) {
+    final details = state.gestureDetails;
+    final layout = details?.layoutRect;
+    final dest = details?.destinationRect;
+    // 用 ExtendedImage 实时 dest/layout 算 coverRatio（填满 layout 的 scale）,不依赖
+    // _imageAspect（async 可能首次双击未就绪 → 扁图 fallback 2.5 放大后高<屏高留白）。
+    // dest = scale=1 的 contain 矩形（图 aspect）,layout = ExtendedImage 布局区域。
+    if (layout == null || dest == null || dest.isEmpty) return 2.5;
+    final rw = layout.width / dest.width;
+    final rh = layout.height / dest.height;
+    final coverRatio = rw > rh ? rw : rh;
     final target = coverRatio > 2.5 ? coverRatio : 2.5;
     if (target < 1.0) return 1.0;
     if (target > 5.0) return 5.0;
@@ -1575,12 +1580,76 @@ class _BigImageState extends State<_BigImage>
       widget.info.id,
       extension: extOf(widget.info.name),
     );
+    final info = widget.info;
+    final imgA = (info.width > 0 && info.height > 0)
+        ? info.width / info.height
+        : null;
+    final screen = MediaQuery.sizeOf(context);
+    final vpW = screen.width - 8;
+    final vpH = screen.height;
+    // contain 尺寸（图在 (w-8,h) 内 contain 的实际占位）。Hero destination 用此
+    // SizedBox 包 ExtendedImage → destination bounds = contain rect（非全屏布局
+    // 区域），飞行层 cover contain rect = contain（无溢出），避免 cover 全屏 →
+    // completed contain 的"先大后小"过冲。
+    final containW = (imgA != null && imgA > 0)
+        ? (imgA < vpW / vpH ? vpH * imgA : vpW)
+        : vpW;
+    final containH = (imgA != null && imgA > 0)
+        ? (imgA < vpW / vpH ? vpH : vpW / imgA)
+        : vpH;
+    // contain rect（全屏坐标系,图实际占位）。Hero createRectTween 把 destination
+    // (ExtendedImage 全屏 bounds)改写为 containRect → 飞行层终点 cover contain =
+    // 无溢出,避免过冲。ExtendedImage 保持全屏 contain(gesture 全屏,双击不受限)。
+    final containRect = Rect.fromCenter(
+      center: Offset(screen.width / 2, screen.height / 2),
+      width: containW,
+      height: containH,
+    );
     return Listener(
       onPointerDown: _handleSwipeDown,
       onPointerMove: _handleSwipeMove,
       onPointerUp: _handleSwipeUp,
-      onPointerCancel: (_) => _resetSwipeTrack(),
-      child: ExtendedImage(
+      child: Hero(
+            tag: widget.active
+                ? 'photo_${widget.info.id}'
+                : 'viewonly_${widget.info.id}',
+            createRectTween: (begin, end) {
+              // begin/end 一个是 cellRect(小),一个是 ExtendedImage 全屏 bounds。
+              // 把全屏(≥vpW×vpH)改写为 containRect → 飞行层 cover contain = 无溢出,
+              // 避免 cover 全屏 → completed contain 的过冲。
+              Rect? fix(Rect? r) {
+                if (r == null) return null;
+                final isFull =
+                    r.width >= vpW - 1 || r.height >= vpH - 1;
+                return isFull ? containRect : r;
+              }
+              final fb = fix(begin);
+              final fe = fix(end);
+              return RectTween(begin: fb, end: fe);
+            },
+            // 飞行层用普通 Image(非 ExtendedImage):gesture state 在 overlay 飞行
+            // 期间异常(缩放/位移残留)。普通 Image cover 填满飞行 rect。
+            flightShuttleBuilder:
+                (flightContext, animation, type, fromHeroContext, toHeroContext) {
+              final heroRef = imageRefFromMediaStoreId(
+                widget.info.id,
+                extension: extOf(widget.info.name),
+              );
+              return Image(
+                image: widget.loadFull
+                    ? _providerFor(heroRef)
+                    : buildThumbnailProvider(heroRef, size: 300),
+                // 全程 cover:push destination=containRect(viewer createRectTween fix)、
+                // pop source=containRect(cell createRectTween fix),cover containRect=
+                // contain 无溢出,cover cellRect=与 cell 一致无末段 contain→cover 跳变。
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+              );
+            },
+            // Hero 在 contain 尺寸 SizedBox 内 → Hero bounds = contain rect(非全屏),
+            // destination = contain rect,飞行层 cover contain rect = contain(无溢出),
+            // 避免 cover 全屏 → completed contain 的"先大后小"过冲。
+            child: ExtendedImage(
         image: widget.loadFull
             ? _providerFor(ref)
             : buildThumbnailProvider(ref, size: 300),
@@ -1599,6 +1668,8 @@ class _BigImageState extends State<_BigImage>
           animationMinScale: 0.5,
           animationMaxScale: 5.0,
           speed: 1.0,
+          // 单指拖拽步进 1.4×（每次拖动移动更远；捏合缩放的 speed 不受影响）。
+          panSpeed: 1.4,
           inertialSpeed: 100,
           initialScale: 1.0,
           inPageView: true,
@@ -1634,7 +1705,8 @@ class _BigImageState extends State<_BigImage>
           }
           return null;
         },
-      ),
+          ),
+            ),
     );
   }
 

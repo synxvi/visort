@@ -43,6 +43,9 @@ class ExtendedImageGestureState extends State<ExtendedImageGesture>
   late Offset _normalizedOffset;
   double? _startingScale;
   late Offset _startingOffset;
+  /// [visort patch] pan 起始 offset(handleScaleStart 时快照):pan 步进公式用
+  /// offset_start + 总位移×panSpeed 的绝对计算,避免每帧叠加累积爆炸。
+  late Offset _startingPanOffset;
   Offset? _pointerDownPosition;
   late GestureAnimation _gestureAnimation;
   GestureConfig? _gestureConfig;
@@ -340,6 +343,7 @@ class ExtendedImageGestureState extends State<ExtendedImageGesture>
         _gestureDetails!.totalScale!;
     _startingScale = _gestureDetails!.totalScale;
     _startingOffset = details.focalPoint;
+    _startingPanOffset = _gestureDetails!.offset!;
   }
 
   void handleScaleUpdate(ScaleUpdateDetails details) {
@@ -453,10 +457,14 @@ class ExtendedImageGestureState extends State<ExtendedImageGesture>
     }
 
     final Offset offset =
-        (details.scale == 1.0
-            ? details.focalPoint * _gestureConfig!.speed
-            : _startingOffset) -
-        _normalizedOffset * scale!;
+        details.scale == 1.0
+            // [visort patch] pan 步进倍率:图移动 = 手指移动 × panSpeed(默认 1.0=1:1)。
+            // 原公式 focalPoint*speed - _normalizedOffset*scale 在 speed≠1 时混入起始
+            // focalPoint 项(图会漂),且 speed 同时影响捏合;panSpeed 只作用于单指拖拽,
+            // 基于起始 offset + 位移增量干净缩放。
+            ? _startingPanOffset +
+                (details.focalPoint - _startingOffset) * _gestureConfig!.panSpeed
+            : _startingOffset - _normalizedOffset * scale!;
 
     if (mounted &&
         (offset != _gestureDetails!.offset ||

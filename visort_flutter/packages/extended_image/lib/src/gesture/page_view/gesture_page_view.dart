@@ -185,10 +185,23 @@ class ExtendedImageGesturePageViewState
   ScrollPosition get position => pageController.position;
   ExtendedPageController get pageController => widget.controller;
   ExtendedImageGestureState? get extendedImageGestureState {
-    return extendedImageGestureStates.lastWhere(
-      (ExtendedImageGestureState? element) => element?.mounted ?? false,
-      orElse: () => null,
-    );
+    // [visort patch] 放大页优先：allowImplicitScrolling 预渲染页 + didUpdateWidget
+    // 频繁 rebuild 会把 totalScale=1 的页推到集合末尾，lastWhere 误返未放大页 →
+    // canHorizontalOrVerticalDrag 读到 1 → 放大态仍允许 PageView drag（扁图放大后
+    // 单指水平滑被翻页而非平移）。优先返回放大页(ts>1)，canDrag=false →
+    // ExtendedImage 赢 gesture arena 处理平移（到边界由 movePage 判定翻页）。
+    ExtendedImageGestureState? fallback;
+    for (final ExtendedImageGestureState? element
+        in extendedImageGestureStates) {
+      if (element == null || !element.mounted) {
+        continue;
+      }
+      fallback = element;
+      if ((element.gestureDetails?.totalScale ?? 1) > 1.01) {
+        return element;
+      }
+    }
+    return fallback;
   }
 
   set extendedImageGestureState(ExtendedImageGestureState? value) {
@@ -575,9 +588,10 @@ class ExtendedImageGesturePageViewState
   }
 
   bool canHorizontalOrVerticalDrag() {
-    if (extendedImageGestureState != null) {
-      return (extendedImageGestureState?.gestureDetails?.totalScale ?? 1)
-          .lessThanOrEqualTo(1);
+    final gs = extendedImageGestureState;
+    final ts = gs?.gestureDetails?.totalScale ?? 1;
+    if (gs != null) {
+      return ts.lessThanOrEqualTo(1);
     }
     return true;
   }

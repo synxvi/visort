@@ -396,7 +396,6 @@ class GestureDetails {
             ((delta.dx < 0 && boundary.right) ||
                 (delta.dx > 0 && boundary.left) ||
                 !_computeHorizontalBoundary);
-
       case Axis.vertical:
         return delta.dy != 0 &&
             delta.dy.abs() > delta.dx.abs() &&
@@ -456,6 +455,9 @@ class GestureConfig {
     this.minScale = 0.8,
     this.maxScale = 5.0,
     this.speed = 1.0,
+    // [visort patch] 单指拖拽(pan)步进倍率:图移动 = 手指移动 × panSpeed。
+    // 默认 1.0(1:1);>1 让每次拖拽移动更远(不动捏合缩放的 speed)。
+    this.panSpeed = 1.0,
     this.cacheGesture = false,
     this.inertialSpeed = 100.0,
     this.initialScale = 1.0,
@@ -474,6 +476,7 @@ class GestureConfig {
        assert(animationMaxScale >= maxScale),
        assert(minScale <= initialScale && initialScale <= maxScale),
        assert(speed > 0),
+       assert(panSpeed > 0),
        assert(inertialSpeed > 0);
 
   /// How to behave during hit tests.
@@ -496,6 +499,9 @@ class GestureConfig {
 
   /// Speed for zoom/pan
   final double speed;
+
+  /// [visort patch] 单指拖拽(pan)步进倍率(pan 专用,不动 zoom 的 speed)。
+  final double panSpeed;
 
   /// Save Gesture state (for example in page view, so that the state will not change when scroll back),
   /// Remember clearGestureDetailsCache  at right time
