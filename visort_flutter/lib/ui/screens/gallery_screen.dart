@@ -212,6 +212,10 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
   /// 封面 Hero tag：动态取「网格排序后第一张」的 id（ente 封面↔第一张配对）。
   /// coverId 是 listBuckets 的封面（排序可能与相册内不同）→ 必须用 photos[0]。
   String? _heroTag;
+  /// 飞行目标 tag：点击后置位，**仅本 tile 的 Hero 启用**（HeroMode 屏蔽
+  /// 列表 cacheExtent 预构建的其他 tile，防止其 coverId 与目标相册网格撞车
+  /// 产生额外 flight 乱飞）；push 返回后清除。
+  String? _flightTag;
 
   Future<void> _open() async {
     // [ente 对齐] 相册打开 = 200ms fade + 封面 Hero 飞行（封面↔网格第一张图）。
@@ -223,14 +227,19 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
     if (!mounted) return;
     final photos = ref.read(galleryControllerProvider).photos;
     if (photos.isNotEmpty) {
-      setState(() => _heroTag = 'photo_${photos[0].id}');
+      final tag = 'photo_${photos[0].id}';
+      setState(() {
+        _heroTag = tag;
+        _flightTag = tag;
+      });
     }
     final args = {
       'bucketId': widget.bucket.id,
       'bucketName': widget.bucket.name,
       'bucketCount': widget.bucket.count,
     };
-    Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
+    await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
+    if (mounted) setState(() => _flightTag = null);
   }
 
   @override
@@ -243,7 +252,7 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
         child: Row(
           children: [
             // 封面缩略图
-            _CoverThumb(coverId: bucket.coverId, heroTag: _heroTag, size: 56),
+            _CoverThumb(coverId: bucket.coverId, heroTag: _heroTag, heroEnabled: _flightTag == null || _flightTag == _heroTag, size: 56),
             const SizedBox(width: 14),
             // 名称
             Expanded(
@@ -287,11 +296,14 @@ class _CoverThumb extends StatelessWidget {
     required this.coverId,
     required this.size,
     this.heroTag,
+    this.heroEnabled = true,
   });
   final String? coverId;
   final double size;
   /// 封面 Hero tag（网格第一张 id，enterBucket 后动态更新）；null 时用 coverId。
   final String? heroTag;
+  /// 是否参与 Hero 配对：点击相册瞬间仅目标 tile 启用，屏蔽屏外预构建 tile。
+  final bool heroEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -315,7 +327,9 @@ class _CoverThumb extends StatelessWidget {
     // [ente 对齐] 封面包 Hero：与相册网格第一张 cell（GalleryFileWidget
     // tag 'photo_${id}'）配对 → 进入/返回时封面↔第一张图飞行。
     // heroTag 优先（网格第一张 id）；null 回退 coverId。
-    return Hero(
+    return HeroMode(
+      enabled: heroEnabled,
+      child: Hero(
       tag: heroTag ?? 'photo_$coverId',
       flightShuttleBuilder:
           (flightContext, animation, type, fromHeroContext, toHeroContext) =>
@@ -355,6 +369,7 @@ class _CoverThumb extends StatelessWidget {
                 color: AppColors.muted, size: 24),
           ),
         ),
+      ),
       ),
     );
   }

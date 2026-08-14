@@ -1596,6 +1596,9 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
   final GlobalKey _coverKey = GlobalKey();
   /// 封面 Hero tag：动态取「网格排序后第一张」的 id（ente 封面↔第一张配对）。
   String? _heroTag;
+  /// 飞行目标 tag：点击后置位，仅本 tile 的 Hero 启用（屏蔽屏外预构建 tile
+  /// 的 coverId 与目标相册网格撞车产生的额外 flight）；push 返回后清除。
+  String? _flightTag;
 
   // 选中波动环：selected 由 false→true 时播放一次（从圆点向外扩散并淡出）。
   late final AnimationController _ripple = AnimationController(
@@ -1645,6 +1648,8 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                       key: _coverKey,
                       coverId: widget.bucket.coverId,
                       heroTag: _heroTag,
+                      heroEnabled:
+                          _flightTag == null || _flightTag == _heroTag,
                       size: 44,
                     ),
                     const SizedBox(width: 12),
@@ -1794,7 +1799,11 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
     if (!mounted) return;
     final photos = container.read(galleryControllerProvider).photos;
     if (photos.isNotEmpty) {
-      setState(() => _heroTag = 'photo_${photos[0].id}');
+      final tag = 'photo_${photos[0].id}';
+      setState(() {
+        _heroTag = tag;
+        _flightTag = tag;
+      });
     }
     final args = {
       'bucketId': widget.bucket.id,
@@ -1802,6 +1811,7 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
       'bucketCount': widget.bucket.count,
     };
     await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
+    if (mounted) setState(() => _flightTag = null);
     // 从相册返回：刷新封面/数量（相册内可能删除了图片/改了排序）
     widget.onAlbumReturned?.call();
   }
@@ -1825,6 +1835,8 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                       key: _coverKey,
                       coverId: widget.bucket.coverId,
                       heroTag: _heroTag,
+                      heroEnabled:
+                          _flightTag == null || _flightTag == _heroTag,
                       size: c.maxWidth,
                     ),
                   ),
@@ -1960,11 +1972,14 @@ class _CoverThumb extends StatelessWidget {
     required this.coverId,
     required this.size,
     this.heroTag,
+    this.heroEnabled = true,
   });
   final String? coverId;
   final double size;
   /// 封面 Hero tag（网格第一张 id，enterBucket 后动态更新）；null 时用 coverId。
   final String? heroTag;
+  /// 是否参与 Hero 配对：点击相册瞬间仅目标 tile 启用，屏蔽屏外预构建 tile。
+  final bool heroEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -1987,7 +2002,9 @@ class _CoverThumb extends StatelessWidget {
     final ref = imageRefFromMediaStoreId(coverId!);
     // [ente 对齐] 封面包 Hero：与相册网格第一张 cell 配对（封面↔第一张图飞行）。
     // heroTag 优先（网格第一张 id）；null 回退 coverId。
-    return Hero(
+    return HeroMode(
+      enabled: heroEnabled,
+      child: Hero(
       tag: heroTag ?? 'photo_$coverId',
       flightShuttleBuilder:
           (flightContext, animation, type, fromHeroContext, toHeroContext) =>
@@ -2011,6 +2028,7 @@ class _CoverThumb extends StatelessWidget {
               size: 20,
             ),
           ),
+        ),
         ),
       ),
     );
