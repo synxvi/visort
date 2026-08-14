@@ -290,6 +290,12 @@ class _DetailPageState extends ConsumerState<DetailPage>
       onDoubleTap: () {
         final down = _lastDoubleTapDown;
         if (down == null) return;
+        // 快甩惯性未停稳时双击：立即跳停到当前页（上一页瞬间出视口，
+        // 消除"放大的同时上一页未完全消失"），放大动画在满屏单页上进行。
+        final ctrl = _pageController;
+        if (ctrl.hasClients && ctrl.position.isScrollingNotifier.value) {
+          ctrl.jumpToPage(_selectedIndexNotifier.value);
+        }
         _doubleTapHandlers[_selectedIndexNotifier.value]?.call(down);
       },
       child: NotificationListener<ScrollNotification>(
@@ -1375,12 +1381,24 @@ class _PageGapEdges extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const gap = 4.0;
-    return const Row(
+    // Stack 双 Positioned 顶底拉伸（Row+SizedBox(width) 在
+    // crossAxisAlignment.center 下高度 0 = 不可见，真机翻页无缝的根因）。
+    return const Stack(
       children: [
-        SizedBox(width: gap, child: ColoredBox(color: Colors.black)),
-        Expanded(child: SizedBox.shrink()),
-        SizedBox(width: gap, child: ColoredBox(color: Colors.black)),
+        Positioned(
+          top: 0,
+          bottom: 0,
+          left: 0,
+          width: 4,
+          child: ColoredBox(color: Colors.black),
+        ),
+        Positioned(
+          top: 0,
+          bottom: 0,
+          right: 0,
+          width: 4,
+          child: ColoredBox(color: Colors.black),
+        ),
       ],
     );
   }
