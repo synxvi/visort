@@ -827,7 +827,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     final cellH = cellW + GalleryGroups.spacing;
     final ctrl = _timelineView ? _timelineScrollCtrl : _scrollCtrl;
     if (!ctrl.hasClients) return;
-    final viewportH = screen.height;
+    // 网格实际视口高（AppBar/底部安全区之外）——用 screen.height 会高估
+    // 行数：贴底计算把目标行滚到"全屏底"，行落在网格视口下方被切半
+    //（返回飞行终点 cell 半截出视口，动画观感差）。
+    final viewportH = ctrl.position.viewportDimension;
     double target;
     if (_timelineView) {
       final photos = ref.read(galleryControllerProvider).photos;
