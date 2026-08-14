@@ -182,12 +182,13 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     // 垄断事件流，PageView 的 drag recognizer 已被 reject）。
     // 容差条件：|scale-1|<0.01（双指微动不算缩放）+ scaleState≠initial
     // （放大态判定，photo_view scale 是绝对像素比不能用 newScale>1.0）+
-    // 溢出 >0.5px（浮点噪声不算）。
+    // 溢出 >64px：贴边平移（拖到边界即止，溢出几 px）不触发；有意翻页
+    // 继续拖过 64px 才切页（target 随拖动持续增长，溢出量单调增大）。
     final edgeCb = widget.onEdgeX;
     if (edgeCb != null &&
         (details.scale - 1.0).abs() < 0.01 &&
         scaleStateController.scaleState != PhotoViewScaleState.initial &&
-        (targetPosition.dx - clampedPosition.dx).abs() > 0.5) {
+        (targetPosition.dx - clampedPosition.dx).abs() > 64) {
       edgeCb(targetPosition.dx > clampedPosition.dx ? 1 : -1);
     }
 

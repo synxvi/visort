@@ -1,122 +1,118 @@
-// [photo_view fork] 放大后 X 平移边缘 → 翻页的双轴裁决测试
+// [photo_view fork] 放大后 X 边缘溢出翻页（onEdgeX）测试
 //
-// 背景：photo_view 0.15.0 的 PhotoViewGestureRecognizer 只按 validateAxis
-// 单轴裁决（axis: vertical 时 X 永不释放）——放大后图片平移到 X 边缘继续拖，
-// Scale recognizer 仍赢 arena（只要 Y 还能动）→ PageView 收不到 → 无法翻页。
-// fork patch：shouldMoveX || shouldMoveY 任一可移动即 accept——
-//   - 放大后 X 未到边：X 平移图片
-//   - X 已到边：释放给 PageView 翻页
+// 用 PhotoView.customChild（显式 childSize，不依赖异步图片解码——
+// 测试环境 MemoryImage 解码不完成，PhotoViewCore 不会 build，
+// 旧版用 MemoryImage 的用例实际从未放大，断言的是 PageView 原生拖动）。
 //
-// 测试用 TestGesture（非 synthesized、position 精确可控）——
-// adb input swipe 在模拟器上 MOVE 事件 position 只更新 1px，无法验证平移。
-
-import 'dart:typed_data';
+// fork 语义：放大态纯平移，target position 超出 clamp 边界的溢出量
+// > 64px 才回调 onEdgeX——贴边平移（拖到边即止，溢出几 px）不翻页，
+// 有意翻页继续拖过 64px 才切页。
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_view/photo_view.dart';
 
-/// 1×1 透明占位图（photo_view 无需真实图片即可驱动手势）。
-final Uint8List _kPlaceholder = Uint8List.fromList(<int>[
-  0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG 头
-  0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-  0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-  0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41,
-  0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
-  0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
-  0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
-  0x42, 0x60, 0x82,
-]);
-
 void main() {
-  Widget buildApp({PageController? controller, ValueChanged<int>? onEdgeX}) {
+  Widget buildApp({ValueChanged<int>? onEdgeX}) {
     return MaterialApp(
       home: Scaffold(
-        body: PageView.builder(
-          controller: controller ?? PageController(),
-          itemCount: 2,
-          itemBuilder: (context, index) {
-            return PhotoViewGestureDetectorScope(
-              axis: Axis.vertical,
-              child: PhotoView(
-                imageProvider: MemoryImage(_kPlaceholder),
-                onEdgeX: onEdgeX,
-                minScale: PhotoViewComputedScale.contained,
-                maxScale: PhotoViewComputedScale.covered * 3,
-                backgroundDecoration: const BoxDecoration(
-                  color: Color(0xFF111111),
-                ),
-              ),
-            );
-          },
+        body: PhotoViewGestureDetectorScope(
+          axis: Axis.vertical,
+          child: PhotoView.customChild(
+            child: const ColoredBox(color: Color(0xFF224422)),
+            childSize: const Size(1, 1),
+            minScale: PhotoViewComputedScale.contained,
+            maxScale: PhotoViewComputedScale.covered * 3,
+            backgroundDecoration: const BoxDecoration(
+              color: Color(0xFF111111),
+            ),
+            onEdgeX: onEdgeX,
+          ),
         ),
       ),
     );
   }
 
-  /// 双击图片中心 → 放大（photo_view zoomedIn）。
+  /// 双击中心 → 放大（viewport 800×600：initial 600 → target 1500，
+  /// 视觉 1500×1500，X 可移 ±350）。
   Future<void> doubleTapZoom(WidgetTester tester) async {
-    final center = tester.getCenter(find.byType(PageView));
+    final center = tester.getCenter(find.byType(PhotoView));
     await tester.tapAt(center);
     await tester.pump(const Duration(milliseconds: 60));
     await tester.tapAt(center);
-    // photo_view 放大是 fling 动画（临界阻尼弹簧），pumpAndSettle 会等不到静止。
-    for (var i = 0; i < 10; i++) {
+    // 300ms decelerate 双击动画。
+    for (var i = 0; i < 5; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
   }
 
-  /// 当前第几页（PageView 的 page）。
-  double pageOf(WidgetTester tester) {
-    final controller =
-        tester.widget<PageView>(find.byType(PageView)).controller!;
-    return controller.page ?? controller.initialPage.toDouble();
-  }
+  testWidgets('放大后 X 未到边平移 → onEdgeX 不触发', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
 
-  testWidgets('放大后 X 平移图片（未到边）不平页', (tester) async {
-    await tester.pumpWidget(buildApp());
+    var edgeCalls = 0;
+    await tester.pumpWidget(buildApp(onEdgeX: (_) => edgeCalls++));
     await tester.pump(const Duration(milliseconds: 300));
     await doubleTapZoom(tester);
 
-    // 水平拖动 60px（右）：X 未到边 → 图片平移，PageView 不翻页。
-    final g = await tester.startGesture(const Offset(200, 200));
-    await g.moveBy(const Offset(60, 0));
-    await tester.pump();
-    await g.up();
-    for (var i = 0; i < 6; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-    }
-
-    expect(pageOf(tester), 0, reason: 'X 未到边时拖动应平移图片而非翻页');
-  });
-
-  testWidgets('放大后 X 平移到边缘继续拖 → 翻页', (tester) async {
-    final controller = PageController();
-    // 模拟 detail_page 的 onEdgeX 处理：左拖溢出 → nextPage。
-    void pager(int dir) {
-      if (dir < 0) {
-        controller.nextPage(
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    }
-    await tester.pumpWidget(buildApp(controller: controller, onEdgeX: pager));
-    await tester.pump(const Duration(milliseconds: 300));
-    await doubleTapZoom(tester);
-
-    // 持续向左拖动（多次 moveBy）：图片左移到 X 边缘后继续拖 → onEdgeX → 翻下一页。
-    final g = await tester.startGesture(const Offset(300, 200));
-    for (var i = 0; i < 12; i++) {
-      await g.moveBy(const Offset(-80, 0));
+    // 拖 -200：position 0 → -200，未到 -350 边界 → 纯平移。
+    final g = await tester.startGesture(const Offset(400, 300));
+    for (var i = 0; i < 4; i++) {
+      await g.moveBy(const Offset(-50, 0));
       await tester.pump(const Duration(milliseconds: 16));
     }
     await g.up();
-    for (var i = 0; i < 8; i++) {
-      await tester.pump(const Duration(milliseconds: 100));
-    }
+    await tester.pump(const Duration(milliseconds: 100));
 
-    expect(pageOf(tester), 1, reason: '放大后 X 到边继续拖应触发 onEdgeX 翻页');
+    expect(edgeCalls, 0, reason: '未到边时拖动应平移图片而非触发 onEdgeX');
+  });
+
+  testWidgets('贴边小溢出（40px < 64 阈值）→ 不翻页', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    var edgeCalls = 0;
+    await tester.pumpWidget(buildApp(onEdgeX: (_) => edgeCalls++));
+    await tester.pump(const Duration(milliseconds: 300));
+    await doubleTapZoom(tester);
+
+    // 拖到左边界（-350）后再拖 40px：溢出 40 < 64 阈值 → 不翻页
+    // （用户"贴边"动作的真实场景）。
+    final g = await tester.startGesture(const Offset(400, 300));
+    for (var i = 0; i < 7; i++) {
+      await g.moveBy(const Offset(-56, 0)); // 总 -392 = 350 + 42 溢出
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await g.up();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(edgeCalls, 0, reason: '贴边平移（溢出 <64px）不应触发翻页');
+  });
+
+  testWidgets('到边继续拖（溢出 >64px）→ onEdgeX 触发翻页', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final dirs = <int>[];
+    await tester.pumpWidget(buildApp(onEdgeX: dirs.add));
+    await tester.pump(const Duration(milliseconds: 300));
+    await doubleTapZoom(tester);
+
+    // 拖到左边界后继续拖：总 -600 → 溢出 250 > 64 → onEdgeX(-1) 左拖翻下一张。
+    final g = await tester.startGesture(const Offset(400, 300));
+    for (var i = 0; i < 12; i++) {
+      await g.moveBy(const Offset(-50, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await g.up();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(dirs, contains(-1), reason: '放大后 X 到边继续拖（溢出>64px）应触发 onEdgeX(-1)');
   });
 }

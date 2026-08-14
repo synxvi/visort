@@ -289,11 +289,17 @@ class _DetailPageState extends ConsumerState<DetailPage>
           onEdgeX: _handleEdgePage,
           onFullLoaded: (_) {},
         );
-        final page = GestureDetector(
-          onTap: () {
-            InheritedDetailPageState.of(context).toggleFullScreenByUser();
-          },
-          child: fileContent,
+        final page = Padding(
+          // 相邻两页间隙（主分支同款 4px）：两侧各 4px，翻页时露出黑缝
+          // 区分两张图。PhotoView 的 scaleBoundaries.outerSize 随 padding
+          // 收窄，contain 矩形缩 8px——Hero 飞行终点同矩形，无跳变。
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: GestureDetector(
+            onTap: () {
+              InheritedDetailPageState.of(context).toggleFullScreenByUser();
+            },
+            child: fileContent,
+          ),
         );
         return ValueListenableBuilder(
           valueListenable: _selectedIndexNotifier,
