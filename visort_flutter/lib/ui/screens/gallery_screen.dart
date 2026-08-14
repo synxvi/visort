@@ -209,6 +209,10 @@ class _AlbumTile extends ConsumerStatefulWidget {
 }
 
 class _AlbumTileState extends ConsumerState<_AlbumTile> {
+  /// 封面 Hero tag：动态取「网格排序后第一张」的 id（ente 封面↔第一张配对）。
+  /// coverId 是 listBuckets 的封面（排序可能与相册内不同）→ 必须用 photos[0]。
+  String? _heroTag;
+
   Future<void> _open() async {
     // [ente 对齐] 相册打开 = 200ms fade + 封面 Hero 飞行（封面↔网格第一张图）。
     // 先 await enterBucket：push 时网格第一张 cell 必须已存在（Hero 终点），
@@ -217,6 +221,10 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
     final notifier = ref.read(galleryControllerProvider.notifier);
     await notifier.enterBucket(widget.bucket.id);
     if (!mounted) return;
+    final photos = ref.read(galleryControllerProvider).photos;
+    if (photos.isNotEmpty) {
+      setState(() => _heroTag = 'photo_${photos[0].id}');
+    }
     final args = {
       'bucketId': widget.bucket.id,
       'bucketName': widget.bucket.name,
@@ -235,7 +243,7 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
         child: Row(
           children: [
             // 封面缩略图
-            _CoverThumb(coverId: bucket.coverId, size: 56),
+            _CoverThumb(coverId: bucket.coverId, heroTag: _heroTag, size: 56),
             const SizedBox(width: 14),
             // 名称
             Expanded(
@@ -275,9 +283,15 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
 
 /// 封面缩略图（正方形，圆角）。无封面时显示占位图标。
 class _CoverThumb extends StatelessWidget {
-  const _CoverThumb({required this.coverId, required this.size});
+  const _CoverThumb({
+    required this.coverId,
+    required this.size,
+    this.heroTag,
+  });
   final String? coverId;
   final double size;
+  /// 封面 Hero tag（网格第一张 id，enterBucket 后动态更新）；null 时用 coverId。
+  final String? heroTag;
 
   @override
   Widget build(BuildContext context) {
@@ -298,40 +312,48 @@ class _CoverThumb extends StatelessWidget {
     // 封面缩略图像素尺寸 = 显示尺寸 × dpr（物理对齐，替代固定 300）
     final thumbSize =
         (size * MediaQuery.devicePixelRatioOf(context)).round().clamp(96, 512);
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: Image(
-        image: buildThumbnailProvider(ref, size: thumbSize),
-        width: size,
-        height: size,
-        fit: BoxFit.cover,
-        gaplessPlayback: true,
-        // 两级渐进：清晰层加载中先显示小层（Kotlin EXIF 优先,~5ms），
-        // 避免封面空白等待
-        loadingBuilder: (ctx, child, progress) {
-          if (progress == null) return child;
-          return ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Image(
-              image: buildThumbnailProvider(ref,
-                  size: kThumbnailPlaceholderSize),
-              width: size,
-              height: size,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => Container(
-                width: size,
-                height: size,
-                color: AppColors.surface,
-              ),
-            ),
-          );
-        },
-        errorBuilder: (ctx, error, stack) => Container(
+    // [ente 对齐] 封面包 Hero：与相册网格第一张 cell（GalleryFileWidget
+    // tag 'photo_${id}'）配对 → 进入/返回时封面↔第一张图飞行。
+    // heroTag 优先（网格第一张 id）；null 回退 coverId。
+    return Hero(
+      tag: heroTag ?? 'photo_$coverId',
+      flightShuttleBuilder:
+          (flightContext, animation, type, fromHeroContext, toHeroContext) =>
+              (toHeroContext.widget as Hero).child,
+      transitionOnUserGestures: true,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image(
+          image: buildThumbnailProvider(ref, size: thumbSize),
           width: size,
           height: size,
-          color: AppColors.surface,
-          child: const Icon(Icons.broken_image_outlined,
-              color: AppColors.muted, size: 24),
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          loadingBuilder: (ctx, child, progress) {
+            if (progress == null) return child;
+            return ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image(
+                image: buildThumbnailProvider(ref,
+                    size: kThumbnailPlaceholderSize),
+                width: size,
+                height: size,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => Container(
+                  width: size,
+                  height: size,
+                  color: AppColors.surface,
+                ),
+              ),
+            );
+          },
+          errorBuilder: (ctx, error, stack) => Container(
+            width: size,
+            height: size,
+            color: AppColors.surface,
+            child: const Icon(Icons.broken_image_outlined,
+                color: AppColors.muted, size: 24),
+          ),
         ),
       ),
     );

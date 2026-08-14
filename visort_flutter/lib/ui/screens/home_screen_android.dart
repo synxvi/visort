@@ -1594,6 +1594,8 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
     with SingleTickerProviderStateMixin {
   /// 封面缩略图 GlobalKey：点击进入相册时取其屏幕坐标做飞行层起点。
   final GlobalKey _coverKey = GlobalKey();
+  /// 封面 Hero tag：动态取「网格排序后第一张」的 id（ente 封面↔第一张配对）。
+  String? _heroTag;
 
   // 选中波动环：selected 由 false→true 时播放一次（从圆点向外扩散并淡出）。
   late final AnimationController _ripple = AnimationController(
@@ -1642,6 +1644,7 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                     _CoverThumb(
                       key: _coverKey,
                       coverId: widget.bucket.coverId,
+                      heroTag: _heroTag,
                       size: 44,
                     ),
                     const SizedBox(width: 12),
@@ -1789,6 +1792,10 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
     final notifier = container.read(galleryControllerProvider.notifier);
     await notifier.enterBucket(widget.bucket.id);
     if (!mounted) return;
+    final photos = container.read(galleryControllerProvider).photos;
+    if (photos.isNotEmpty) {
+      setState(() => _heroTag = 'photo_${photos[0].id}');
+    }
     final args = {
       'bucketId': widget.bucket.id,
       'bucketName': widget.bucket.name,
@@ -1817,6 +1824,7 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                     builder: (ctx, c) => _CoverThumb(
                       key: _coverKey,
                       coverId: widget.bucket.coverId,
+                      heroTag: _heroTag,
                       size: c.maxWidth,
                     ),
                   ),
@@ -1947,9 +1955,16 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
 
 /// 封面缩略图（正方形，圆角）。无封面时显示占位图标。
 class _CoverThumb extends StatelessWidget {
-  const _CoverThumb({super.key, required this.coverId, required this.size});
+  const _CoverThumb({
+    super.key,
+    required this.coverId,
+    required this.size,
+    this.heroTag,
+  });
   final String? coverId;
   final double size;
+  /// 封面 Hero tag（网格第一张 id，enterBucket 后动态更新）；null 时用 coverId。
+  final String? heroTag;
 
   @override
   Widget build(BuildContext context) {
@@ -1971,8 +1986,9 @@ class _CoverThumb extends StatelessWidget {
     }
     final ref = imageRefFromMediaStoreId(coverId!);
     // [ente 对齐] 封面包 Hero：与相册网格第一张 cell 配对（封面↔第一张图飞行）。
+    // heroTag 优先（网格第一张 id）；null 回退 coverId。
     return Hero(
-      tag: 'photo_$coverId',
+      tag: heroTag ?? 'photo_$coverId',
       flightShuttleBuilder:
           (flightContext, animation, type, fromHeroContext, toHeroContext) =>
               (toHeroContext.widget as Hero).child,
