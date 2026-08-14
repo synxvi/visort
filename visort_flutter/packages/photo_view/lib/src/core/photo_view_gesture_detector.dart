@@ -11,6 +11,7 @@ class PhotoViewGestureDetector extends StatelessWidget {
     this.onScaleUpdate,
     this.onScaleEnd,
     this.onDoubleTap,
+    this.onDoubleTapDown,
     this.child,
     this.onTapUp,
     this.onTapDown,
@@ -18,6 +19,10 @@ class PhotoViewGestureDetector extends StatelessWidget {
   }) : super(key: key);
 
   final GestureDoubleTapCallback? onDoubleTap;
+  /// [visort fork] 双击落点（精准缩放锚点）：DoubleTapGestureRecognizer 的
+  /// onDoubleTap 回调无位置参数，需 onDoubleTapDown 先记录 TapDownDetails。
+  final GestureTapDownCallback? onDoubleTapDown;
+
   final HitCornersDetector? hitDetector;
 
   final GestureScaleStartCallback? onScaleStart;
@@ -56,7 +61,9 @@ class PhotoViewGestureDetector extends StatelessWidget {
         GestureRecognizerFactoryWithHandlers<DoubleTapGestureRecognizer>(
       () => DoubleTapGestureRecognizer(debugOwner: this),
       (DoubleTapGestureRecognizer instance) {
-        instance..onDoubleTap = onDoubleTap;
+        instance
+          ..onDoubleTapDown = onDoubleTapDown
+          ..onDoubleTap = onDoubleTap;
       },
     );
 

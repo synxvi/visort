@@ -131,8 +131,13 @@ class PhotoViewCoreState extends State<PhotoViewCore>
 
   PhotoViewHeroAttributes? get heroAttributes => widget.heroAttributes;
 
-  late ScaleBoundaries cachedScaleBoundaries = widget.scaleBoundaries;
+  /// [visort fork] 精准双击：scale 与 position 同步插值的专用动画
+  /// （300ms decelerate，主分支算法）。
+  late final AnimationController _doubleTapController;
+  Tween<double>? _doubleTapScaleTween;
+  Tween<Offset>? _doubleTapPositionTween;
 
+  late ScaleBoundaries cachedScaleBoundaries = widget.scaleBoundaries;
   void handleScaleAnimation() {
     scale = _scaleAnimation!.value;
   }
@@ -152,6 +157,7 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     _scaleAnimationController.stop();
     _positionAnimationController.stop();
     _rotationAnimationController.stop();
+    _doubleTapController.stop();
   }
 
   void onScaleUpdate(ScaleUpdateDetails details) {
@@ -170,15 +176,18 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     final Offset clampedPosition = widget.enablePanAlways
         ? targetPosition
         : clampPosition(position: targetPosition);
-    // [visort fork] X 边缘溢出翻页：放大(scale>1)且无缩放变化(纯平移)时，
-    // 图片在 X 边界继续拖动（目标 position 超出 clamp 边界）→ 回调外层翻页。
+    // [visort fork] X 边缘溢出翻页：放大态且无缩放变化(纯平移)时，图片在
+    // X 边界继续拖动（目标 position 超出 clamp 边界）→ 回调外层翻页。
     // 旧版 arena 裁决无法实现"手势中途到边释放"（Scale recognizer accept 后
     // 垄断事件流，PageView 的 drag recognizer 已被 reject）。
+    // 容差条件：|scale-1|<0.01（双指微动不算缩放）+ scaleState≠initial
+    // （放大态判定，photo_view scale 是绝对像素比不能用 newScale>1.0）+
+    // 溢出 >0.5px（浮点噪声不算）。
     final edgeCb = widget.onEdgeX;
     if (edgeCb != null &&
-        details.scale == 1.0 &&
-        newScale > 1.0 &&
-        targetPosition.dx != clampedPosition.dx) {
+        (details.scale - 1.0).abs() < 0.01 &&
+        scaleStateController.scaleState != PhotoViewScaleState.initial &&
+        (targetPosition.dx - clampedPosition.dx).abs() > 0.5) {
       edgeCb(targetPosition.dx > clampedPosition.dx ? 1 : -1);
     }
 
@@ -237,9 +246,106 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     }
   }
 
+  /// [visort fork] 精准双击缩放（主分支 extended_image 算法移植）：
+  /// - 2 段循环：未放大 → 放大；已放大 → 缩回 initial。
+  /// - 目标倍率 = initialScale × max(2.5, cover)：cover 铺满视口消除黑边。
+  /// - 锚点：双击落点的像素钉在屏幕原位（点击角落 → 角落滑到屏幕边缘后
+  ///   铺满无黑边），endPos 由"该像素屏幕位置不变"反解 + clampPosition
+  ///   铺满 clamp（图像 ≥ 视口的轴贴边）。
+  /// - 动画：300ms decelerate，scale 与 position 同一进度线性插值
+  ///   （屏幕像素轨迹随进度线性滑动，无整幅跳变/飞出）。
+  ///
+  /// 坐标系（useImageScale=true，filterQuality≠none）：
+  /// child 视觉中心 = 视口中心 + position，视觉尺寸 = childSize×scale；
+  /// 屏幕像素位置 = c + p + (q - C/2)·s（c=视口中心，q=子图像素）。
   void onDoubleTap() {
-    nextScaleState();
+    final tap = _doubleTapDownPosition;
+    final box = context.findRenderObject();
+    if (tap == null || box is! RenderBox || !box.hasSize) {
+      nextScaleState();
+      return;
+    }
+    _doubleTapDownPosition = null;
+
+    final double begin = scale;
+    final double initial = scaleBoundaries.initialScale;
+    final bool zooming = begin <= initial * 1.01;
+    final double target = zooming ? _doubleTapTargetScale() : initial;
+    final Offset endPos = zooming
+        ? clampPosition(
+            position: _doubleTapEndPosition(tap, box.size, begin, target),
+            scale: target,
+          )
+        : Offset.zero;
+
+    // 放大分支：立即上报 zoomedIn（动画帧走 setScaleInvisibly，不触发
+    // _blindScaleListener；外层 shouldDisableScroll/isZoomedNotifier 依赖
+    // stream 通知禁翻页+进沉浸模式，不能等动画结束）。
+    // setInvisibly 不触发 _blindScaleStateListener（ignorable）→ 无二次动画。
+    if (zooming) {
+      scaleStateController.setInvisibly(PhotoViewScaleState.zoomedIn);
+    }
+    _doubleTapScaleTween = Tween<double>(begin: begin, end: target);
+    _doubleTapPositionTween = Tween<Offset>(
+      begin: controller.position,
+      end: endPos,
+    );
+    _doubleTapController
+      ..stop()
+      ..value = 0.0
+      ..animateTo(
+        1.0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.decelerate,
+      );
   }
+
+  /// 双击落点（onDoubleTapDown 记录，core 局部坐标）。
+  Offset? _doubleTapDownPosition;
+
+  /// 目标倍率：max(2.5, cover)（cover = 铺满视口，与主分支
+  /// _computeDoubleTapTarget 的 coverRatio=max(layout/dest) 一致）。
+  double _doubleTapTargetScale() {
+    final Size child = scaleBoundaries.childSize;
+    final Size view = scaleBoundaries.outerSize;
+    // cover = 铺满视口的绝对 scale；与 initial×2.5 取大
+    // （主分支：relative target = max(2.5, coverRatio=cover/initial)）。
+    final double cover = view.width / child.width > view.height / child.height
+        ? view.width / child.width
+        : view.height / child.height;
+    final double zoomed = scaleBoundaries.initialScale * 2.5;
+    return cover > zoomed ? cover : zoomed;
+  }
+
+  /// 锚点终态偏移：tap 像素屏幕位置保持不变。
+  /// q = (tap - c - p0)/begin → p' = tap - c - q·target
+  /// （等价主分支 tapLocal·(1−s) 锚点公式在 photo_view 坐标系的推导）。
+  Offset _doubleTapEndPosition(
+    Offset tap,
+    Size viewSize,
+    double begin,
+    double target,
+  ) {
+    final Offset c = Offset(viewSize.width / 2, viewSize.height / 2);
+    if (begin <= 0) return Offset.zero;
+    final Offset q = (tap - c - controller.position) / begin;
+    return tap - c - q * target;
+  }
+
+  void _handleDoubleTapTick() {
+    final Animation<double> t = _doubleTapController.view;
+    scale = _doubleTapScaleTween!.evaluate(t);
+    controller.position = _doubleTapPositionTween!.evaluate(t);
+  }
+
+  void _onDoubleTapStatus(AnimationStatus status) {
+    // 缩回动画结束：scale==initialScale 时状态归 initial（否则 _blindScaleListener
+    // 报 zoomedOut → 外层 shouldDisableScroll/isZoomed 残留 true）。
+    if (status == AnimationStatus.completed && scale == scaleBoundaries.initialScale) {
+      scaleStateController.setInvisibly(PhotoViewScaleState.initial);
+    }
+  }
+
 
   void animateScale(double from, double to) {
     _scaleAnimation = Tween<double>(
@@ -294,6 +400,9 @@ class PhotoViewCoreState extends State<PhotoViewCore>
       ..addStatusListener(onAnimationStatus);
     _positionAnimationController = AnimationController(vsync: this)
       ..addListener(handlePositionAnimate);
+    _doubleTapController = AnimationController(vsync: this)
+      ..addListener(_handleDoubleTapTick)
+      ..addStatusListener(_onDoubleTapStatus);
   }
 
   void animateOnScaleStateUpdate(double prevScale, double nextScale) {
@@ -308,6 +417,7 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     _scaleAnimationController.dispose();
     _positionAnimationController.dispose();
     _rotationAnimationController.dispose();
+    _doubleTapController.dispose();
     super.dispose();
   }
 
@@ -374,7 +484,13 @@ class PhotoViewCoreState extends State<PhotoViewCore>
 
             return PhotoViewGestureDetector(
               child: child,
-              onDoubleTap: nextScaleState,
+              onDoubleTap: onDoubleTap,
+              onDoubleTapDown: (TapDownDetails details) {
+                final box = context.findRenderObject();
+                _doubleTapDownPosition = box is RenderBox && box.hasSize
+                    ? box.globalToLocal(details.globalPosition)
+                    : null;
+              },
               onScaleStart: onScaleStart,
               onScaleUpdate: onScaleUpdate,
               onScaleEnd: onScaleEnd,

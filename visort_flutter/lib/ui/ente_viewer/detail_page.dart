@@ -148,6 +148,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
     _pageController = PageController(initialPage: widget.initialIndex);
     _thumbScrollCtrl = ScrollController()..addListener(_onThumbScroll);
     _thumbCenterIndex = ValueNotifier<int>(widget.initialIndex);
+    // 沉浸模式：进入缩放（双击/双指放大）→ 隐藏顶/底栏/缩略图条；
+    // 退出缩放 → 恢复进入前的显示状态（手动全屏过则保持全屏）。
+    isZoomedNotifier.addListener(_onZoomedForImmersive);
     // 首帧定位到当前 index 居中（等 layout 就绪）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctrl = _thumbScrollCtrl;
@@ -159,6 +162,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   @override
   void dispose() {
+    isZoomedNotifier.removeListener(_onZoomedForImmersive);
     _pageController.dispose();
     _selectedIndexNotifier.dispose();
     enableFullScreenNotifier.dispose();
@@ -171,6 +175,25 @@ class _DetailPageState extends ConsumerState<DetailPage>
     _thumbScrollCtrl?.dispose();
     _thumbCenterIndex?.dispose();
     super.dispose();
+  }
+
+  bool? _fullscreenBeforeZoom;
+
+  /// 沉浸模式联动（isZoomedNotifier → enableFullScreenNotifier）。
+  void _onZoomedForImmersive() {
+    if (!mounted) return;
+    if (isZoomedNotifier.value) {
+      _fullscreenBeforeZoom ??= enableFullScreenNotifier.value;
+      if (!enableFullScreenNotifier.value) {
+        enableFullScreenNotifier.value = true;
+      }
+    } else {
+      final restore = _fullscreenBeforeZoom ?? false;
+      _fullscreenBeforeZoom = null;
+      if (enableFullScreenNotifier.value != restore) {
+        enableFullScreenNotifier.value = restore;
+      }
+    }
   }
 
   MsImageInfo? get _selectedFile => _fileAt(_selectedIndexNotifier.value);
@@ -319,7 +342,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeOut,
           );
-    unawaited(future.whenComplete(() => _edgePageAnimating = false));
+    unawaited(
+      future.whenComplete(() {
+        _edgePageAnimating = false;
+        // 旧页的放大态翻页后残留（新页 postFrame 也会复位，这里兜底
+        // 翻页动画期间 PageView 已恢复可滚）。
+        if (_shouldDisableScroll) {
+          setState(() => _shouldDisableScroll = false);
+        }
+      }),
+    );
   }
 
   void _preloadFiles(int index) {

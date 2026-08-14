@@ -112,6 +112,14 @@ class _ZoomableImageState extends State<ZoomableImage> {
         state?.zoomTransformNotifier.value = ZoomTransform.identity;
       }
     };
+    // 新页初始上报（scaleStateChangedCallback 只在状态变化时触发，新页
+    // initial 不回调 → 上一页放大标志跨页残留 = 翻页失灵/沉浸模式不退出）。
+    // postFrame 覆盖所有翻页路径（filmstrip 跳转/删除补位/边缘翻页）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.shouldDisableScroll?.call(false);
+      InheritedDetailPageState.maybeOf(context)?.isZoomedNotifier.value = false;
+    });
     _subscribeToZoomStream();
   }
 
