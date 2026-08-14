@@ -19,7 +19,6 @@ import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/shared/widgets/press_scale.dart';
-import 'album_flight.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/ui/router_android.dart';
 
@@ -210,31 +209,14 @@ class _AlbumTile extends ConsumerStatefulWidget {
 }
 
 class _AlbumTileState extends ConsumerState<_AlbumTile> {
-  /// 封面缩略图 GlobalKey：飞行层动画起点（封面放大到全屏，对标系统相册）。
-  final GlobalKey _coverKey = GlobalKey();
-
   void _open() {
-    // 封面缩略图的屏幕坐标：grow 飞行层动画起点（封面放大到全屏）。
-    final box = _coverKey.currentContext?.findRenderObject();
-    final rect = (box is RenderBox && box.attached)
-        ? box.localToGlobal(Offset.zero) & box.size
-        : null;
+    // [ente 对齐] 相册打开 = 200ms fade + 封面 Hero 飞行（封面↔网格第一张图）。
     final args = {
       'bucketId': widget.bucket.id,
       'bucketName': widget.bucket.name,
       'bucketCount': widget.bucket.count,
     };
-    if (rect != null && widget.bucket.coverId != null) {
-      pushAlbumFlight(
-        context,
-        args: args,
-        cellRect: rect,
-        coverId: widget.bucket.coverId!,
-        coverAlignment: albumCoverAlignment(rect, MediaQuery.sizeOf(context)),
-      );
-    } else {
-      Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
-    }
+    Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
   }
 
   @override
@@ -247,7 +229,7 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
         child: Row(
           children: [
             // 封面缩略图
-            _CoverThumb(key: _coverKey, coverId: bucket.coverId, size: 56),
+            _CoverThumb(coverId: bucket.coverId, size: 56),
             const SizedBox(width: 14),
             // 名称
             Expanded(
@@ -287,7 +269,7 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
 
 /// 封面缩略图（正方形，圆角）。无封面时显示占位图标。
 class _CoverThumb extends StatelessWidget {
-  const _CoverThumb({super.key, required this.coverId, required this.size});
+  const _CoverThumb({required this.coverId, required this.size});
   final String? coverId;
   final double size;
 
