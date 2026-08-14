@@ -19,10 +19,12 @@ dependencies:
   window_manager: ^0.5.0
   shared_preferences: ^2.2.0
   flutter_animate: ^4.5.0
-  # 大图浏览器：extended_image 本地 fork（主分支机制，_canScrollPage 边缘翻页/
-  # 双击 2 段循环/filmstrip/详情面板/Hero flight 原生支持，经真机验证）。
-  extended_image:
-    path: packages/extended_image
+  # [ente 对齐] 大图浏览器用 photo_view（ente 同款 0.15.0）本地 fork：
+  # 缩放/回弹/双击/Hero 动画与 ente 完全一致。
+  # fork patch：PhotoViewGestureRecognizer 双轴边缘裁决（X/Y 任一可移动即 accept，
+  # 放大后平移到 X 边缘释放给 PageView 翻页——原版 axis:vertical 时 X 永不释放）。
+  photo_view:
+    path: packages/photo_view
 
 
 dev_dependencies:

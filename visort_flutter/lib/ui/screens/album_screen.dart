@@ -31,7 +31,7 @@ import 'package:visort_flutter/ui/ente_viewer/gallery_boundaries_provider.dart';
 import 'package:visort_flutter/ui/ente_viewer/gallery_files_inherited_widget.dart';
 import 'package:visort_flutter/ui/ente_viewer/group_type.dart';
 import 'package:visort_flutter/ui/ente_viewer/selected_files.dart';
-import 'photo_viewer.dart';
+import 'package:visort_flutter/ui/ente_viewer/detail_page.dart';
 import 'album_common.dart';
 
 class AlbumScreen extends ConsumerStatefulWidget {
@@ -901,15 +901,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             child: FadeTransition(opacity: anim, child: child),
           );
         },
-        pageBuilder: (_, anim, _) => PhotoViewer(
-          photos: photos,
+        pageBuilder: (_, _, _) => DetailPage(
+          files: photos,
           initialIndex: index,
-          hasMore: ref.read(galleryControllerProvider).hasMore,
-          totalCount: widget.bucketCount,
-          onLoadMore: () =>
-              ref.read(galleryControllerProvider.notifier).loadMore(),
           onIndexChanged: _onViewerIndexChanged,
-          transition: anim,
         ),
         settings: const RouteSettings(name: AlbumRoutes.photoViewer),
         fullscreenDialog: true,
