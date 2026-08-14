@@ -1129,7 +1129,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 无路由(不误 pop)、无 DSS(无 snap 卡 ticker)。value 0=关闭/1=展开。
   void _showDetails(MsImageInfo info) {
     if (_detailsOpen) return;
-    _panelClosing = false;
     // setState:PopScope 的 canPop 依赖 _detailsOpen,不重建则系统返回直接退出。
     setState(() => _detailsOpen = true);
     // 面板打开期间底栏/缩略图条需可见、顶栏随占比淡出:强制退出全屏(edge-to-edge)。
@@ -1154,31 +1153,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
   }
 
   /// 关闭:easeIn(前快后慢,不在一半突然加速),完成后移除面板。
-  /// 完成回调用 status listener 而非 animateTo().orCancel.then——后者是
-  /// microtask：动画被拖拽/二次 animateTo 打断时 orCancel 直接 cancel，
-  /// then 不执行 → 面板卡在树中（半滑出灰色卡片 + 顶栏半透明残留，
-  /// 即"收起动画快结束时下半到顶栏的灰屏"，与 AnimatedSwitcher 打断
-  /// 残留同因）。listener 在打断后的新动画 completed 时同步再触发，
-  /// 任何路径最终收敛。
   void _animateClose() {
     final ctrl = _panelCtrl;
-    if (ctrl == null || _panelClosing) return;
-    _panelClosing = true;
-    ctrl.addStatusListener(_onPanelCloseStatus);
-    ctrl.animateTo(0,
-        duration: const Duration(milliseconds: 180), curve: Curves.easeIn);
-  }
-
-  bool _panelClosing = false;
-
-  void _onPanelCloseStatus(AnimationStatus status) {
-    if (status != AnimationStatus.completed) return;
-    final ctrl = _panelCtrl;
-    if (ctrl != null) {
-      ctrl.removeStatusListener(_onPanelCloseStatus);
-    }
-    _panelClosing = false;
-    if (mounted) _onDetailsDismissed();
+    if (ctrl == null) return;
+    ctrl
+        .animateTo(0,
+            duration: const Duration(milliseconds: 180), curve: Curves.easeIn)
+        .orCancel
+        .then((_) {
+      if (mounted) _onDetailsDismissed();
+    });
   }
 
   /// 详情面板关闭收尾。
@@ -1261,9 +1245,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
                 onVerticalDragUpdate: (d) {
                   final ctrl = _panelCtrl;
                   if (ctrl == null) return;
-                  // 用户拖拽接管：stop 收起动画（value 赋值即 stop）——
-                  // 关闭流程复位，松手 snap 的 animateTo(0) completed 再收敛。
-                  _panelClosing = false;
                   ctrl.value =
                       (ctrl.value - d.primaryDelta! / slideOut).clamp(0.0, 1.0);
                 },
@@ -1315,8 +1296,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
         }
       }
       if (over == 0) return false;
-      // 内容 overscroll 接管面板（同把手拖拽）：复位关闭流程。
-      _panelClosing = false;
       ctrl.value = (ctrl.value + over / slideOutForPanel()).clamp(0.0, 1.0);
       return false; // 不消费:辉光反馈等仍由 Scrollable 内部处理
     }
