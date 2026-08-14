@@ -209,8 +209,14 @@ class _AlbumTile extends ConsumerStatefulWidget {
 }
 
 class _AlbumTileState extends ConsumerState<_AlbumTile> {
-  void _open() {
+  Future<void> _open() async {
     // [ente 对齐] 相册打开 = 200ms fade + 封面 Hero 飞行（封面↔网格第一张图）。
+    // 先 await enterBucket：push 时网格第一张 cell 必须已存在（Hero 终点），
+    // 否则 flight 不启动（数据异步查询错过动画窗口）。快照命中秒回；
+    // 首次查 MediaStore ~100-300ms（一次性，之后快照直出）。
+    final notifier = ref.read(galleryControllerProvider.notifier);
+    await notifier.enterBucket(widget.bucket.id);
+    if (!mounted) return;
     final args = {
       'bucketId': widget.bucket.id,
       'bucketName': widget.bucket.name,

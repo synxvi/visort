@@ -16,6 +16,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:visort_flutter/core/config/models.dart';
+import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/core/config/profiles_service.dart';
 import 'package:visort_flutter/core/fs/android_mediastore_file_system.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
@@ -1780,12 +1781,19 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
       widget.onCheckToggle();
       return;
     }
+    // [ente 对齐] 相册打开 = 200ms fade + 封面 Hero 飞行（封面↔网格第一张图）。
+    // 先 await enterBucket：push 时网格第一张 cell 必须已存在（Hero 终点），
+    // 否则 flight 不启动（异步查询错过动画窗口）。快照命中秒回。
+    // _HomeBucketTileState 非 Consumer，用 containerOf 读 controller。
+    final container = ProviderScope.containerOf(context);
+    final notifier = container.read(galleryControllerProvider.notifier);
+    await notifier.enterBucket(widget.bucket.id);
+    if (!mounted) return;
     final args = {
       'bucketId': widget.bucket.id,
       'bucketName': widget.bucket.name,
       'bucketCount': widget.bucket.count,
     };
-    // [ente 对齐] 相册打开 = 200ms fade + 封面 Hero 飞行（封面↔网格第一张图）。
     await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
     // 从相册返回：刷新封面/数量（相册内可能删除了图片/改了排序）
     widget.onAlbumReturned?.call();
