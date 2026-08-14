@@ -324,11 +324,15 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             ),
             transitionBuilder: (child, animation) =>
                 FadeTransition(opacity: animation, child: child),
+            // 排序变化交叉淡入（key 只含排序——含 _timelineView 时切到日期
+            // 视图会连续两次 key 变化（视图+排序）：动画 #1 启动即被 #2
+            // 打断，旧网格淡出动画卡在半透明 = 顶栏以下灰遮罩（复现）。
+            // 视图切换直接换 child（无动画），排序变化仍交叉淡入且只
+            // 触发一次（setPhotoSort 异步，视图已直换后 key 才变）。
             child: KeyedSubtree(
               key: ValueKey((
                 gallery.effectivePhotoSortBy,
                 gallery.photoSortAsc,
-                _timelineView,
               )),
               child: _buildBody(gallery),
             ),
