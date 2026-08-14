@@ -26,7 +26,7 @@ import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 
 import 'boundary_reporter_mixin.dart';
-import 'custom_scroll_bar.dart';
+import '../../shared/widgets/scroll_drag_handle.dart';
 import 'gallery_boundaries_provider.dart';
 import 'gallery_context_state.dart';
 import 'gallery_files_inherited_widget.dart';
@@ -113,14 +113,8 @@ class Gallery extends StatefulWidget {
 }
 
 class GalleryState extends State<Gallery> {
-  /// 批量选择底部操作栏估测高度（visort album_screen _buildBatchBar：
-  /// TextButton 行 + 6px 上下 padding；SafeArea 底边由 bottomInset 提供）。
-  /// ente 对应 FileSelectionOverlayBar.roughHeight = 232（其操作栏更高）。
-  static const double _kSelectionBarRoughHeight = 64.0;
-
   late final ScrollController _scrollController;
   final scrollBarInUseNotifier = ValueNotifier<bool>(false);
-  final scrollbarBottomPaddingNotifier = ValueNotifier<double>(0);
 
   /// 网格上方 header 高度（visort 无 header，恒 0；保留 ente 字段以支持
   /// PinnedGroupHeader 的 _setCurrentGroupID 归一化）。
@@ -141,10 +135,8 @@ class GalleryState extends State<Gallery> {
     _groupType = widget.groupType;
     _allGalleryFiles = widget.allFiles;
     _setGroupHeaderExtent();
-    widget.selectedFiles?.addListener(_selectedFilesListener);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _selectedFilesListener();
       _boundariesProvider?.setScrollController(_scrollController);
     });
   }
@@ -183,10 +175,8 @@ class GalleryState extends State<Gallery> {
   @override
   void dispose() {
     _boundariesProvider?.setScrollController(null);
-    widget.selectedFiles?.removeListener(_selectedFilesListener);
     if (widget.scrollController == null) _scrollController.dispose();
     scrollBarInUseNotifier.dispose();
-    scrollbarBottomPaddingNotifier.dispose();
     _headerHeightNotifier.dispose();
     super.dispose();
   }
@@ -219,15 +209,6 @@ class GalleryState extends State<Gallery> {
     }
   }
 
-  /// 选中态变化 → 调整滚动条底部留白（给批量操作栏让位）。
-  void _selectedFilesListener() {
-    final bottomInset = MediaQuery.paddingOf(context).bottom;
-    final hasSelection = !(widget.selectedFiles?.files.isEmpty ?? true);
-    scrollbarBottomPaddingNotifier.value = hasSelection
-        ? _kSelectionBarRoughHeight + bottomInset
-        : bottomInset;
-  }
-
   @override
   Widget build(BuildContext context) {
     GalleryFilesState.of(context).setGalleryFiles = _allGalleryFiles;
@@ -252,6 +233,12 @@ class GalleryState extends State<Gallery> {
       });
     }
 
+    final cellWidth =
+        (MediaQuery.sizeOf(context).width -
+                8 -
+                (widget.crossAxisCount - 1) * GalleryGroups.spacing) /
+        widget.crossAxisCount;
+
     final grid = GalleryContextState(
       sortOrderAsc: _sortOrderAsc,
       inSelectionMode: widget.inSelectionMode,
@@ -264,38 +251,42 @@ class GalleryState extends State<Gallery> {
                   style: TextStyle(color: AppColors.muted, fontSize: 14),
                 ),
               ))
-          : CustomScrollBar(
-              scrollController: _scrollController,
-              galleryGroups: groups,
-              inUseNotifier: scrollBarInUseNotifier,
-              heighOfViewport: MediaQuery.sizeOf(context).height,
-              topPadding: groupHeaderExtent!,
-              bottomPadding: scrollbarBottomPaddingNotifier,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  CustomScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    controller: _scrollController,
-                    slivers: [
-                      SectionedListSliver(
-                        sectionLayouts: groups.groupLayouts,
-                      ),
-                    ],
-                  ),
-                  if (groups.groupType.showGroupHeader())
-                    PinnedGroupHeader(
-                      scrollController: _scrollController,
-                      galleryGroups: groups,
-                      headerHeightNotifier: _headerHeightNotifier,
-                      scrollOffsetBase: 0,
-                      topOffset: 0,
-                      selectedFiles: widget.selectedFiles,
-                      showSelectAll: widget.showSelectAll,
-                      scrollbarInUseNotifier: scrollBarInUseNotifier,
+          : Stack(
+              clipBehavior: Clip.none,
+              children: [
+                CustomScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  controller: _scrollController,
+                  slivers: [
+                    SectionedListSliver(
+                      sectionLayouts: groups.groupLayouts,
                     ),
-                ],
-              ),
+                  ],
+                ),
+                if (groups.groupType.showGroupHeader())
+                  PinnedGroupHeader(
+                    scrollController: _scrollController,
+                    galleryGroups: groups,
+                    headerHeightNotifier: _headerHeightNotifier,
+                    scrollOffsetBase: 0,
+                    topOffset: 0,
+                    selectedFiles: widget.selectedFiles,
+                    showSelectAll: widget.showSelectAll,
+                    scrollbarInUseNotifier: scrollBarInUseNotifier,
+                  ),
+                // 右侧滚动拖拽手柄（主分支样式）：向下滚动后出现，可拖拽
+                // 跳转。用照片总数 + 固定行高算进度，分母稳定（loadMore
+                // 不跳）；日期分组混合 sliver（组头行高不同）用
+                // monotonicExtent 单调化 maxScrollExtent 防抖。
+                ScrollDragHandle(
+                  controller: _scrollController,
+                  totalItems: _allGalleryFiles.length,
+                  rowExtent: cellWidth + GalleryGroups.spacing,
+                  columns: widget.crossAxisCount,
+                  viewportRows: 5,
+                  monotonicExtent: true,
+                ),
+              ],
             ),
     );
 
