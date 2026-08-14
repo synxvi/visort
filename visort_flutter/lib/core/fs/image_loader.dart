@@ -125,9 +125,13 @@ class _AndroidBytesImageProvider
     ImageDecoderCallback decode,
   ) async {
     final tw = key.targetWidth;
+    // GIF:跳过 readSampledImage——Kotlin 侧 BitmapFactory 采样解码只取首帧,
+    // 返回 raw ARGB 单帧,MultiFrameImageStreamCompleter 拿到的 codec 无后续帧
+    // → viewer 里 GIF 永远停在第一帧。走 readBytes 全量 + dart 解码保持多帧。
+    final isGif = key.ref.extension == '.gif';
     // targetWidth 指定(viewer 全图):优先走 native readSampledImage(下采样解码,快)。
     // 失败(超时/channel/解码异常)→ 回退 readBytes 全图,保证可用(诊断期)。
-    if (tw != null && tw > 0) {
+    if (tw != null && tw > 0 && !isGif) {
       try {
         // raw ARGB 像素(不经 JPEG):ImmutableBuffer + ImageDescriptor.raw 直接
         // instantiateCodec,跳过 dart 侧二次 JPEG 解码(原 P0 根因)。
@@ -146,6 +150,10 @@ class _AndroidBytesImageProvider
     final buffer = await ui.ImmutableBuffer.fromUint8List(
         bytes is Uint8List ? bytes : Uint8List.fromList(bytes));
     if (tw != null && tw > 0) {
+      if (isGif) {
+        // GIF:不降采样,全尺寸解码保全部帧(GIF 文件通常几 MB,可接受)。
+        return decode(buffer);
+      }
       return decode(buffer,
           getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
         return ui.TargetImageSize(width: tw);

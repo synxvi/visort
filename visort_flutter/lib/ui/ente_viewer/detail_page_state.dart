@@ -38,6 +38,9 @@ class InheritedDetailPageState extends InheritedWidget {
   final ValueNotifier<bool> isZoomedNotifier;
   final ValueNotifier<ZoomTransform> zoomTransformNotifier;
 
+  /// 图片区单击回调（DetailPage 注入）：详情面板打开时收面板，否则全屏切换。
+  final VoidCallback? onImageTap;
+
   // ignore: prefer_const_constructors_in_immutables
   InheritedDetailPageState({
     super.key,
@@ -47,6 +50,7 @@ class InheritedDetailPageState extends InheritedWidget {
     required this.showingThumbnailFallbackNotifier,
     required this.isZoomedNotifier,
     required this.zoomTransformNotifier,
+    this.onImageTap,
   });
 
   static InheritedDetailPageState of(BuildContext context) =>
@@ -56,6 +60,11 @@ class InheritedDetailPageState extends InheritedWidget {
       context.dependOnInheritedWidgetOfExactType<InheritedDetailPageState>();
 
   void toggleFullScreenByUser() {
+    // DetailPage 可注入单击覆盖（详情面板打开时收面板，而非切换全屏）。
+    if (onImageTap != null) {
+      onImageTap!();
+      return;
+    }
     _applyFullScreenState(!enableFullScreenNotifier.value);
   }
 

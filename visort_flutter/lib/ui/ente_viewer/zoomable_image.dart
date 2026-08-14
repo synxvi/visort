@@ -37,6 +37,8 @@ class ZoomableImage extends StatefulWidget {
   final Decoration? backgroundDecoration;
   /// 上滑（>8px）→ 详情面板（visort 适配：外层 DetailPage 决定展示）。
   final VoidCallback? onSwipeUp;
+  /// 下滑（>8px）→ 返回（visort 适配：外层 DetailPage 面板打开时改为收面板）。
+  final VoidCallback? onSwipeDown;
   /// 原图（下采样）就绪回调（外层记录 id，退出时 evict 缓存）。
   final ValueChanged<String>? onFullLoaded;
 
@@ -52,6 +54,7 @@ class ZoomableImage extends StatefulWidget {
     this.tagPrefix,
     this.backgroundDecoration,
     this.onSwipeUp,
+    this.onSwipeDown,
     this.onFullLoaded,
   });
 
@@ -209,7 +212,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
         : (d) {
             if (!_isZooming) {
               if (d.delta.dy > _kDragSensitivity) {
-                unawaited(Navigator.maybePop(context));
+                if (widget.onSwipeDown != null) {
+                  widget.onSwipeDown!();
+                } else {
+                  unawaited(Navigator.maybePop(context));
+                }
               } else if (d.delta.dy < (_kDragSensitivity * -1)) {
                 widget.onSwipeUp?.call();
               }
