@@ -27,6 +27,8 @@ import 'package:visort_flutter/shared/widgets/toast.dart';
 
 import 'package:visort_flutter/ui/ente_viewer/gallery.dart' show Gallery;
 import 'package:visort_flutter/ui/ente_viewer/gallery_groups.dart';
+import 'package:visort_flutter/ui/ente_viewer/gallery_boundaries_provider.dart';
+import 'package:visort_flutter/ui/ente_viewer/gallery_files_inherited_widget.dart';
 import 'package:visort_flutter/ui/ente_viewer/group_type.dart';
 import 'package:visort_flutter/ui/ente_viewer/selected_files.dart';
 import 'package:visort_flutter/ui/ente_viewer/detail_page.dart';
@@ -395,7 +397,12 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     }
     // [ente 移植] 沉浸网格：ente Gallery（SectionedSliverList 分组网格 +
     // 自定义滚动条 + 2px 间距；间距/布局与 ente 一致）。
-    return Gallery(
+    // Gallery 依赖外层 GalleryFilesState + GalleryBoundariesProvider（ente
+    // CollectionPage 同款包装：GalleryFilesState 提供 files、BoundariesProvider
+    // 供 PinnedGroupHeader 定位）。
+    return GalleryBoundariesProvider(
+      child: GalleryFilesState(
+        child: Gallery(
       allFiles: photos,
       tagPrefix: 'photo',
       groupType: GroupType.none,
@@ -415,6 +422,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       onFileLongPress: (file) {
         if (!_selectMode) _enterSelectMode(file.id);
       },
+        ),
+      ),
     );
   }
 
@@ -444,7 +453,9 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     }
     // [ente 移植] 日期分组视图：ente Gallery（GroupType.day 分组 +
     // PinnedGroupHeader 吸附头 + 自定义滚动条联动）。
-    return Gallery(
+    return GalleryBoundariesProvider(
+      child: GalleryFilesState(
+        child: Gallery(
       allFiles: photos,
       tagPrefix: 'photo',
       groupType: GroupType.day,
@@ -464,6 +475,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       onFileLongPress: (file) {
         if (!_selectMode) _enterSelectMode(file.id);
       },
+        ),
+      ),
     );
   }
 
