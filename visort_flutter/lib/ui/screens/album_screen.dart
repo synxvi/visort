@@ -415,6 +415,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     // CollectionPage 同款包装：GalleryFilesState 提供 files、BoundariesProvider
     // 供 PinnedGroupHeader 定位）。
     return GalleryBoundariesProvider(
+      key: const ValueKey('grid'),
       child: GalleryFilesState(
         child: Gallery(
       allFiles: photos,
@@ -468,6 +469,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     // [ente 移植] 日期分组视图：ente Gallery（GroupType.day 分组 +
     // PinnedGroupHeader 吸附头 + 自定义滚动条联动）。
     return GalleryBoundariesProvider(
+      key: const ValueKey('timeline'),
       child: GalleryFilesState(
         child: Gallery(
       allFiles: photos,

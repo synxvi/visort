@@ -113,7 +113,7 @@ class Gallery extends StatefulWidget {
 }
 
 class GalleryState extends State<Gallery> {
-  late final ScrollController _scrollController;
+  late ScrollController _scrollController;
   final scrollBarInUseNotifier = ValueNotifier<bool>(false);
 
   /// 网格上方 header 高度（visort 无 header，恒 0；保留 ente 字段以支持
@@ -145,6 +145,16 @@ class GalleryState extends State<Gallery> {
   void didUpdateWidget(covariant Gallery oldWidget) {
     super.didUpdateWidget(oldWidget);
     var needsRegroup = false;
+    // 视图切换（沉浸 ↔ 日期）复用同一 Gallery element 但传不同
+    // scrollController：必须换绑，否则日期视图滚沉浸的 controller
+    //（滚动/手柄/返回定位全错）。
+    if (oldWidget.scrollController != widget.scrollController) {
+      final old = _scrollController;
+      _scrollController = widget.scrollController ?? ScrollController();
+      _boundariesProvider?.setScrollController(_scrollController);
+      if (oldWidget.scrollController == null) old.dispose();
+      needsRegroup = true;
+    }
     if (oldWidget.groupType != widget.groupType) {
       _groupType = widget.groupType;
       _setGroupHeaderExtent();
