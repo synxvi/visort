@@ -304,12 +304,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
         children: [
           // 底栏缩略图条（filmstrip）
           _buildThumbLine(),
-          // 顶栏
-          _buildTopBar(),
-          // 底栏 + 详情面板
-          _buildBottomOverlay(),
+          // 详情面板：z 序在底栏**后面**——滑入/滑出动画经过底栏区域时
+          // 被底栏遮住（"从底栏后面弹出/收回"），而非覆盖底栏。
           if (_detailsOpen && _panelCtrl != null)
             _buildPanelOverlay(_selectedFile),
+          // 顶栏
+          _buildTopBar(),
+          // 底栏（z 序最上）
+          _buildBottomOverlay(),
         ],
       ),
     );
@@ -1169,8 +1171,15 @@ class _DetailPageState extends ConsumerState<DetailPage>
   void _onDetailsDismissed() {
     setState(() => _detailsOpen = false);
     _panelExtent.value = 0;
-    _panelCtrl?.dispose();
+    // 关键：面板 AnimatedBuilder 在被栏移除之前可能再被标脏 rebuild 一次，
+    // 此时 builder 读 _panelCtrl! 会撞 null 崩溃 → 该帧渲染 ErrorWidget
+    // （release 为灰盒）→ 用户看到"收起结束瞬间面板区闪灰色一块"。
+    // builder 已改为读局部捕获的 controller（见 _buildPanelOverlay），
+    // 这里只把字段置 null（guard 面板不再重建）；dispose 再延后一帧，
+    // 确保期间任何 rebuild 读到的都是活着的 controller（value=0，屏外）。
+    final ctrl = _panelCtrl;
     _panelCtrl = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) => ctrl?.dispose());
   }
 
   /// 拖拽面板松手:snap 二值(展开/收回),不停在中间。
@@ -1204,15 +1213,20 @@ class _DetailPageState extends ConsumerState<DetailPage>
     final availH = mq.size.height - barH;
     final panelH = _kDetailInitial * availH;
     final slideOut = panelH + barH;
+    // 局部捕获 controller：builder 绝不读可空字段 _panelCtrl!——面板被栏
+    // 移除之前若再次 rebuild（_onDetailsDismissed 已置 null），空断言崩溃
+    // 会让该帧渲染 ErrorWidget（release 灰盒）= 收起结束瞬间的灰色闪烁。
+    final ctrl = _panelCtrl;
+    if (ctrl == null) return const SizedBox.shrink();
     return Positioned(
       left: 0,
       right: 0,
       bottom: barH,
       height: panelH,
       child: AnimatedBuilder(
-        animation: _panelCtrl!,
+        animation: ctrl,
         builder: (_, child) {
-          final ty = (1 - _panelCtrl!.value) * slideOut;
+          final ty = (1 - ctrl.value) * slideOut;
           return Transform.translate(offset: Offset(0, ty), child: child);
         },
         child: Stack(
