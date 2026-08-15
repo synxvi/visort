@@ -388,10 +388,17 @@ class _PinnedGroupHeaderState extends State<PinnedGroupHeader>
     if (widget.headerHeightNotifier.value == null) return;
     final scrollOffset = _scrollOffset;
     if (scrollOffset == null) return;
+    // [visort 定制] 吸附判定提前 64（2×组头高）：ente 原版"组头完全滚出
+    // 视口顶（scroll ≥ 组offset+32）才切换标题"——返回定位贴顶落点在
+    // 组头 y=32（scroll=组offset-32），原判定会让 pinned 头停在上一组
+    //（用户报"标题未正确替换"）；提前后 scroll ≥ 组offset-32 即显示当前
+    // 组（normalized = scroll-32+64 = scroll+32 ≥ 组offset ⟺ scroll ≥
+    // 组offset-32），吸附标题与第一行图片落点一致：不遮挡、同步切换。
     final normalizedScrollOffset =
         scrollOffset -
         widget.scrollOffsetBase -
-        widget.headerHeightNotifier.value!;
+        widget.headerHeightNotifier.value! +
+        64;
     if (normalizedScrollOffset < 0) {
       _setBaseTopBoundary();
       if (currentGroupId == null) return;

@@ -3,6 +3,7 @@
 
 import 'package:flutter/widgets.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
+import 'package:visort_flutter/core/i18n/i18n.dart';
 
 enum GroupType { day, week, month, size, year, none }
 
@@ -84,26 +85,42 @@ extension GroupTypeExtension on GroupType {
     final date = DateTime.fromMicrosecondsSinceEpoch(ts);
     final now = DateTime.now();
     if (date.year == now.year && date.month == now.month) {
-      if (date.day == now.day) return "今天";
-      if (date.day == now.day - 1) return "昨天";
+      if (date.day == now.day) return tr('date_today');
+      if (date.day == now.day - 1) return tr('date_yesterday');
     }
-    return '${date.year}年${date.month}月${date.day}日';
+    if (currentLang == 'zh') return '${date.year}年${date.month}月${date.day}日';
+    return '${_monthAbbr[date.month - 1]} ${date.day}, ${date.year}';
   }
 
   String _getWeekTitle(int ts) {
     final date = DateTime.fromMicrosecondsSinceEpoch(ts);
     final start = date.subtract(Duration(days: date.weekday - 1));
     final end = start.add(const Duration(days: 6));
-    return '${start.month}月${start.day}日 - ${end.month}月${end.day}日, ${end.year}';
+    if (currentLang == 'zh') {
+      return '${start.month}月${start.day}日 - ${end.month}月${end.day}日, ${end.year}';
+    }
+    return '${_monthAbbr[start.month - 1]} ${start.day} – '
+        '${_monthAbbr[end.month - 1]} ${end.day}, ${end.year}';
   }
 
   String _getMonthTitle(int ts) {
     final date = DateTime.fromMicrosecondsSinceEpoch(ts);
-    return '${date.year}年${date.month}月';
+    if (currentLang == 'zh') return '${date.year}年${date.month}月';
+    return '${_monthFull[date.month - 1]} ${date.year}';
   }
 
   String _getYearTitle(int ts) {
     final date = DateTime.fromMicrosecondsSinceEpoch(ts);
-    return '${date.year}年';
+    if (currentLang == 'zh') return '${date.year}年';
+    return '${date.year}';
   }
+
+  static const _monthAbbr = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  static const _monthFull = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
 }

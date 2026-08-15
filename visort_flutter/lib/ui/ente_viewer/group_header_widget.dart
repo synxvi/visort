@@ -76,7 +76,8 @@ class _GroupHeaderWidgetState extends State<GroupHeaderWidget> {
       height: widget.height ?? 32,
       child: Row(
         children: [
-          const SizedBox(width: 16),
+          // 网格贴屏边（spacing 2 无边距），组头 16 缩进偏多 → 8。
+          const SizedBox(width: 8),
           Expanded(
             child: Text(
               widget.title,
@@ -86,6 +87,10 @@ class _GroupHeaderWidgetState extends State<GroupHeaderWidget> {
                 color: AppColors.text,
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
+                // 全局字体规则：数字/英文 Space Mono，中文回退思源。
+                fontFamily: 'Space Mono',
+                height: 1.2,
+                fontFamilyFallback: AppFonts.cjkFallback,
               ),
             ),
           ),

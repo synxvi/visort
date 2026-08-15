@@ -25,8 +25,7 @@ import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 
-import 'package:visort_flutter/ui/ente_viewer/gallery.dart' show Gallery;
-import 'package:visort_flutter/ui/ente_viewer/gallery_groups.dart';
+import 'package:visort_flutter/ui/ente_viewer/gallery.dart' show Gallery;import 'package:visort_flutter/ui/ente_viewer/gallery_groups.dart';
 import 'package:visort_flutter/ui/ente_viewer/gallery_boundaries_provider.dart';
 import 'package:visort_flutter/ui/ente_viewer/gallery_files_inherited_widget.dart';
 import 'package:visort_flutter/ui/ente_viewer/group_type.dart';
@@ -846,30 +845,38 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     double target;
     if (_timelineView) {
       final photos = ref.read(galleryControllerProvider).photos;
-      // 行顶 offset：按"组"累加（组头 32 + 组内行数 ceil(张数/cols)×cellH）。
-      // 不能用"满 cols 张才累加行高"的按张循环——组尾不满行（组 < cols 张
-      // 时每组 1 行）会漏算 → offset 低估 → target 全负 clamp 0 → 网格从不
-      // 滚动（返回飞行终点 cell 不在视口，主分支按 _flat 行项遍历规避）。
-      var offset = 0.0;
+      // 组高模型与 SectionedListSliver 布局公式**完全同构**（否则估算误差
+      // 在组多时累积——真机 99 组曾因每组多算 1 个 spacing(2px) 高估
+      // ~198px → scroll 滚过头 → 目标行顶被导航栏整个盖住）：
+      //   组高 = 组头32 + rows×tileHeight + (rows-1)×spacing
+      //   行高 = tileHeight + spacing（tileHeight = cellW）
+      // 即每组 = 32 + rows×cellH - spacing。
+      const spacing = GalleryGroups.spacing;
+      var groupTop = 0.0; // 目标组的组头起始 offset（滚动到此时组头贴视口顶）
       var photosInGroup = 0;
       for (var i = 0; i <= index && i < photos.length; i++) {
         if (i > 0 &&
             !GroupType.day.areFromSameGroup(photos[i - 1], photos[i])) {
-          // 上一组结束：组头 + 该组行数（ceil，含不满尾行）。
-          offset += 32 + ((photosInGroup + cols - 1) ~/ cols) * cellH;
+          final rows = (photosInGroup + cols - 1) ~/ cols;
+          groupTop += 32 + rows * cellH - spacing;
           photosInGroup = 0;
         }
         photosInGroup++;
       }
-      // index 所在组：组头 + index 之前的行数。
-      offset += 32 + ((photosInGroup - 1) ~/ cols) * cellH;
+      // index 所在行：组头 + 组内前序行的偏移。
+      final rowInGroup = (photosInGroup - 1) ~/ cols;
+      final rowTop = groupTop + 32 + rowInGroup * cellH;
       if (index == _openViewerIndex) {
         target = _openScrollOffset;
       } else if (index > _openViewerIndex) {
-        final viewportRows = (viewportH / cellH).floor();
-        target = offset - (viewportRows - 1) * cellH;
+        // 贴底：目标行下沿贴视口底（该行成为"最后完整可见行"，下一行
+        // 整行不可见——与用户定义一致）。
+        target = rowTop + cellH - viewportH;
       } else {
-        target = offset;
+        // 贴顶：组内第一行 → 组头贴视口顶、目标行完整露在组头下（32）；
+        // 组内后续行 → 组头滚出、PinnedGroupHeader（判定已提前）吸附显示
+        // 当前组、目标行仍完整可见。
+        target = groupTop + rowInGroup * cellH;
       }
     } else {
       final row = index ~/ cols;

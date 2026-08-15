@@ -6,7 +6,7 @@
 //   --text:#f0f0f0  --muted:#666
 //   --danger:#ff3b3b  --success:#3bff8a
 
-import 'dart:io' show Platform;
+
 
 import 'package:flutter/material.dart';
 
@@ -55,13 +55,6 @@ class AppFonts {
   AppFonts._();
   static const syne = 'Syne';
   static const spaceMono = 'Space Mono';
-
-  /// 系统正文字体（源 --sans）。按平台返回，避免在不存在的字体上浪费查找：
-  /// 安卓用 Roboto（系统原生、零加载成本），Windows 用 Segoe UI。
-  /// 仅在 app_theme.dart 通过 `.first` 取主字体，非 const 上下文。
-  static List<String> get sans => Platform.isAndroid
-      ? const ['Roboto', 'Segoe UI', 'Microsoft YaHei']
-      : const ['Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Roboto'];
 
   /// CJK 回退字体链（保持 const，被 40+ 处 const TextStyle 引用）。
   ///

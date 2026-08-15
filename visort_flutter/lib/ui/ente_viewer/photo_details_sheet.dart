@@ -232,9 +232,9 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
               color: AppColors.muted.withValues(alpha: 0.18),
               borderRadius: BorderRadius.circular(4),
             ),
-            child: const Text(
-              '手机存储',
-              style: TextStyle(
+            child: Text(
+              tr('storage_phone'),
+              style: const TextStyle(
                 color: AppColors.muted,
                 fontSize: 11,
                 fontFamily: 'Space Mono',

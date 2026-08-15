@@ -273,4 +273,8 @@ const Map<String, String> stringsEn = {
   'layout_list': 'List',
   'layout_grid': 'Grid',
   'cols_unit': 'columns',
+  // 日期分组/详情面板
+  'date_today': 'Today',
+  'date_yesterday': 'Yesterday',
+  'storage_phone': 'Phone storage',
 };

@@ -117,15 +117,12 @@ ThemeData buildAppTheme() {
 }
 
 TextTheme _buildTextTheme(TextTheme base) {
-  // 正文：系统 sans（Flutter 不支持 CSS 的逗号列表，主字体单独指定，
-  // 中文/其他字符通过 fontFamilyFallback 回退）
-  final sansFamily = AppFonts.sans.first;
-  // logo / 标题：Syne
+  // 全局字体规则：英文/数字 Space Mono，中文回退思源（Noto Sans Mono CJK SC）。
+  // logo / 大标题保留 Syne 品牌字。
   const syneFamily = AppFonts.syne;
-  // 技术信息：SpaceMono
   const monoFamily = AppFonts.spaceMono;
 
-  // 中文回退字体（SpaceMono / Syne 都不含中文，必须回退到打包的鸿蒙字体）
+  // 中文回退字体（SpaceMono / Syne 都不含中文，回退到打包的思源）
   const cjkFallback = AppFonts.cjkFallback;
 
   TextStyle syneStyle(TextStyle? s, {FontWeight? w, Color? c}) => TextStyle(
@@ -135,20 +132,13 @@ TextTheme _buildTextTheme(TextTheme base) {
         fontSize: s?.fontSize,
         fontFamilyFallback: cjkFallback,
       );
-  TextStyle monoStyle(TextStyle? s, {Color? c}) => TextStyle(
+  TextStyle monoStyle(TextStyle? s, {Color? c, FontWeight? w}) => TextStyle(
         fontFamily: monoFamily,
-        fontWeight: s?.fontWeight,
+        fontWeight: w ?? s?.fontWeight,
         color: c ?? s?.color,
         fontSize: s?.fontSize,
         // SpaceMono 默认行高偏大(字符盒高),显式压到 1.2 避免纵向拉长感。
         height: 1.2,
-        fontFamilyFallback: cjkFallback,
-      );
-  TextStyle sansStyle(TextStyle? s, {Color? c, FontWeight? w}) => TextStyle(
-        fontFamily: sansFamily,
-        fontWeight: w ?? s?.fontWeight,
-        color: c ?? s?.color,
-        fontSize: s?.fontSize,
         fontFamilyFallback: cjkFallback,
       );
 
@@ -158,11 +148,11 @@ TextTheme _buildTextTheme(TextTheme base) {
     displayMedium: syneStyle(base.displayMedium, w: FontWeight.w800, c: AppColors.text),
     // 普通标题
     titleLarge: syneStyle(base.titleLarge, w: FontWeight.w700, c: AppColors.text),
-    titleMedium: sansStyle(base.titleMedium, w: FontWeight.w700, c: AppColors.text),
+    titleMedium: monoStyle(base.titleMedium, w: FontWeight.w700, c: AppColors.text),
     // 正文
-    bodyLarge: sansStyle(base.bodyLarge, c: AppColors.text),
-    bodyMedium: sansStyle(base.bodyMedium, c: AppColors.text),
-    bodySmall: sansStyle(base.bodySmall, c: AppColors.muted),
+    bodyLarge: monoStyle(base.bodyLarge, c: AppColors.text),
+    bodyMedium: monoStyle(base.bodyMedium, c: AppColors.text),
+    bodySmall: monoStyle(base.bodySmall, c: AppColors.muted),
     // 技术信息（文件名/统计/快捷键/表格）
     labelLarge: monoStyle(base.labelLarge, c: AppColors.text),
     labelMedium: monoStyle(base.labelMedium, c: AppColors.text),

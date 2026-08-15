@@ -32,6 +32,10 @@ String t(WidgetRef ref, String key, [List<Object> args = const []]) {
   return _translate(lang, key, args);
 }
 
+/// 当前生效语言（与 tr() 同源，随 t() 调用同步）。
+/// 供非 Widget 层做语言分支格式化（如日期分组标题的中英文格式）。
+String get currentLang => _currentLangOverride;
+
 String _translate(String lang, String key, List<Object> args) {
   final dict = lang == 'zh' ? stringsZh : stringsEn;
   var value = dict[key] ?? stringsEn[key] ?? key;

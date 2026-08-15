@@ -267,4 +267,8 @@ const Map<String, String> stringsZh = {
   'layout_list': '列表',
   'layout_grid': '网格',
   'cols_unit': '列',
+  // 日期分组/详情面板
+  'date_today': '今天',
+  'date_yesterday': '昨天',
+  'storage_phone': '手机存储',
 };
