@@ -1,0 +1,131 @@
+// 加载请求优先级队列（对标 aves ServicePolicy）—— Dart 侧全局闸门。
+//
+// 现状问题：所有解码请求无差别 FIFO 压给 Kotlin 12 线程池——
+//   ① 快滚时滚出屏的请求仍在跑，新滚入 cell 的请求排在后面（越滚越空）；
+//   ② 128 占位图（要秒显）与 512 清晰图、viewer 当前大图与网格后台补清晰
+//      同优先级，互相挤占；
+//   ③ Flutter ImageStreamCompleter 无 cancel 概念，请求发出只能跑完。
+//
+// 解法：channel 调用前先过本队列（并发门 6）：
+//   - 优先级调度：viewer 当前大图 50（压过 filmstream/占位 100，修打开
+//     与放大卡顿）< 占位层 100 < 网格清晰层 200；
+//   - 已在跑的请求不中断（MethodChannel 无法取消），结果照常进
+//     ImageCache——滚回来直接命中，反而赚。
+//
+// ⚠️ 滚动挂起（aves pauseAbove/resumeAll）实测后【未启用】：快甩惯性
+// 阶段持续挂起会露占位糊图（观感差）；拖拽手柄 jumpTo 每帧连发
+// Start/Update/End 使挂起被同帧消掉从未生效——两种滚动行为不自洽。
+// 用户偏好视觉连续，故只保留优先级 + 并发门。pauseAbove/resumeAll
+// 保留在类里（单测覆盖），供未来区域解码等真正需要节流的场景。
+//
+// Kotlin 侧不动：Dart 门 6 生效后 ioExecutor(12)/信号量(12) 永不饱和，
+// 退化为兜底。
+
+import 'dart:async';
+
+/// 请求优先级（越小越先执行）。数值对齐 aves service_policy 的梯度设计。
+abstract final class RequestPriority {
+  /// viewer 当前大图：用户正盯着，必须压过一切（filmstrip 缩略图 96px
+  /// 走 fastThumbnail=100，若大图低于它会被十几个 filmstrip 请求压在
+  /// 门后 → 打开/放大卡顿）。
+  static const int viewerImage = 50;
+
+  /// 网格占位层（≤128px 快速小图，含 viewer filmstrip 96px）：
+  /// 快滚中也不暂停，秒显。
+  static const int fastThumbnail = 100;
+
+  /// 网格清晰层（256/512）：快滚中挂起，停稳/慢滚时集中补。
+  static const int sizedThumbnail = 200;
+}
+
+class _Task<T> {
+  _Task(this.priority, this.job);
+  final int priority;
+  final Future<T> Function() job;
+  final Completer<T> completer = Completer<T>();
+}
+
+class ServicePolicy {
+  ServicePolicy();
+
+  /// 全局单例（生产用；测试可独立 new 实例避免跨用例状态泄漏）。
+  static final ServicePolicy instance = ServicePolicy();
+
+  /// 并发门：6（aves 取 4；实测 4 下快滚补清晰偏慢提到 6，Kotlin 12
+  /// 线程池前仍有余量）。
+  static const int maxConcurrent = 6;
+
+  final List<_Task<dynamic>> _queue = [];
+  final List<_Task<dynamic>> _suspended = [];
+  int _running = 0;
+
+  /// 暂停阈值：非 null 时 priority > 阈值的任务挂起（滚动中）。
+  int? _pausedAbove;
+
+  /// 入队执行 [job]，按 [priority] 调度；滚动暂停期间高优先级任务挂起
+  /// 保序，resume 后继续。返回 job 的结果（job 的异常原样抛给调用方）。
+  Future<T> run<T>(int priority, Future<T> Function() job) {
+    final task = _Task<T>(priority, job);
+    final pausedAbove = _pausedAbove;
+    if (pausedAbove != null && priority > pausedAbove) {
+      _suspended.add(task);
+    } else {
+      _queue.add(task);
+      _schedule();
+    }
+    return task.completer.future;
+  }
+
+  /// 滚动开始：把队列中 priority > [threshold] 的任务移出挂起（保序），
+  /// 后续入队的高优先级任务直接进挂起区。
+  void pauseAbove(int threshold) {
+    if (_pausedAbove != null && _pausedAbove! <= threshold) return;
+    _pausedAbove = threshold;
+    final keep = <_Task<dynamic>>[];
+    for (final task in _queue) {
+      if (task.priority > threshold) {
+        _suspended.add(task);
+      } else {
+        keep.add(task);
+      }
+    }
+    _queue
+      ..clear()
+      ..addAll(keep);
+  }
+
+  /// 滚动结束：挂起任务放回队列继续调度。
+  void resumeAll() {
+    if (_pausedAbove == null && _suspended.isEmpty) return;
+    _pausedAbove = null;
+    _queue.addAll(_suspended);
+    _suspended.clear();
+    _schedule();
+  }
+
+  /// 调度循环：并发有空位就取队列中优先级最高（数值最小）的任务执行。
+  /// 队列长度为滚动时的在途 miss 数（几十级），线性取 min 足够。
+  void _schedule() {
+    while (_running < maxConcurrent && _queue.isNotEmpty) {
+      var bestIdx = 0;
+      for (var i = 1; i < _queue.length; i++) {
+        if (_queue[i].priority < _queue[bestIdx].priority) bestIdx = i;
+      }
+      final task = _queue.removeAt(bestIdx);
+      _running++;
+      _runTask(task);
+    }
+  }
+
+  Future<void> _runTask(_Task<dynamic> task) async {
+    try {
+      final result = await task.job();
+      if (!task.completer.isCompleted) task.completer.complete(result);
+    } catch (e, st) {
+      if (!task.completer.isCompleted) task.completer.completeError(e, st);
+    } finally {
+      _running--;
+      _schedule();
+    }
+  }
+}

@@ -17,6 +17,7 @@ import 'android_mediastore_file_system.dart';
 import 'file_system_repository.dart';
 import 'image_ref.dart';
 import 'mediastore_channel.dart';
+import 'service_policy.dart';
 
 /// 构建当前平台的 ImageProvider。
 /// 安卓端 root=authority、relativePath=_ID；Windows 端 root=源目录、relativePath=相对路径。
@@ -140,8 +141,16 @@ class _AndroidBytesImageProvider
       try {
         // raw ARGB 像素(不经 JPEG):ImmutableBuffer + ImageDescriptor.raw 直接
         // instantiateCodec,跳过 dart 侧二次 JPEG 解码(原 P0 根因)。
-        final r = await _msChannel
-            .readSampledImage(key.ref.relativePath, targetWidth: tw)
+        // ServicePolicy 优先级 150:用户正看的大图,压过网格清晰层(200),
+        // 不低于占位层(100)。
+        final r = await ServicePolicy.instance
+            .run(
+              RequestPriority.viewerImage,
+              () => _msChannel.readSampledImage(
+                key.ref.relativePath,
+                targetWidth: tw,
+              ),
+            )
             .timeout(const Duration(seconds: 5));
         final sBuffer = await ui.ImmutableBuffer.fromUint8List(r.pixels);
         final desc = ui.ImageDescriptor.raw(
@@ -310,13 +319,20 @@ class _AndroidThumbnailProvider
     ImageDecoderCallback decode,
   ) async {
     // 先试系统缩略图（API 29+）。空数组 = 低版本不支持，回退全图。
+    // ServicePolicy：占位层(≤128)优先级 100 滚动中不暂停秒显；清晰层 200
+    // 滚动中挂起、停稳集中补（对标 aves getFastThumbnail/getSizedThumbnail）。
     Uint8List bytes;
     try {
-      bytes = await _msChannel.readThumbnail(
-        key.ref.id,
-        width: key.size,
-        height: key.size,
-        dateModifiedMs: key.dateModifiedMs,
+      bytes = await ServicePolicy.instance.run(
+        key.size <= kThumbnailPlaceholderSize
+            ? RequestPriority.fastThumbnail
+            : RequestPriority.sizedThumbnail,
+        () => _msChannel.readThumbnail(
+          key.ref.id,
+          width: key.size,
+          height: key.size,
+          dateModifiedMs: key.dateModifiedMs,
+        ),
       );
     } catch (_) {
       bytes = Uint8List(0);
