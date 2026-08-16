@@ -111,6 +111,31 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     });
   }
 
+  /// 组头点击（选择模式）：切换该组全选（aves 交互）。
+  /// 走 _selectedIds 真源再回写 _selection——修复原 ente 行为只改
+  /// SelectedFiles 导致批量栏按钮不启用/操作作用于空集的问题。
+  void _toggleGroupSelection(List<MsImageInfo> files) {
+    setState(() {
+      final ids = files.map((f) => f.id).toSet();
+      if (ids.every(_selectedIds.contains)) {
+        _selectedIds.removeAll(ids);
+      } else {
+        _selectedIds.addAll(ids);
+      }
+      _syncSelection();
+    });
+  }
+
+  /// 组头长按（非选择模式）：进入选择模式并全选该组（aves 交互，
+  /// 一步到位的批量整理入口——「删掉这一天」两次交互完成）。
+  void _longPressGroupToSelect(List<MsImageInfo> files) {
+    setState(() {
+      _selectMode = true;
+      _selectedIds.addAll(files.map((f) => f.id));
+      _syncSelection();
+    });
+  }
+
   /// 把 _selectedIds 同步进 ente SelectedFiles（Gallery 勾选渲染用）。
   void _syncSelection() {
     final photos = ref.read(galleryControllerProvider).photos;
@@ -467,6 +492,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           onFileLongPress: (file) {
             if (!_selectMode) _enterSelectMode(file.id);
           },
+          onGroupHeaderToggle: _toggleGroupSelection,
+          onGroupHeaderLongPress: _longPressGroupToSelect,
         ),
       ),
     );
@@ -525,6 +552,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           onFileLongPress: (file) {
             if (!_selectMode) _enterSelectMode(file.id);
           },
+          onGroupHeaderToggle: _toggleGroupSelection,
+          onGroupHeaderLongPress: _longPressGroupToSelect,
         ),
       ),
     );

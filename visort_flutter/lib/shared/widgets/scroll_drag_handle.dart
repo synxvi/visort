@@ -28,6 +28,8 @@ class ScrollDragHandle extends StatefulWidget {
     this.useActualExtent = false,
     this.monotonicExtent = false,
     this.margin = const EdgeInsets.only(right: 8),
+    this.labelBuilder,
+    this.snapOffset,
   });
 
   final ScrollController controller;
@@ -47,6 +49,11 @@ class ScrollDragHandle extends StatefulWidget {
   /// 比 useActualExtent 稳（不抖），比几何估算准（用 SliverList 自身 layout 值）。
   final bool monotonicExtent;
   final EdgeInsets margin;
+  /// 拖动时在手柄旁显示当前位置文本（如日期）的构建器（aves 拖动气泡）。
+  /// null 或返回 null 时不显示气泡（沉浸网格无分组场景）。
+  final String? Function(double pixels)? labelBuilder;
+  /// 松手吸附目标（aves 同款：吸附到最近分组头）；null 时不吸附。
+  final double? Function(double pixels)? snapOffset;
 
   @override
   State<ScrollDragHandle> createState() => _ScrollDragHandleState();
@@ -132,6 +139,22 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
     super.dispose();
   }
 
+  void _onVerticalDragEnd() {
+    setState(() => _dragging = false);
+    // 松手吸附（aves 同款）：滚到最近分组头，组头标题对齐视口顶。
+    final snap = widget.snapOffset;
+    if (snap == null) return;
+    final c = widget.controller;
+    if (!c.hasClients || !c.position.hasViewportDimension) return;
+    final target = snap(c.position.pixels);
+    if (target == null || (target - c.position.pixels).abs() < 1) return;
+    c.animateTo(
+      target.clamp(0.0, c.position.maxScrollExtent),
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
   void _onVerticalDragUpdate(DragUpdateDetails details) {
     final c = widget.controller;
     if (!c.hasClients) return;
@@ -182,8 +205,28 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
                 final trackH = constraints.maxHeight;
                 if (trackH != _trackH) _trackH = trackH;
                 final top = progress * (trackH - _handleH - _bottomSafe);
+                // 拖动气泡：手柄左侧亚克力胶囊显示当前位置文本（日期），
+                // 随手柄 top 移动（aves 拖动滚动条体验）。
+                final label = _dragging
+                    ? widget.labelBuilder?.call(
+                        widget.controller.hasClients
+                            ? widget.controller.position.pixels
+                            : 0.0,
+                      )
+                    : null;
                 return Stack(
+                  clipBehavior: Clip.none,
                   children: [
+                    if (label != null)
+                      Positioned(
+                        top: (top + _handleH / 2 - 15).clamp(
+                          0.0,
+                          (trackH - 30).clamp(0.0, double.infinity),
+                        ),
+                        right: 27,
+                        height: 30,
+                        child: _AcrylicLabel(label: label),
+                      ),
                     Positioned(
                       top: top,
                       right: 0,
@@ -194,8 +237,7 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
                         onVerticalDragStart: (_) =>
                             setState(() => _dragging = true),
                         onVerticalDragUpdate: _onVerticalDragUpdate,
-                        onVerticalDragEnd: (_) =>
-                            setState(() => _dragging = false),
+                        onVerticalDragEnd: (_) => _onVerticalDragEnd(),
                         child: _AcrylicCapsule(enlarged: _dragging),
                       ),
                     ),
@@ -205,6 +247,49 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 拖动气泡：与手柄同款亚克力底 + 白字（数字/英文 Space Mono，中文回退思源）。
+class _AcrylicLabel extends StatelessWidget {
+  const _AcrylicLabel({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: const BorderRadius.all(Radius.circular(12)),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: ColoredBox(
+              color: AppColors.bg.withValues(alpha: 0.45),
+            ),
+          ),
+          ColoredBox(color: Colors.black.withValues(alpha: 0.18)),
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.95),
+                    fontSize: 12,
+                    fontFamily: 'Space Mono',
+                    fontFamilyFallback: AppFonts.cjkFallback,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

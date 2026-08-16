@@ -21,6 +21,15 @@ class GroupHeaderWidget extends StatefulWidget {
   final bool isPinnedHeader;
   final bool fadeInTrailingIcons;
 
+  /// 选择模式下点击组头（整行或全选圈）= 切换该组全选（aves 同款交互）。
+  /// 外层统一维护选择真源（visort _selectedIds）后回写 selectedFiles；
+  /// null 时回退 ente 原行为（直接 toggleGroupSelection，仅改渲染层）。
+  final ValueChanged<List<MsImageInfo>>? onGroupToggle;
+
+  /// 非选择模式长按组头 = 进入选择模式并全选该组（aves 同款，
+  /// 一步到位的批量整理入口）。null 时无此交互。
+  final ValueChanged<List<MsImageInfo>>? onGroupLongPress;
+
   const GroupHeaderWidget({
     super.key,
     required this.title,
@@ -32,6 +41,8 @@ class GroupHeaderWidget extends StatefulWidget {
     this.showTrailingIcons = true,
     this.isPinnedHeader = false,
     this.fadeInTrailingIcons = false,
+    this.onGroupToggle,
+    this.onGroupLongPress,
   });
 
   @override
@@ -72,7 +83,9 @@ class _GroupHeaderWidgetState extends State<GroupHeaderWidget> {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    // 组头整行手势（aves 交互）：选择模式点击 = 切换该组全选（扩大点击面，
+    // 不必精确点圈）；非选择模式长按 = 进入选择模式并全选该组。
+    Widget header = SizedBox(
       height: widget.height ?? 32,
       child: Row(
         children: [
@@ -97,6 +110,7 @@ class _GroupHeaderWidgetState extends State<GroupHeaderWidget> {
           widget.showSelectAll
               ? GestureDetector(
                   behavior: HitTestBehavior.translucent,
+                  onTap: _toggleGroup,
                   child: Padding(
                     padding: const EdgeInsets.all(4),
                     child: ValueListenableBuilder(
@@ -106,18 +120,34 @@ class _GroupHeaderWidgetState extends State<GroupHeaderWidget> {
                       },
                     ),
                   ),
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    widget.selectedFiles?.toggleGroupSelection(
-                      widget.filesInGroup.toSet(),
-                    );
-                  },
                 )
               : const SizedBox.shrink(),
           const SizedBox(width: 16),
         ],
       ),
     );
+    final longPress = widget.onGroupLongPress;
+    if (longPress != null) {
+      header = GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.showSelectAll ? _toggleGroup : null,
+        onLongPress: () => longPress(widget.filesInGroup),
+        child: header,
+      );
+    }
+    return header;
+  }
+
+  /// 切换该组全选：上抛回调由外层维护选择真源（回写 selectedFiles）；
+  /// 未提供回调时回退 ente 原行为（仅 toggleGroupSelection 渲染层）。
+  void _toggleGroup() {
+    HapticFeedback.selectionClick();
+    final onGroupToggle = widget.onGroupToggle;
+    if (onGroupToggle != null) {
+      onGroupToggle(widget.filesInGroup);
+    } else {
+      widget.selectedFiles?.toggleGroupSelection(widget.filesInGroup.toSet());
+    }
   }
 
   void _selectedFilesListener() {

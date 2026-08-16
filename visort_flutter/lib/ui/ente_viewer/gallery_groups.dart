@@ -29,6 +29,10 @@ class GalleryGroups {
   /// item 点击/长按回调（透传 GalleryFileWidget）。
   final ValueChanged<MsImageInfo>? onFileTap;
   final ValueChanged<MsImageInfo>? onFileLongPress;
+  /// 组头点击（选择模式 toggle 该组）/长按（进入选择模式+全选）回调
+  /// （透传 GroupHeaderWidget，aves 交互）。
+  final ValueChanged<List<MsImageInfo>>? onGroupHeaderToggle;
+  final ValueChanged<List<MsImageInfo>>? onGroupHeaderLongPress;
 
   GalleryGroups({
     required this.allFiles,
@@ -43,6 +47,8 @@ class GalleryGroups {
     this.limitSelectionToOne = false,
     this.onFileTap,
     this.onFileLongPress,
+    this.onGroupHeaderToggle,
+    this.onGroupHeaderLongPress,
   }) {
     init();
     if (!groupType.showGroupHeader()) {
@@ -86,6 +92,45 @@ class GalleryGroups {
     final groupId = _findGroupForCreationTime(creationTime);
     if (groupId == null) return null;
     return _groupIdToScrollOffsetMap[groupId];
+  }
+
+  /// 滚动位置 → 当前组 ID（组起始 offset ≤ pixels 的最后一组）。
+  /// 拖动滚动条时的日期气泡用（aves crumbs 等价物）。
+  String? groupIdAtOffset(double pixels) {
+    final offsets = _groupScrollOffsets;
+    if (offsets.isEmpty) return null;
+    if (pixels <= offsets.first) {
+      return _scrollOffsetToGroupIdMap[offsets.first];
+    }
+    // 二分找 ≤ pixels 的最大 offset（offsets 按列表顺序单调递增）。
+    int lo = 0, hi = offsets.length - 1, ans = 0;
+    while (lo <= hi) {
+      final mid = (lo + hi) ~/ 2;
+      if (offsets[mid] <= pixels) {
+        ans = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return _scrollOffsetToGroupIdMap[offsets[ans]];
+  }
+
+  /// 最近的组头 offset（拖动滚动条松手时的吸附目标，aves 同款）。
+  /// 组数（按天）为几百级，线性扫一次成本可忽略。
+  double? nearestGroupOffset(double pixels) {
+    final offsets = _groupScrollOffsets;
+    if (offsets.isEmpty) return null;
+    var best = offsets.first;
+    var bestDist = (pixels - best).abs();
+    for (final o in offsets) {
+      final d = (pixels - o).abs();
+      if (d < bestDist) {
+        bestDist = d;
+        best = o;
+      }
+    }
+    return best;
   }
 
   String? _findGroupForCreationTime(int creationTime) {
@@ -168,6 +213,8 @@ class GalleryGroups {
                   filesInGroup: groupIDToFilesMap[groupID]!,
                   selectedFiles: selectedFiles,
                   showSelectAll: showSelectAll && !limitSelectionToOne,
+                  onGroupToggle: onGroupHeaderToggle,
+                  onGroupLongPress: onGroupHeaderLongPress,
                 );
               } else {
                 return const SizedBox(height: spacing);

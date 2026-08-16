@@ -88,6 +88,12 @@ class Gallery extends StatefulWidget {
   /// 长按回调，透传给 GalleryFileWidget（外层处理进入多选等）。
   final ValueChanged<MsImageInfo>? onFileLongPress;
 
+  /// 组头交互（aves）：选择模式下点击组头（滚动组头或吸附头）= 切换该组
+  /// 全选；非选择模式长按组头 = 进入选择模式并全选该组。外层统一维护
+  /// 选择真源后回写 selectedFiles。
+  final ValueChanged<List<MsImageInfo>>? onGroupHeaderToggle;
+  final ValueChanged<List<MsImageInfo>>? onGroupHeaderLongPress;
+
   final ScrollController? scrollController;
 
   const Gallery({
@@ -108,6 +114,8 @@ class Gallery extends StatefulWidget {
     this.hideFavoriteBadge = false,
     this.onFileTap,
     this.onFileLongPress,
+    this.onGroupHeaderToggle,
+    this.onGroupHeaderLongPress,
     super.key,
   });
 
@@ -218,6 +226,8 @@ class GalleryState extends State<Gallery> {
       // 无单选限制（visort 多选由外层 SelectedFiles 全权管理）。
       onFileTap: widget.onFileTap,
       onFileLongPress: widget.onFileLongPress,
+      onGroupHeaderToggle: widget.onGroupHeaderToggle,
+      onGroupHeaderLongPress: widget.onGroupHeaderLongPress,
     );
     if (callSetState && mounted) {
       setState(() {});
@@ -267,6 +277,13 @@ class GalleryState extends State<Gallery> {
                     style: TextStyle(color: AppColors.muted, fontSize: 14),
                   ),
                 ))
+          // ServicePolicy 滚动挂起曾在此联动，实测移除：
+          // ① 手指快甩（ballistic 惯性阶段无 ScrollEnd）挂起持续 → 快滚露
+          //   占位糊图，观感差；
+          // ② 拖拽手柄 jumpTo 每帧连发 Start/Update/End，挂起被 End 同帧
+          //   消掉从未生效 → 两种滚动行为不自洽。
+          // 用户偏好视觉连续：保留优先级调度（viewer 大图 50 插队）+ 并发门
+          // 平滑解码尖峰，放弃快滚省解码。
           : Stack(
               clipBehavior: Clip.none,
               children: [
@@ -287,6 +304,8 @@ class GalleryState extends State<Gallery> {
                     selectedFiles: widget.selectedFiles,
                     showSelectAll: widget.showSelectAll,
                     scrollbarInUseNotifier: scrollBarInUseNotifier,
+                    onGroupHeaderToggle: widget.onGroupHeaderToggle,
+                    onGroupHeaderLongPress: widget.onGroupHeaderLongPress,
                   ),
                 // 右侧滚动拖拽手柄（主分支样式）：向下滚动后出现，可拖拽
                 // 跳转。用照片总数 + 固定行高算进度，分母稳定（loadMore
@@ -299,6 +318,23 @@ class GalleryState extends State<Gallery> {
                   columns: widget.crossAxisCount,
                   viewportRows: 5,
                   monotonicExtent: true,
+                  // 日期视图（aves 拖动体验）：拖动显示当前组日期气泡，
+                  // 松手吸附最近分组头；沉浸网格无分组不启用。
+                  labelBuilder: groups.groupType.showGroupHeader()
+                      ? (pixels) {
+                          final gid = groups.groupIdAtOffset(pixels);
+                          if (gid == null) return null;
+                          final data = groups.groupIdToGroupDataMap[gid];
+                          final files = groups.groupIDToFilesMap[gid];
+                          if (data == null || files == null || files.isEmpty) {
+                            return null;
+                          }
+                          return data.groupType.getTitle(context, files.first);
+                        }
+                      : null,
+                  snapOffset: groups.groupType.showGroupHeader()
+                      ? (pixels) => groups.nearestGroupOffset(pixels)
+                      : null,
                 ),
               ],
             ),
@@ -323,6 +359,9 @@ class PinnedGroupHeader extends StatefulWidget {
   final SelectedFiles? selectedFiles;
   final bool showSelectAll;
   final ValueNotifier<bool> scrollbarInUseNotifier;
+  /// 组头点击/长按回调（透传 GroupHeaderWidget，与滚动组头行为一致）。
+  final ValueChanged<List<MsImageInfo>>? onGroupHeaderToggle;
+  final ValueChanged<List<MsImageInfo>>? onGroupHeaderLongPress;
   static const kScaleDurationInMilliseconds = 200;
   static const kTrailingIconsFadeInDelayMs = 0;
   static const kTrailingIconsFadeInDurationMs = 200;
@@ -336,6 +375,8 @@ class PinnedGroupHeader extends StatefulWidget {
     required this.selectedFiles,
     required this.showSelectAll,
     required this.scrollbarInUseNotifier,
+    this.onGroupHeaderToggle,
+    this.onGroupHeaderLongPress,
     super.key,
   });
 
@@ -562,6 +603,8 @@ class _PinnedGroupHeaderState extends State<PinnedGroupHeader>
                           showTrailingIcons: !inUse,
                           isPinnedHeader: true,
                           fadeInTrailingIcons: fadeInTrailingIcons,
+                          onGroupToggle: widget.onGroupHeaderToggle,
+                          onGroupLongPress: widget.onGroupHeaderLongPress,
                         ),
                       ),
                     ),
