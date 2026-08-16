@@ -28,6 +28,15 @@ mixin PhotoViewControllerDelegate on State<PhotoViewCore> {
   /// Mark if scale need recalculation, useful for scale boundaries changes.
   bool markNeedsScaleRecalc = true;
 
+  /// [visort fork] 程序化缩放动画（双击）进行期间：
+  /// ① 跳过 scale 更新触发的 position clamp（对标系统相册：动画内部
+  ///   自控、只在终态 clamp。黑边图的中间帧边界是分段函数（前半程
+  ///   恒 0），逐帧 clamp 会把动画前半程的位移全部吃掉 → 尾部下坠）；
+  /// ② scale getter 不做"重算写回"——动画期间 setInvisibly 触发的整树
+  ///   rebuild 会让 build 里的 scale 读取走重算路径（getScaleForScaleState
+  ///   = initial×2.5），与动画 tick 写入值来回覆盖 → 画面跳动。
+  bool programmaticScaleAnimationActive = false;
+
   void initDelegate() {
     controller.addIgnorableListener(_blindScaleListener);
     scaleStateController.addIgnorableListener(_blindScaleStateListener);
@@ -62,8 +71,15 @@ mixin PhotoViewControllerDelegate on State<PhotoViewCore> {
   }
 
   void _blindScaleListener() {
-    if (!widget.enablePanAlways) {
+    if (!widget.enablePanAlways && !programmaticScaleAnimationActive) {
+      final before = controller.position;
       controller.position = clampPosition();
+      if (controller.position != before) {
+        // ignore: avoid_print
+        print(
+          '[DT] blind-clamp: ${before.dx.toStringAsFixed(1)},${before.dy.toStringAsFixed(1)} -> ${controller.position.dx.toStringAsFixed(1)},${controller.position.dy.toStringAsFixed(1)} scale=${controller.scale}',
+        );
+      }
     }
     if (controller.scale == controller.prevValue.scale) {
       return;
@@ -84,12 +100,21 @@ mixin PhotoViewControllerDelegate on State<PhotoViewCore> {
         !scaleStateController.scaleState.isScaleStateZooming;
 
     final scaleExistsOnController = controller.scale != null;
+    // [visort fork] 程序化缩放动画期间以 controller 现值（动画 tick 写入）
+    // 为准，重算写回会打断动画（见 flag 声明处注释）。
+    if (programmaticScaleAnimationActive && scaleExistsOnController) {
+      return controller.scale!;
+    }
     if (needsRecalc || !scaleExistsOnController) {
       final newScale = getScaleForScaleState(
         scaleStateController.scaleState,
         scaleBoundaries,
       );
       markNeedsScaleRecalc = false;
+      // ignore: avoid_print
+      print(
+        '[DT] scale-getter recalc: $newScale state=${scaleStateController.scaleState} animActive=$programmaticScaleAnimationActive',
+      );
       scale = newScale;
       return newScale;
     }

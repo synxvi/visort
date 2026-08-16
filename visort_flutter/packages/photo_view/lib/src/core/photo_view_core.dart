@@ -169,6 +169,8 @@ class PhotoViewCoreState extends State<PhotoViewCore>
   void onScaleUpdate(ScaleUpdateDetails details) {
     final double newScale = _scaleBefore! * details.scale;
     final Offset delta = details.focalPoint - _normalizedPosition!;
+    // ignore: avoid_print
+    print('[DT] onScaleUpdate: newScale=$newScale');
 
     if (widget.strictScale &&
         (newScale > widget.scaleBoundaries.maxScale ||
@@ -288,32 +290,44 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     final bool zooming = begin <= initial * 1.01;
     final double target = zooming ? _doubleTapTargetScale() : initial;
     final Offset endPos = zooming
-        ? clampPosition(
-            position: _doubleTapEndPosition(tapLocal, box.size, begin, target),
-            scale: target,
-          )
+        ? _doubleTapEndPositionSnap(tapLocal, box.size, begin, target)
         : Offset.zero;
+    // ignore: avoid_print
+    print(
+      '[DT] zoom: tap=${tapLocal.dx.toStringAsFixed(1)},${tapLocal.dy.toStringAsFixed(1)} begin=$begin initial=$initial target=$target endPos=${endPos.dx.toStringAsFixed(1)},${endPos.dy.toStringAsFixed(1)} pos0=${controller.position.dx.toStringAsFixed(1)},${controller.position.dy.toStringAsFixed(1)} view=${box.size.width.toStringAsFixed(0)}x${box.size.height.toStringAsFixed(0)} child=${scaleBoundaries.childSize.width.toStringAsFixed(0)}x${scaleBoundaries.childSize.height.toStringAsFixed(0)}',
+    );
 
-    // 放大分支：立即上报 zoomedIn（动画帧走 setScaleInvisibly，不触发
-    // _blindScaleListener；外层 shouldDisableScroll/isZoomedNotifier 依赖
-    // stream 通知禁翻页+进沉浸模式，不能等动画结束）。
-    // setInvisibly 不触发 _blindScaleStateListener（ignorable）→ 无二次动画。
-    if (zooming) {
-      scaleStateController.setInvisibly(PhotoViewScaleState.zoomedIn);
-    }
     _doubleTapScaleTween = Tween<double>(begin: begin, end: target);
     _doubleTapPositionTween = Tween<Offset>(
       begin: controller.position,
       end: endPos,
     );
+    // 动画独占：跳过逐帧 clamp + scale getter 重算写回（两处都会打断
+    // 动画产生跳变，详见 delegate.programmaticScaleAnimationActive 注释）。
+    // 终态 endPos 已 clamp（放大分支）/ Offset.zero（缩回分支）。
+    programmaticScaleAnimationActive = true;
+    // 先起双击动画再上报 zoomedIn：setInvisibly 会同步触发
+    // _blindScaleStateListener → animateScale（见其内注释的竞争说明），
+    // 此时 _doubleTapController.isAnimating 已为 true，竞争动画被忽略。
+    // 外层 shouldDisableScroll/isZoomedNotifier 依赖此上报禁翻页+进沉浸，
+    // 不能省；同帧上报不等动画结束。
+    // ⚠️ stop()+value=0 的重置序列会同步触发 dismissed 状态回调——
+    // _resettingDoubleTap 标志让 listener 忽略这次"假 dismissed"（否则
+    // 独占 flag 被自己关掉，逐帧 clamp 复活 → 动画每帧被吃位移 = 跳动，
+    // 真机 logcat [DT] blind-clamp 实证）。
+    _resettingDoubleTap = true;
     _doubleTapController
       ..stop()
-      ..value = 0.0
-      ..animateTo(
-        1.0,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.decelerate,
-      );
+      ..value = 0.0;
+    _resettingDoubleTap = false;
+    _doubleTapController.animateTo(
+      1.0,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.decelerate,
+    );
+    if (zooming) {
+      scaleStateController.setInvisibly(PhotoViewScaleState.zoomedIn);
+    }
   }
 
   /// 双击落点（onDoubleTapDown 记录，core 局部坐标）。
@@ -348,13 +362,98 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     return tap - c - q * target;
   }
 
-  void _handleDoubleTapTick() {
-    final Animation<double> t = _doubleTapController.view;
-    scale = _doubleTapScaleTween!.evaluate(t);
-    controller.position = _doubleTapPositionTween!.evaluate(t);
+  /// [visort fork] 双击终态：角落/边缘点击优先贴边（"角落到屏幕角"，
+  /// 对标系统相册），中部点击锚定（tap 点保持）。
+  ///
+  /// 背景：纯锚定 + clamp 截断时，双击图边缘（如右上角）的锚定解落在
+  /// clamp 范围内，clamp 放行 → 图右缘差一段贴不上视口右缘（真机实证：
+  /// 图右缘 383 vs 视口 360，差 23px），用户须手动平移。贴边优先把
+  /// 边缘双击的终态对齐到"图边缘贴视口边缘"，中部双击维持锚定不受影响。
+  Offset _doubleTapEndPositionSnap(
+    Offset tap,
+    Size viewSize,
+    double begin,
+    double target,
+  ) {
+    final Offset anchor =
+        _doubleTapEndPosition(tap, viewSize, begin, target);
+    final Offset clamped = clampPosition(position: anchor, scale: target);
+    // tap 的图本地坐标：q=(tap-图中心屏幕)/begin，图中心本地坐标=child/2。
+    final Size child = scaleBoundaries.childSize;
+    final Offset c = Offset(viewSize.width / 2, viewSize.height / 2);
+    final Offset q = (tap - c - controller.position) / begin;
+    final double tapX = q.dx + child.width / 2;
+    final double tapY = q.dy + child.height / 2;
+    // 边缘判定阈值：距图边缘 < 视口半宽/半高 视为边缘点击。
+    final double marginX = viewSize.width / 2;
+    final double marginY = viewSize.height / 2;
+    double dx = clamped.dx;
+    double dy = clamped.dy;
+    // 贴边只在目标缩放后该轴溢出视口时生效（未溢出轴 clamp 本就跳过，
+    // 贴边值无意义；黑边图 cornersX/Y 的 min>max 翻转值不能用）。
+    if (child.width * target > viewSize.width) {
+      if (tapX > child.width - marginX) {
+        dx = cornersX(scale: target).min; // 贴右：图右缘对齐视口右缘
+      } else if (tapX < marginX) {
+        dx = cornersX(scale: target).max; // 贴左：图左缘对齐视口左缘
+      }
+    }
+    if (child.height * target > viewSize.height) {
+      if (tapY > child.height - marginY) {
+        dy = cornersY(scale: target).min; // 贴底：图底缘对齐视口底缘
+      } else if (tapY < marginY) {
+        dy = cornersY(scale: target).max; // 贴顶：图顶缘对齐视口顶缘
+      }
+    }
+    return Offset(dx, dy);
   }
 
+  void _handleDoubleTapTick() {
+    final Animation<double> t = _doubleTapController.view;
+    final s = _doubleTapScaleTween!.evaluate(t);
+    final p = _doubleTapPositionTween!.evaluate(t);
+    // 只在相邻帧 scale 偏离线性预期 >2% 时打印（识别外部写值打断）。
+    final expected = _doubleTapScaleTween!.begin! +
+        (_doubleTapScaleTween!.end! - _doubleTapScaleTween!.begin!) *
+            t.value;
+    if ((s - expected).abs() / expected > 0.02) {
+      // ignore: avoid_print
+      print('[DT] tick anomaly: anim=$s expected=$expected t=${t.value}');
+    }
+    scale = s;
+    final posBefore = controller.position;
+    controller.position = p;
+    // ignore: avoid_print
+    print(
+      '[DT] tick: t=${t.value.toStringAsFixed(3)} s=${s.toStringAsFixed(4)} p=${p.dx.toStringAsFixed(1)},${p.dy.toStringAsFixed(1)} posBefore=${posBefore.dx.toStringAsFixed(1)},${posBefore.dy.toStringAsFixed(1)}',
+    );
+  }
+
+  /// doubleTapZoom 的 stop()+value=0 重置序列进行中：忽略其触发的
+  /// 假 dismissed 状态回调（见 doubleTapZoom 内注释）。
+  bool _resettingDoubleTap = false;
+
   void _onDoubleTapStatus(AnimationStatus status) {
+    // ignore: avoid_print
+    print(
+      '[DT] status=$status resetting=$_resettingDoubleTap scale=${controller.scale}',
+    );
+    final interrupted =
+        status == AnimationStatus.dismissed &&
+        !_resettingDoubleTap &&
+        !_doubleTapController.isAnimating;
+    if (status == AnimationStatus.completed || interrupted) {
+      // 动画结束/真被打断：恢复正常路径；打断时把中间态位置拉回边界
+      // （终态 endPos 已 clamp，无需处理）。
+      programmaticScaleAnimationActive = false;
+      // 终值已正确：清掉重算标记，防 completed 后第一次 build 的
+      // scale getter 按 scaleState 重算（zoomedIn=initial×2.5）覆盖
+      // target（竖图 target=cover≠×2.5 时跳变）。
+      markNeedsScaleRecalc = false;
+      if (interrupted) {
+        controller.position = clampPosition();
+      }
+    }
     // 缩回动画结束：scale==initialScale 时状态归 initial（否则 _blindScaleListener
     // 报 zoomedOut → 外层 shouldDisableScroll/isZoomed 残留 true）。
     if (status == AnimationStatus.completed && scale == scaleBoundaries.initialScale) {
@@ -364,6 +463,18 @@ class PhotoViewCoreState extends State<PhotoViewCore>
 
 
   void animateScale(double from, double to) {
+    // [visort fork] 双击缩放动画独占：doubleTapZoom 的 setInvisibly(zoomedIn)
+    // 会同步触发 _blindScaleStateListener → 本方法，与 _doubleTapController
+    // 的 tick 并行竞争写 scale（两套动画交替覆盖，position 单套 → 画面跳一格；
+    // 竖图 cover > 2.5×initial 时两动画终点不同，跳变可见，横图终点恰好
+    // 相同无感）。双击动画进行中直接忽略本次 scaleState 联动动画。
+    if (_doubleTapController.isAnimating) {
+      // ignore: avoid_print
+      print('[DT] animateScale BLOCKED: $from -> $to');
+      return;
+    }
+    // ignore: avoid_print
+    print('[DT] animateScale: $from -> $to');
     _scaleAnimation = Tween<double>(
       begin: from,
       end: to,
