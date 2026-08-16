@@ -55,6 +55,9 @@ const double _kDetailInitial = 0.5;
 /// 图片上推量 = 面板像素高度 × 此系数。0.5 使图片居中主体落在面板上方可见区。
 const double _kImagePushFactor = 0.5;
 
+/// 顶/底栏显隐动画时长（曲线分离见 _buildTopBar/_buildBottomOverlay）。
+const Duration _kChromeAnimDuration = Duration(milliseconds: 200);
+
 // ─────────────── 底栏缩略图条(ThumbLine)常量（主分支同款） ───────────────
 
 /// 缩略图条高度(竖屏)：容纳放大后的当前项(42dp)+上下边距。
@@ -260,6 +263,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // 返回动画结束：立即移除栏。PageRouteBuilder(opaque:false) 下页面
     // dispose 延迟甚至不触发，栏挂 root Overlay 不随 route 消失，必须
     // 主动 remove（否则返回相册后栏残留覆盖网格）。
+    // pop 退场的底栏滑出不用隐式动画（AnimatedSlide）驱动：pop flight
+    // 启动时栏 entry 被 remove+insert（重插到飞行层之上，见
+    // _reinsertChromeAboveFlight），子树销毁重建会丢隐式动画状态 →
+    // 瞬间消失。改由 _buildBottomOverlay 里的 AnimatedBuilder 直接读
+    // 路由动画值驱动位移（值驱动对重建免疫）。
     if (status == AnimationStatus.dismissed) {
       _removeChromeEntry();
     }
@@ -271,6 +279,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
     }
     _chromeEntry?.remove();
     _chromeEntry = null;
+  }
+
+  /// pop 退场整组滑出的最大位移（像素）：底栏 + 安全区 + 缩略图条总高，
+  /// 保证进度 1 时两栏都完全出屏。底栏与缩略图条共用同一公式，同步滑出。
+  static double _popSlideMaxPx(BuildContext context) {
+    return _kBottomChromeHeight +
+        MediaQuery.viewPaddingOf(context).bottom +
+        _kThumbLineHeight;
   }
 
   /// pop flight overlay 已插入（最上）→ 同帧把栏 entry 重插到它之上。
@@ -600,77 +616,86 @@ class _DetailPageState extends ConsumerState<DetailPage>
                   final topVis = (1 - extent / _kDetailInitial).clamp(0.0, 1.0);
                   return IgnorePointer(
                     ignoring: isFullScreen || topVis < 0.5,
-                    child: AnimatedOpacity(
-                      // 全屏切换 200ms 淡出（ente）；extent 联动同步系数（topVis）。
-                      opacity: isFullScreen ? 0 : 1,
-                      duration: const Duration(milliseconds: 200),
-                      child: Opacity(
-                        opacity: topVis,
-                        child: Container(
-                          color: Colors.black,
-                          child: Padding(
-                            padding: EdgeInsets.only(
-                              top: MediaQuery.viewPaddingOf(context).top,
-                            ),
-                            child: SizedBox(
-                              height: 56,
-                              child: Row(
-                                children: [
-                                  IconButton(
-                                    // 与相册页 AppBar 返回箭头对齐（主分支同款 padding）。
-                                    padding: const EdgeInsets.fromLTRB(
-                                      16,
-                                      8,
-                                      8,
-                                      8,
+                    // 曲线分离（aves entry_viewer_stack 同思路）：顶栏上滑
+                    // 滑入/出（easeOutCubic）+ 淡入淡出（easeOutQuad），
+                    // 比纯 fade 有方向感；底栏对应用 scale（防位移感）。
+                    child: AnimatedSlide(
+                      offset: isFullScreen ? const Offset(0, -1) : Offset.zero,
+                      duration: _kChromeAnimDuration,
+                      curve: Curves.easeOutCubic,
+                      child: AnimatedOpacity(
+                        // 全屏切换 200ms 淡出（ente）；extent 联动同步系数（topVis）。
+                        opacity: isFullScreen ? 0 : 1,
+                        duration: _kChromeAnimDuration,
+                        curve: Curves.easeOutQuad,
+                        child: Opacity(
+                          opacity: topVis,
+                          child: Container(
+                            color: Colors.black,
+                            child: Padding(
+                              padding: EdgeInsets.only(
+                                top: MediaQuery.viewPaddingOf(context).top,
+                              ),
+                              child: SizedBox(
+                                height: 56,
+                                child: Row(
+                                  children: [
+                                    IconButton(
+                                      // 与相册页 AppBar 返回箭头对齐（主分支同款 padding）。
+                                      padding: const EdgeInsets.fromLTRB(
+                                        16,
+                                        8,
+                                        8,
+                                        8,
+                                      ),
+                                      icon: const Icon(
+                                        Icons.arrow_back,
+                                        color: AppColors.text,
+                                      ),
+                                      tooltip: t(ref, 'back'),
+                                      onPressed: () =>
+                                          Navigator.maybePop(context),
                                     ),
-                                    icon: const Icon(
-                                      Icons.arrow_back,
-                                      color: AppColors.text,
-                                    ),
-                                    tooltip: t(ref, 'back'),
-                                    onPressed: () =>
-                                        Navigator.maybePop(context),
-                                  ),
-                                  Expanded(
-                                    child: Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: ConstrainedBox(
-                                        constraints: const BoxConstraints(
-                                          maxWidth: 180,
-                                        ),
-                                        child: MiddleEllipsisText(
-                                          file.name,
-                                          style: const TextStyle(
-                                            color: AppColors.text,
-                                            fontSize: 13,
-                                            fontFamily: 'Space Mono',
-                                            height: 1.2,
-                                            fontFamilyFallback:
-                                                AppFonts.cjkFallback,
+                                    Expanded(
+                                      child: Align(
+                                        alignment: Alignment.centerLeft,
+                                        child: ConstrainedBox(
+                                          constraints: const BoxConstraints(
+                                            maxWidth: 180,
                                           ),
-                                          padding: const EdgeInsets.only(
-                                            right: 12,
+                                          child: MiddleEllipsisText(
+                                            file.name,
+                                            style: const TextStyle(
+                                              color: AppColors.text,
+                                              fontSize: 13,
+                                              fontFamily: 'Space Mono',
+                                              height: 1.2,
+                                              fontFamilyFallback:
+                                                  AppFonts.cjkFallback,
+                                            ),
+                                            padding: const EdgeInsets.only(
+                                              right: 12,
+                                            ),
                                           ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                  Padding(
-                                    padding: const EdgeInsets.only(right: 16),
-                                    child: Text(
-                                      '${selectedIndex + 1} / ${_files.length}',
-                                      style: TextStyle(
-                                        color: AppColors.text.withValues(
-                                          alpha: 0.7,
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 16),
+                                      child: Text(
+                                        '${selectedIndex + 1} / ${_files.length}',
+                                        style: TextStyle(
+                                          color: AppColors.text.withValues(
+                                            alpha: 0.7,
+                                          ),
+                                          fontSize: 13,
+                                          fontFamily: 'Space Mono',
+                                          height: 1.2,
                                         ),
-                                        fontSize: 13,
-                                        fontFamily: 'Space Mono',
-                                        height: 1.2,
                                       ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -699,81 +724,114 @@ class _DetailPageState extends ConsumerState<DetailPage>
         builder: (context, selectedIndex, _) {
           final file = _fileAt(selectedIndex);
           if (file == null) return const SizedBox.shrink();
-          return ValueListenableBuilder<bool>(
-            valueListenable: enableFullScreenNotifier,
-            builder: (context, isFullScreen, _) {
-              return IgnorePointer(
-                ignoring: isFullScreen,
-                child: AnimatedOpacity(
-                  opacity: isFullScreen ? 0 : 1,
-                  duration: const Duration(milliseconds: 200),
-                  child: Container(
-                    color: Colors.black,
-                    padding: EdgeInsets.only(
-                      bottom: MediaQuery.viewPaddingOf(context).bottom,
-                    ),
-                    child: SizedBox(
-                      height: _kBottomChromeHeight,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          IconButton(
-                            icon: const Icon(
-                              Icons.info_outline,
-                              color: AppColors.text,
-                            ),
-                            tooltip: t(ref, 'photo_details'),
-                            onPressed: _toggleDetails,
-                          ),
-                          IconButton(
-                            icon: Icon(
-                              file.isFavorite
-                                  ? Icons.favorite
-                                  : Icons.favorite_border,
-                              color: file.isFavorite
-                                  ? AppColors.danger
-                                  : AppColors.text,
-                            ),
-                            tooltip: t(
-                              ref,
-                              file.isFavorite
-                                  ? 'action_unfavorite'
-                                  : 'action_favorite',
-                            ),
-                            onPressed: _toggleFavoriteCurrent,
-                          ),
-                          const Spacer(),
-                          // 回收站项：删除按钮左侧显示删除日期
-                          if (file.isTrashed && file.dateTrashedMs > 0)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 6),
-                              child: _TrashDateLabel(ms: file.dateTrashedMs),
-                            ),
-                          // 回收站恢复按钮（删除按钮左侧）
-                          if (file.isTrashed)
-                            IconButton(
-                              icon: const Icon(
-                                Icons.restore,
-                                color: AppColors.accent,
+          // pop 退场滑出（与路由 reverse 同步）：读路由动画【值】直接驱动
+          // 位移而非隐式动画——pop flight 启动时栏 entry 被 remove+insert
+          // 重插（_reinsertChromeAboveFlight），隐式动画状态会随子树重建
+          // 丢失（实测瞬间消失），值驱动重建后读当前进度，连续无跳变。
+          // 位移用【统一像素】（整组总高度 × 进度）而非各自身高度的
+          // fraction——底栏与缩略图条高度不同，fraction 位移会拉开空隙。
+          // _buildThumbLine 同公式，两栏作为整体同步滑出。
+          return AnimatedBuilder(
+            animation: _routeAnimation ?? kAlwaysCompleteAnimation,
+            builder: (context, child) {
+              final anim = _routeAnimation;
+              final popping =
+                  anim != null && anim.status == AnimationStatus.reverse;
+              final popSlidePx =
+                  (popping ? 1.0 - anim.value : 0.0) * _popSlideMaxPx(context);
+              return Transform.translate(
+                offset: Offset(0, popSlidePx),
+                child: child,
+              );
+            },
+            child: ValueListenableBuilder<bool>(
+              valueListenable: enableFullScreenNotifier,
+              builder: (context, isFullScreen, _) {
+                final hidden = isFullScreen;
+                return IgnorePointer(
+                  ignoring: hidden,
+                  // 底栏向下滑出（与顶栏上滑对称，easeOutCubic）：
+                  // 曾试 scale 0.96 缩小淡出，缩小后的黑色小矩形观感差，
+                  // 滑出屏外更干净。
+                  child: AnimatedSlide(
+                    offset: hidden ? const Offset(0, 1) : Offset.zero,
+                    duration: _kChromeAnimDuration,
+                    curve: Curves.easeOutCubic,
+                    child: AnimatedOpacity(
+                      opacity: hidden ? 0 : 1,
+                      duration: _kChromeAnimDuration,
+                      curve: Curves.easeOutQuad,
+                      child: Container(
+                        color: Colors.black,
+                        padding: EdgeInsets.only(
+                          bottom: MediaQuery.viewPaddingOf(context).bottom,
+                        ),
+                        child: SizedBox(
+                          height: _kBottomChromeHeight,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.info_outline,
+                                  color: AppColors.text,
+                                ),
+                                tooltip: t(ref, 'photo_details'),
+                                onPressed: _toggleDetails,
                               ),
-                              tooltip: t(ref, 'action_restore'),
-                              onPressed: _restoreCurrent,
-                            ),
-                          IconButton(
-                            icon: const Icon(
-                              Icons.delete_outline,
-                              color: AppColors.danger,
-                            ),
-                            tooltip: t(ref, 'delete_photo'),
-                            onPressed: _deleteCurrent,
+                              IconButton(
+                                icon: Icon(
+                                  file.isFavorite
+                                      ? Icons.favorite
+                                      : Icons.favorite_border,
+                                  color: file.isFavorite
+                                      ? AppColors.danger
+                                      : AppColors.text,
+                                ),
+                                tooltip: t(
+                                  ref,
+                                  file.isFavorite
+                                      ? 'action_unfavorite'
+                                      : 'action_favorite',
+                                ),
+                                onPressed: _toggleFavoriteCurrent,
+                              ),
+                              const Spacer(),
+                              // 回收站项：删除按钮左侧显示删除日期
+                              if (file.isTrashed && file.dateTrashedMs > 0)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 6),
+                                  child: _TrashDateLabel(
+                                    ms: file.dateTrashedMs,
+                                  ),
+                                ),
+                              // 回收站恢复按钮（删除按钮左侧）
+                              if (file.isTrashed)
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.restore,
+                                    color: AppColors.accent,
+                                  ),
+                                  tooltip: t(ref, 'action_restore'),
+                                  onPressed: _restoreCurrent,
+                                ),
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.delete_outline,
+                                  color: AppColors.danger,
+                                ),
+                                tooltip: t(ref, 'delete_photo'),
+                                onPressed: _deleteCurrent,
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           );
         },
       ),
@@ -792,37 +850,54 @@ class _DetailPageState extends ConsumerState<DetailPage>
       left: 0,
       right: 0,
       height: _kThumbLineHeight,
-      child: ValueListenableBuilder<bool>(
-        valueListenable: enableFullScreenNotifier,
-        builder: (_, isFullScreen, __) {
-          return ValueListenableBuilder<double>(
-            valueListenable: _panelExtent,
-            builder: (_, extent, ___) {
-              final thumbVis = (1 - extent / _kDetailInitial).clamp(0.0, 1.0);
-              final vis = (isFullScreen ? 0.0 : 1.0) * thumbVis;
-              // 下滑滑出 + 淡出，比纯 alpha 更有"沉下去"的丝滑感。
-              final dy = (1 - vis) * _kThumbLineHeight;
-              return Transform.translate(
-                offset: Offset(0, dy),
-                child: Opacity(
-                  opacity: vis,
-                  child: IgnorePointer(
-                    ignoring: vis < 0.5,
-                    child: _ThumbLineStrip(
-                      photos: _thumbFiles,
-                      controller: _thumbScrollCtrl!,
-                      centerIndex: _thumbCenterIndex!,
-                      onTap: _onThumbTap,
-                      onScrollEnd: _onThumbScrollEnd,
-                      deleteAnim: _thumbDeleteAnim,
-                      deleteIndex: _thumbDeleteIndex,
-                    ),
-                  ),
-                ),
-              );
-            },
+      // pop 退场滑出（值驱动，与底栏同步——机制与原因见
+      // _buildBottomOverlay 内注释）：位移用与底栏相同的统一像素公式
+      // （_popSlideMaxPx），两栏作为整体同步滑出、无空隙。
+      child: AnimatedBuilder(
+        animation: _routeAnimation ?? kAlwaysCompleteAnimation,
+        builder: (context, child) {
+          final anim = _routeAnimation;
+          final popping =
+              anim != null && anim.status == AnimationStatus.reverse;
+          final popSlidePx =
+              (popping ? 1.0 - anim.value : 0.0) * _popSlideMaxPx(context);
+          return Transform.translate(
+            offset: Offset(0, popSlidePx),
+            child: child,
           );
         },
+        child: ValueListenableBuilder<bool>(
+          valueListenable: enableFullScreenNotifier,
+          builder: (_, isFullScreen, __) {
+            return ValueListenableBuilder<double>(
+              valueListenable: _panelExtent,
+              builder: (_, extent, ___) {
+                final thumbVis = (1 - extent / _kDetailInitial).clamp(0.0, 1.0);
+                final vis = (isFullScreen ? 0.0 : 1.0) * thumbVis;
+                // 下滑滑出 + 淡出，比纯 alpha 更有"沉下去"的丝滑感。
+                final dy = (1 - vis) * _kThumbLineHeight;
+                return Transform.translate(
+                  offset: Offset(0, dy),
+                  child: Opacity(
+                    opacity: vis,
+                    child: IgnorePointer(
+                      ignoring: vis < 0.5,
+                      child: _ThumbLineStrip(
+                        photos: _thumbFiles,
+                        controller: _thumbScrollCtrl!,
+                        centerIndex: _thumbCenterIndex!,
+                        onTap: _onThumbTap,
+                        onScrollEnd: _onThumbScrollEnd,
+                        deleteAnim: _thumbDeleteAnim,
+                        deleteIndex: _thumbDeleteIndex,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        ),
       ),
     );
   }
