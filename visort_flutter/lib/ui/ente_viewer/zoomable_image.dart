@@ -178,8 +178,17 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// 会有一帧"糊图→清晰图"跳变闪烁；cache 命中直接同帧显示最高级。
   /// didChangeDependencies（新 element）与 didUpdateWidget（复用 element）
   /// 共用。
+  ///
+  /// ⚠️ 必须判「已完成」（statusProvider().completed）而非 containsKey：
+  /// _openViewer 在 push 前发起原图 precache，push 时 cache 里已有 full 的
+  /// 【pending】条目——containsKey 误判为可用 → 起始 provider 指向解码中
+  /// 的原图 → photo_view wrapper 的 _loading 分支【没有 Hero】（heroAttributes
+  /// 挂在 PhotoViewCore 上）→ HeroController 首帧找不到目标端 Hero →
+  /// flight 不启动，第一次打开只剩路由 200ms 淡入（无飞行动画的根因）。
+  /// 只有「已完成」条目 resolve 才同步回调（synchronousCall）→ 首帧
+  /// _loading=false → Hero 在树。pending 一律不选，回落 cell（正在网格
+  /// 显示中 = live 条目，必已完成）。
   void _pickCachedProvider() {
-    final cache = PaintingBinding.instance.imageCache;
     final full = buildImageProvider(
       _ref,
       targetWidth: computeViewerTargetWidth(
@@ -188,26 +197,52 @@ class _ZoomableImageState extends State<ZoomableImage> {
       ),
     );
     final large = buildThumbnailProvider(_ref, size: 512);
-    if (cache.containsKey(full)) {
+    final cell = buildThumbnailProvider(_ref, size: _cellThumbSize());
+    bool completed(ImageProvider p) => _probeSyncComplete(p);
+    if (completed(full)) {
       _imageProvider = full;
       _loadedFinalImage = true;
       _loadedSmallThumbnail = true;
       _loadedLargeThumbnail = true;
-    } else if (cache.containsKey(large)) {
+    } else if (completed(large)) {
       _imageProvider = large;
       _loadedLargeThumbnail = true;
       _loadedSmallThumbnail = true;
     } else {
-      // 无条件 cell 缩略图兜底 → PhotoView（含 Hero）首帧必存在，
-      // push 飞行层才能启动（否则 imageProvider 未就绪时 build 的是
-      // loading，无 Hero → flight 不启动 → 黑屏后加载，真机复现）。
-      _imageProvider = buildThumbnailProvider(_ref, size: _cellThumbSize());
+      // cell 兜底：网格正在显示 = live 条目（已完成），首帧同步有图；
+      // 极端场景（占位图都未出就点开）loading 一帧、无 flight，可接受。
+      _imageProvider = cell;
       _loadedSmallThumbnail = true;
     }
     _loadingLargeThumbnail = false;
     // 保持 false：让 _loadLocalImage 正常启动缺失级别的加载（若置 true
     // 会阻塞对应分支的 precache，又没有实际加载在跑 → 缩略图永不清晰）。
     _loadingFinalImage = false;
+  }
+
+  /// 探测 provider 在 ImageCache 中是否已有【已完成】的解码条目。
+  ///
+  /// ImageCache 无公开的 pending/completed 状态查询（statusProvider 非公开
+  /// API），利用机制本身判定：已完成 completer 的 addListener 会【同步】
+  /// 回调（synchronousCall=true）；pending 条目（如 _openViewer push 前
+  /// precache 刚发起的原图）不会同步回调 → false。探测 listener 无论同步/
+  /// 异步/出错触发都立即摘除，不留悬挂监听（挂着的 listener 会阻止
+  /// completer 释放）。
+  bool _probeSyncComplete(ImageProvider provider) {
+    final stream = provider.resolve(const ImageConfiguration());
+    final completer = stream.completer;
+    if (completer == null) return false;
+    var syncDone = false;
+    late final ImageStreamListener probe;
+    probe = ImageStreamListener(
+      (_, synchronousCall) {
+        if (synchronousCall) syncDone = true;
+        completer.removeListener(probe);
+      },
+      onError: (_, _) => completer.removeListener(probe),
+    );
+    completer.addListener(probe);
+    return syncDone;
   }
 
   /// 顶层双击（global）→ core 局部坐标 → 精准缩放。
