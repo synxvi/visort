@@ -31,9 +31,11 @@ class SortToggle extends ConsumerWidget {
   final SortBy sortBy;
   final bool asc;
   final void Function(SortBy sortBy, bool asc) onChanged;
+
   /// 回收站视图：显示「按删除日期」(dateTrashed) 维度选项。
   /// 仅回收站有意义（DATE_EXPIRES 仅回收站项有值），其他视图不显示。
   final bool showDateTrashed;
+
   /// 日期视图：菜单只显示升/降序方向段，维度固定为按创建日期(dateCreated)。
   final bool dateOnly;
 
@@ -48,9 +50,11 @@ class SortToggle extends ConsumerWidget {
         icon: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(dateOnly ? Icons.access_time : _byIcon(sortBy),
-                size: 18,
-                color: AppColors.text),
+            Icon(
+              dateOnly ? Icons.access_time : _byIcon(sortBy),
+              size: 18,
+              color: AppColors.text,
+            ),
             const SizedBox(width: 2),
             Icon(
               asc ? Icons.arrow_upward : Icons.arrow_downward,
@@ -80,8 +84,10 @@ class SortToggle extends ConsumerWidget {
       anchorGlobalDx: pos.dx + box.size.width / 2,
       anchorGlobalDy: pos.dy + box.size.height + 4,
       // 菜单右缘离按钮右缘 8dp（与首页 ⋮ 弹窗右缘间距一致，不贴屏幕右边）
-      menuLeft: (pos.dx + box.size.width - menuWidth - 8)
-          .clamp(0.0, screen.width - menuWidth),
+      menuLeft: (pos.dx + box.size.width - menuWidth - 8).clamp(
+        0.0,
+        screen.width - menuWidth,
+      ),
       menuTop: pos.dy + box.size.height + 4,
       menuWidth: menuWidth,
       menuBuilder: (ctx) => Material(
@@ -95,19 +101,33 @@ class SortToggle extends ConsumerWidget {
             // ── 维度段（dateOnly 时固定按创建日期，只留方向段）──
             if (!dateOnly) ...[
               _dimRow(ctx, ref, Icons.sort_by_alpha, 'name', SortBy.name),
-              _dimRow(ctx, ref, Icons.access_time, 'date_created',
-                  SortBy.dateCreated),
-              _dimRow(ctx, ref, Icons.access_time, 'date_modified',
-                  SortBy.dateModified),
+              _dimRow(
+                ctx,
+                ref,
+                Icons.access_time,
+                'date_created',
+                SortBy.dateCreated,
+              ),
+              _dimRow(
+                ctx,
+                ref,
+                Icons.access_time,
+                'date_modified',
+                SortBy.dateModified,
+              ),
               // 回收站视图额外提供「按删除日期」（DATE_EXPIRES）
               if (showDateTrashed)
-                _dimRow(ctx, ref, Icons.delete_outline, 'date_trashed',
-                    SortBy.dateTrashed),
+                _dimRow(
+                  ctx,
+                  ref,
+                  Icons.delete_outline,
+                  'date_trashed',
+                  SortBy.dateTrashed,
+                ),
               // 自定义暗色分隔线
               Container(
                 height: 1,
-                margin:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                 color: AppColors.border,
               ),
             ],
@@ -134,7 +154,12 @@ class SortToggle extends ConsumerWidget {
 
   /// 维度行
   Widget _dimRow(
-      BuildContext ctx, WidgetRef ref, IconData icon, String suffix, SortBy by) {
+    BuildContext ctx,
+    WidgetRef ref,
+    IconData icon,
+    String suffix,
+    SortBy by,
+  ) {
     final active = sortBy == by;
     return _MenuRow(
       icon: icon,
@@ -144,9 +169,15 @@ class SortToggle extends ConsumerWidget {
     );
   }
 
-  /// 方向行
+  /// 方向行：仅"升序/降序"（维度已在维度段选中态标出，不再重复写
+  /// "按XX升序"——用户确认）。
   Widget _dirRow(
-      BuildContext ctx, WidgetRef ref, IconData icon, String suffix, bool ascVal) {
+    BuildContext ctx,
+    WidgetRef ref,
+    IconData icon,
+    String suffix,
+    bool ascVal,
+  ) {
     final active = asc == ascVal;
     return _MenuRow(
       icon: icon,
@@ -223,7 +254,11 @@ class _MenuRow extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 16, color: active ? AppColors.accent : AppColors.muted),
+            Icon(
+              icon,
+              size: 16,
+              color: active ? AppColors.accent : AppColors.muted,
+            ),
             const SizedBox(width: 8),
             Text(
               label,

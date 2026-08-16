@@ -91,6 +91,7 @@ const Duration _kThumbSnapDuration = Duration(milliseconds: 180);
 class DetailPage extends ConsumerStatefulWidget {
   final List<MsImageInfo> files;
   final int initialIndex;
+
   /// 翻页回调：网格滚动到当前行（Hero pop 时 cell 在视口才找得到飞行目标）。
   final ValueChanged<int>? onIndexChanged;
 
@@ -110,17 +111,23 @@ class _DetailPageState extends ConsumerState<DetailPage>
   late final PageController _pageController;
   late final ValueNotifier<int> _selectedIndexNotifier;
   late List<MsImageInfo> _files;
+
+  /// 缩略图条独立数据：删除时条**立即**删除+补位动画（白色框固定、
+  /// 下一张滑入），主图在旧数据上滑动（PageView 需要"从被删项滑到
+  /// 下一项"的旧列表）——300ms 后主图数据才删。两者同步动画的关键。
+  late List<MsImageInfo> _thumbFiles;
   bool _shouldDisableScroll = false;
   bool _swipeLocked = false;
 
   final ValueNotifier<bool> enableFullScreenNotifier = ValueNotifier(false);
   final ValueNotifier<bool> isZoomedNotifier = ValueNotifier(false);
-  final ValueNotifier<ZoomTransform> zoomTransformNotifier =
-      ValueNotifier(ZoomTransform.identity);
-  final ValueNotifier<bool> isInSharedCollectionNotifier =
-      ValueNotifier(false);
-  final ValueNotifier<String?> showingThumbnailFallbackNotifier =
-      ValueNotifier(null);
+  final ValueNotifier<ZoomTransform> zoomTransformNotifier = ValueNotifier(
+    ZoomTransform.identity,
+  );
+  final ValueNotifier<bool> isInSharedCollectionNotifier = ValueNotifier(false);
+  final ValueNotifier<String?> showingThumbnailFallbackNotifier = ValueNotifier(
+    null,
+  );
 
   // ─────────────── 详情面板(上划信息) ───────────────
   /// 面板占比(0..1,相对屏高):单一驱动源,联动图片上推 / 顶栏淡出 / 缩略图条淡出。
@@ -130,13 +137,35 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   // ─────────────── 底栏缩略图条 ───────────────
   ScrollController? _thumbScrollCtrl;
+
   /// 实时居中项（滚动中更新，驱动单项高亮）。
   ValueNotifier<int>? _thumbCenterIndex;
+
   /// 主图→缩略图条程序滚动标记：期间忽略滚动联动，防回环。
   bool _thumbSyncing = false;
+
+  /// 删除流程抑制条滚动：删除期间白色激活框必须固定在视口中心不动——
+  /// 主图 animateToPage 触发的 onPageChanged→_syncThumbTo 若滚条，
+  /// 激活框会跳到下一格位置（"跳到第二个上面"）。抑制后只更新 center
+  /// 高亮，offset 保持——数据左移后下一张自然占据原中心位置。
+  bool _suppressThumbScroll = false;
+
+  /// 缩略图条删除动画（系统相册 PhotoPagerIndicator 同构：RecyclerView
+  /// ItemAnimator 的位置动画——被删项淡出 + 后续项**平移**补位，而非
+  /// AnimatedList 的布局重排式（重排会在移除项占槽期间把高亮项排到
+  /// 右边一格 = "跳到第二个又弹回来"）。
+  late final AnimationController _thumbDeleteAnim;
+
+  /// 正在删除的条索引（-1 = 无）。
+  int _thumbDeleteIndex = -1;
+
+  /// 删除流程进行中（主图动画结束前禁止重复删除/恢复，防数据错乱）。
+  bool _deletingInProgress = false;
+
   /// 缩略图条驱动主图 animateToPage 期间标记:主图跨多页时中间页 onPageChanged 据此
   /// 忽略,不回弹缩略图条。到达 target 复位,另有超时兜底。
   bool _pagerDrivenByThumb = false;
+
   /// [photo_view fork] X 边缘溢出翻页动画进行中：期间忽略重复回调防连翻。
   bool _edgePageAnimating = false;
 
@@ -158,10 +187,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
   OverlayEntry? _chromeEntry;
   Offset? _lastDoubleTapDown;
 
-  @override
   void initState() {
     super.initState();
     _files = List.of(widget.files);
+    _thumbFiles = List.of(widget.files);
+    _thumbDeleteAnim = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+    );
     // 栏入 root Overlay（时序注释见 _chromeEntry 声明）。postFrame：
     // Overlay.of 需要 mounted context。
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -223,7 +256,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
     }
   }
 
-
   void _onRouteAnimationStatus(AnimationStatus status) {
     // 返回动画结束：立即移除栏。PageRouteBuilder(opaque:false) 下页面
     // dispose 延迟甚至不触发，栏挂 root Overlay 不随 route 消失，必须
@@ -265,6 +297,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
     _panelCtrl?.dispose();
     _thumbScrollCtrl?.dispose();
     _thumbCenterIndex?.dispose();
+    _thumbDeleteAnim.dispose();
     super.dispose();
   }
 
@@ -370,11 +403,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
                   valueListenable: _panelExtent,
                   builder: (_, extent, pageView) {
                     final mq = MediaQuery.of(context);
-                    final availH = mq.size.height -
+                    final availH =
+                        mq.size.height -
                         (_kBottomChromeHeight + mq.viewPadding.bottom);
                     // clamp ≥ 0:杜绝关闭回弹时图片「过冲到正常位置以下」的闪烁。
-                    final pushPx =
-                        (extent * availH * _kImagePushFactor).clamp(0.0, availH);
+                    final pushPx = (extent * availH * _kImagePushFactor).clamp(
+                      0.0,
+                      availH,
+                    );
                     return Transform.translate(
                       offset: Offset(0, -pushPx),
                       child: pageView,
@@ -413,101 +449,103 @@ class _DetailPageState extends ConsumerState<DetailPage>
         _doubleTapHandlers[_selectedIndexNotifier.value]?.call(down);
       },
       child: NotificationListener<ScrollNotification>(
-      // 翻页间隙：滚动中显示页缘黑缝（相邻两页交界 8px 黑，区分两张图），
-      // 停稳后淡出——静止时图片满宽贴屏（无永久 padding，Hero 终点矩形
-      // 与网格 cell 严格一致）。depth==0：只认 PageView 自身（内部无可滚
-      // 子组件，防御性过滤）。
-      onNotification: (n) {
-        if (n.depth != 0) return false;
-        final scrolling = n is! ScrollEndNotification;
-        if (scrolling != _pageGapVisible) {
-          setState(() => _pageGapVisible = scrolling);
-        }
-        return false;
-      },
-      child: PageView.builder(
-      clipBehavior: Clip.none,
-      itemBuilder: (context, index) {
-        final file = _files[index];
-        _preloadFiles(index);
-        final fileContent = ZoomableImage(
-          file,
-          tagPrefix: 'photo',
-          // 页索引：顶层双击路由（Scrollable ballistic 中 ignorePointer
-          // 屏蔽页内 tap → 双击由 detail_page 顶层捕获后按索引分发）。
-          pageIndex: index,
-          // 与相册网格同列数：cell 缩略图尺寸一致（ImageCache key 命中）。
-          gridCols: ref.watch(configProvider).photoGridColumns,
-          shouldDisableScroll: (value) {
-            if (_shouldDisableScroll != value) {
-              setState(() => _shouldDisableScroll = value);
-            }
-          },
-          backgroundDecoration: const BoxDecoration(color: Colors.black),
-          onSwipeUp: () => _showDetails(file),
-          // 面板打开时下滑 → 收面板；否则默认返回。
-          onSwipeDown: _detailsOpen ? _animateClose : null,
-          // 放大后平移到 X 边缘继续拖 → 翻页（photo_view fork onEdgeX）。
-          onEdgeX: _handleEdgePage,
-          onFullLoaded: (_) {},
-        );
-        final pageContent = GestureDetector(
-          onTap: () {
-            InheritedDetailPageState.of(context).toggleFullScreenByUser();
-          },
-          child: fileContent,
-        );
-        // 页缘黑缝遮罩：仅滚动中可见（AnimatedOpacity 淡入淡出）。
-        // IgnorePointer 不挡下层手势。
-        final page = Stack(
-          children: [
-            Positioned.fill(child: pageContent),
-            Positioned.fill(
-              child: IgnorePointer(
-                child: AnimatedOpacity(
-                  opacity: _pageGapVisible ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 150),
-                  child: const _PageGapEdges(),
-                ),
-              ),
-            ),
-          ],
-        );
-        return ValueListenableBuilder(
-          valueListenable: _selectedIndexNotifier,
-          builder: (context, selectedIndex, _) =>
-              HeroMode(enabled: index == selectedIndex, child: page),
-        );
-      },
-      onPageChanged: (index) {
-        if (_pagerDrivenByThumb) {
-          // 缩略图条驱动主图:跨多页时中间页忽略,不回弹缩略图条;
-          // 到达 target 复位 flag。
-          if (index == _selectedIndexNotifier.value) {
-            _pagerDrivenByThumb = false;
+        // 翻页间隙：滚动中显示页缘黑缝（相邻两页交界 8px 黑，区分两张图），
+        // 停稳后淡出——静止时图片满宽贴屏（无永久 padding，Hero 终点矩形
+        // 与网格 cell 严格一致）。depth==0：只认 PageView 自身（内部无可滚
+        // 子组件，防御性过滤）。
+        onNotification: (n) {
+          if (n.depth != 0) return false;
+          final scrolling = n is! ScrollEndNotification;
+          if (scrolling != _pageGapVisible) {
+            setState(() => _pageGapVisible = scrolling);
           }
-          return;
-        }
-        if (_selectedIndexNotifier.value == index) {
-          // 文件数可能已变但索引未变（删除补位/缩略图跟手 jumpToPage 触发）。
-          // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
-          _selectedIndexNotifier.notifyListeners();
-          return; // 跟手场景 filmstrip 已就位，不程序回滚
-        }
-        _selectedIndexNotifier.value = index;
-        widget.onIndexChanged?.call(index);
-        _syncThumbTo(index);
-      },
-      physics: _shouldDisableScroll || _swipeLocked
-          ? const NeverScrollableScrollPhysics()
-          : const FastScrollPhysics(speedFactor: 4.0),
-      controller: _pageController,
-      itemCount: _files.length,
-      ),
+          return false;
+        },
+        child: PageView.builder(
+          clipBehavior: Clip.none,
+          itemBuilder: (context, index) {
+            final file = _files[index];
+            _preloadFiles(index);
+            final fileContent = ZoomableImage(
+              file,
+              tagPrefix: 'photo',
+              // 页索引：顶层双击路由（Scrollable ballistic 中 ignorePointer
+              // 屏蔽页内 tap → 双击由 detail_page 顶层捕获后按索引分发）。
+              pageIndex: index,
+              // 与相册网格同列数：cell 缩略图尺寸一致（ImageCache key 命中）。
+              gridCols: ref.watch(configProvider).photoGridColumns,
+              shouldDisableScroll: (value) {
+                if (_shouldDisableScroll != value) {
+                  setState(() => _shouldDisableScroll = value);
+                }
+              },
+              backgroundDecoration: const BoxDecoration(color: Colors.black),
+              onSwipeUp: () => _showDetails(file),
+              // 面板打开时下滑 → 收面板；否则默认返回。
+              onSwipeDown: _detailsOpen ? _animateClose : null,
+              // 放大后平移到 X 边缘继续拖 → 翻页（photo_view fork onEdgeX）。
+              onEdgeX: _handleEdgePage,
+              onFullLoaded: (_) {},
+            );
+            final pageContent = GestureDetector(
+              onTap: () {
+                InheritedDetailPageState.of(context).toggleFullScreenByUser();
+              },
+              child: fileContent,
+            );
+            // 页缘黑缝遮罩：仅滚动中可见（AnimatedOpacity 淡入淡出）。
+            // IgnorePointer 不挡下层手势。
+            final page = Stack(
+              children: [
+                Positioned.fill(child: pageContent),
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: AnimatedOpacity(
+                      opacity: _pageGapVisible ? 1.0 : 0.0,
+                      duration: const Duration(milliseconds: 150),
+                      child: const _PageGapEdges(),
+                    ),
+                  ),
+                ),
+              ],
+            );
+            return ValueListenableBuilder(
+              valueListenable: _selectedIndexNotifier,
+              builder: (context, selectedIndex, _) =>
+                  HeroMode(enabled: index == selectedIndex, child: page),
+            );
+          },
+          onPageChanged: (index) {
+            debugPrint(
+              '[dbg] onPageChanged($index) driven=$_pagerDrivenByThumb suppress=$_suppressThumbScroll sel=${_selectedIndexNotifier.value}',
+            );
+            if (_pagerDrivenByThumb) {
+              // 缩略图条驱动主图:跨多页时中间页忽略,不回弹缩略图条;
+              // 到达 target 复位 flag。
+              if (index == _selectedIndexNotifier.value) {
+                _pagerDrivenByThumb = false;
+              }
+              return;
+            }
+            if (_selectedIndexNotifier.value == index) {
+              // 文件数可能已变但索引未变（删除补位/缩略图跟手 jumpToPage 触发）。
+              // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+              _selectedIndexNotifier.notifyListeners();
+              return; // 跟手场景 filmstrip 已就位，不程序回滚
+            }
+            _selectedIndexNotifier.value = index;
+            widget.onIndexChanged?.call(index);
+            _syncThumbTo(index);
+          },
+          physics: _shouldDisableScroll || _swipeLocked
+              ? const NeverScrollableScrollPhysics()
+              : const FastScrollPhysics(speedFactor: 4.0),
+          controller: _pageController,
+          itemCount: _files.length,
+        ),
       ),
     );
   }
-
 
   /// [photo_view fork] 放大后 X 边缘溢出 → 翻页（dir>0 右拖→上一张，<0 左拖→下一张）。
   void _handleEdgePage(int dir) {
@@ -550,91 +588,101 @@ class _DetailPageState extends ConsumerState<DetailPage>
       child: ValueListenableBuilder<int>(
         valueListenable: _selectedIndexNotifier,
         builder: (context, selectedIndex, _) {
-        final file = _fileAt(selectedIndex);
-        if (file == null) return const SizedBox.shrink();
-        return ValueListenableBuilder<bool>(
-          valueListenable: enableFullScreenNotifier,
-          builder: (context, isFullScreen, _) {
-            // 面板占比联动顶栏淡出(沉浸)。
-            return ValueListenableBuilder<double>(
-              valueListenable: _panelExtent,
-              builder: (_, extent, __) {
-                final topVis = (1 - extent / _kDetailInitial).clamp(0.0, 1.0);
-                return IgnorePointer(
-                  ignoring: isFullScreen || topVis < 0.5,
-                  child: AnimatedOpacity(
-                    // 全屏切换 200ms 淡出（ente）；extent 联动同步系数（topVis）。
-                    opacity: isFullScreen ? 0 : 1,
-                    duration: const Duration(milliseconds: 200),
-                    child: Opacity(
-                      opacity: topVis,
-                      child: Container(
-                        color: Colors.black,
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                            top: MediaQuery.viewPaddingOf(context).top,
-                          ),
-                          child: SizedBox(
-                            height: 56,
-                            child: Row(
-                              children: [
-                                IconButton(
-                                  // 与相册页 AppBar 返回箭头对齐（主分支同款 padding）。
-                                  padding:
-                                      const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                                  icon: const Icon(Icons.arrow_back,
-                                      color: AppColors.text),
-                                  tooltip: t(ref, 'back'),
-                                  onPressed: () => Navigator.maybePop(context),
-                                ),
-                                Expanded(
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: ConstrainedBox(
-                                      constraints:
-                                          const BoxConstraints(maxWidth: 180),
-                                      child: MiddleEllipsisText(
-                                        file.name,
-                                        style: const TextStyle(
-                                          color: AppColors.text,
-                                          fontSize: 13,
-                                          fontFamily: 'Space Mono',
-                                          height: 1.2,
-                                          fontFamilyFallback:
-                                              AppFonts.cjkFallback,
+          final file = _fileAt(selectedIndex);
+          if (file == null) return const SizedBox.shrink();
+          return ValueListenableBuilder<bool>(
+            valueListenable: enableFullScreenNotifier,
+            builder: (context, isFullScreen, _) {
+              // 面板占比联动顶栏淡出(沉浸)。
+              return ValueListenableBuilder<double>(
+                valueListenable: _panelExtent,
+                builder: (_, extent, __) {
+                  final topVis = (1 - extent / _kDetailInitial).clamp(0.0, 1.0);
+                  return IgnorePointer(
+                    ignoring: isFullScreen || topVis < 0.5,
+                    child: AnimatedOpacity(
+                      // 全屏切换 200ms 淡出（ente）；extent 联动同步系数（topVis）。
+                      opacity: isFullScreen ? 0 : 1,
+                      duration: const Duration(milliseconds: 200),
+                      child: Opacity(
+                        opacity: topVis,
+                        child: Container(
+                          color: Colors.black,
+                          child: Padding(
+                            padding: EdgeInsets.only(
+                              top: MediaQuery.viewPaddingOf(context).top,
+                            ),
+                            child: SizedBox(
+                              height: 56,
+                              child: Row(
+                                children: [
+                                  IconButton(
+                                    // 与相册页 AppBar 返回箭头对齐（主分支同款 padding）。
+                                    padding: const EdgeInsets.fromLTRB(
+                                      16,
+                                      8,
+                                      8,
+                                      8,
+                                    ),
+                                    icon: const Icon(
+                                      Icons.arrow_back,
+                                      color: AppColors.text,
+                                    ),
+                                    tooltip: t(ref, 'back'),
+                                    onPressed: () =>
+                                        Navigator.maybePop(context),
+                                  ),
+                                  Expanded(
+                                    child: Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: ConstrainedBox(
+                                        constraints: const BoxConstraints(
+                                          maxWidth: 180,
                                         ),
-                                        padding:
-                                            const EdgeInsets.only(right: 12),
+                                        child: MiddleEllipsisText(
+                                          file.name,
+                                          style: const TextStyle(
+                                            color: AppColors.text,
+                                            fontSize: 13,
+                                            fontFamily: 'Space Mono',
+                                            height: 1.2,
+                                            fontFamilyFallback:
+                                                AppFonts.cjkFallback,
+                                          ),
+                                          padding: const EdgeInsets.only(
+                                            right: 12,
+                                          ),
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 16),
-                                  child: Text(
-                                    '${selectedIndex + 1} / ${_files.length}',
-                                    style: TextStyle(
-                                      color: AppColors.text.withValues(
-                                          alpha: 0.7),
-                                      fontSize: 13,
-                                      fontFamily: 'Space Mono',
-                                      height: 1.2,
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: 16),
+                                    child: Text(
+                                      '${selectedIndex + 1} / ${_files.length}',
+                                      style: TextStyle(
+                                        color: AppColors.text.withValues(
+                                          alpha: 0.7,
+                                        ),
+                                        fontSize: 13,
+                                        fontFamily: 'Space Mono',
+                                        height: 1.2,
+                                      ),
                                     ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                );
-              },
-            );
-          },
-        );
-      },
+                  );
+                },
+              );
+            },
+          );
+        },
       ),
     );
   }
@@ -649,78 +697,85 @@ class _DetailPageState extends ConsumerState<DetailPage>
       child: ValueListenableBuilder<int>(
         valueListenable: _selectedIndexNotifier,
         builder: (context, selectedIndex, _) {
-        final file = _fileAt(selectedIndex);
-        if (file == null) return const SizedBox.shrink();
-        return ValueListenableBuilder<bool>(
-          valueListenable: enableFullScreenNotifier,
-          builder: (context, isFullScreen, _) {
-            return IgnorePointer(
-              ignoring: isFullScreen,
-              child: AnimatedOpacity(
-                opacity: isFullScreen ? 0 : 1,
-                duration: const Duration(milliseconds: 200),
-                child: Container(
-                  color: Colors.black,
-                  padding: EdgeInsets.only(
-                    bottom: MediaQuery.viewPaddingOf(context).bottom,
-                  ),
-                  child: SizedBox(
-                    height: _kBottomChromeHeight,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.info_outline,
-                              color: AppColors.text),
-                          tooltip: t(ref, 'photo_details'),
-                          onPressed: _toggleDetails,
-                        ),
-                        IconButton(
-                          icon: Icon(
-                            file.isFavorite
-                                ? Icons.favorite
-                                : Icons.favorite_border,
-                            color:
-                                file.isFavorite ? AppColors.danger : AppColors.text,
-                          ),
-                          tooltip: t(
-                            ref,
-                            file.isFavorite
-                                ? 'action_unfavorite'
-                                : 'action_favorite',
-                          ),
-                          onPressed: _toggleFavoriteCurrent,
-                        ),
-                        const Spacer(),
-                        // 回收站项：删除按钮左侧显示删除日期
-                        if (file.isTrashed && file.dateTrashedMs > 0)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 6),
-                            child: _TrashDateLabel(ms: file.dateTrashedMs),
-                          ),
-                        // 回收站恢复按钮（删除按钮左侧）
-                        if (file.isTrashed)
+          final file = _fileAt(selectedIndex);
+          if (file == null) return const SizedBox.shrink();
+          return ValueListenableBuilder<bool>(
+            valueListenable: enableFullScreenNotifier,
+            builder: (context, isFullScreen, _) {
+              return IgnorePointer(
+                ignoring: isFullScreen,
+                child: AnimatedOpacity(
+                  opacity: isFullScreen ? 0 : 1,
+                  duration: const Duration(milliseconds: 200),
+                  child: Container(
+                    color: Colors.black,
+                    padding: EdgeInsets.only(
+                      bottom: MediaQuery.viewPaddingOf(context).bottom,
+                    ),
+                    child: SizedBox(
+                      height: _kBottomChromeHeight,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
                           IconButton(
-                            icon: const Icon(Icons.restore,
-                                color: AppColors.accent),
-                            tooltip: t(ref, 'action_restore'),
-                            onPressed: _restoreCurrent,
+                            icon: const Icon(
+                              Icons.info_outline,
+                              color: AppColors.text,
+                            ),
+                            tooltip: t(ref, 'photo_details'),
+                            onPressed: _toggleDetails,
                           ),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline,
-                              color: AppColors.danger),
-                          tooltip: t(ref, 'delete_photo'),
-                          onPressed: _deleteCurrent,
-                        ),
-                      ],
+                          IconButton(
+                            icon: Icon(
+                              file.isFavorite
+                                  ? Icons.favorite
+                                  : Icons.favorite_border,
+                              color: file.isFavorite
+                                  ? AppColors.danger
+                                  : AppColors.text,
+                            ),
+                            tooltip: t(
+                              ref,
+                              file.isFavorite
+                                  ? 'action_unfavorite'
+                                  : 'action_favorite',
+                            ),
+                            onPressed: _toggleFavoriteCurrent,
+                          ),
+                          const Spacer(),
+                          // 回收站项：删除按钮左侧显示删除日期
+                          if (file.isTrashed && file.dateTrashedMs > 0)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 6),
+                              child: _TrashDateLabel(ms: file.dateTrashedMs),
+                            ),
+                          // 回收站恢复按钮（删除按钮左侧）
+                          if (file.isTrashed)
+                            IconButton(
+                              icon: const Icon(
+                                Icons.restore,
+                                color: AppColors.accent,
+                              ),
+                              tooltip: t(ref, 'action_restore'),
+                              onPressed: _restoreCurrent,
+                            ),
+                          IconButton(
+                            icon: const Icon(
+                              Icons.delete_outline,
+                              color: AppColors.danger,
+                            ),
+                            tooltip: t(ref, 'delete_photo'),
+                            onPressed: _deleteCurrent,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-            );
-          },
-        );
-      },
+              );
+            },
+          );
+        },
       ),
     );
   }
@@ -754,11 +809,13 @@ class _DetailPageState extends ConsumerState<DetailPage>
                   child: IgnorePointer(
                     ignoring: vis < 0.5,
                     child: _ThumbLineStrip(
-                      photos: _files,
+                      photos: _thumbFiles,
                       controller: _thumbScrollCtrl!,
                       centerIndex: _thumbCenterIndex!,
                       onTap: _onThumbTap,
                       onScrollEnd: _onThumbScrollEnd,
+                      deleteAnim: _thumbDeleteAnim,
+                      deleteIndex: _thumbDeleteIndex,
                     ),
                   ),
                 ),
@@ -772,13 +829,15 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   /// 缩略图条滚动中：实时算离视口中心最近的项，更新高亮 + 跟手联动主图。
   void _onThumbScroll() {
-    if (_thumbSyncing) return;
     final ctrl = _thumbScrollCtrl;
     final ci = _thumbCenterIndex;
     if (ctrl == null || ci == null || !ctrl.hasClients) return;
     final newCenter = _thumbComputeCenter();
     if (newCenter == ci.value) return;
-    ci.value = newCenter; // 高亮跟手
+    ci.value = newCenter; // 高亮跟手（含删除推入动画：白框翻到滚入项）
+    // 程序滚动（_thumbSyncing）与删除流程（_suppressThumbScroll）：
+    // 只跟手高亮，不回打主图（主图有自己的滑动动画）。
+    if (_thumbSyncing || _suppressThumbScroll) return;
     if (newCenter == _selectedIndexNotifier.value) return;
     // 跟手联动主图：直接赋值 + jumpToPage 即时切换。
     _selectedIndexNotifier.value = newCenter;
@@ -790,11 +849,17 @@ class _DetailPageState extends ConsumerState<DetailPage>
   void _onThumbScrollEnd() {
     final ctrl = _thumbScrollCtrl;
     if (ctrl == null || !ctrl.hasClients || _thumbSyncing) return;
+    debugPrint(
+      '[dbg] onScrollEnd off=${ctrl.offset.toStringAsFixed(1)} center=${_thumbCenterIndex?.value} sel=${_selectedIndexNotifier.value}',
+    );
     final target = _thumbComputeCenter();
     final offset = _thumbOffsetForCenter(target);
     if ((ctrl.offset - offset).abs() > 0.5) {
-      ctrl.animateTo(offset,
-          duration: _kThumbSnapDuration, curve: Curves.easeOut);
+      ctrl.animateTo(
+        offset,
+        duration: _kThumbSnapDuration,
+        curve: Curves.easeOut,
+      );
     }
     if (target != _selectedIndexNotifier.value) _onThumbPageChanged(target);
   }
@@ -807,8 +872,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
     if (ctrl != null && ctrl.hasClients) {
       _thumbSyncing = true;
       ctrl
-          .animateTo(_thumbOffsetForCenter(i),
-              duration: _kThumbSnapDuration, curve: Curves.easeOut)
+          .animateTo(
+            _thumbOffsetForCenter(i),
+            duration: _kThumbSnapDuration,
+            curve: Curves.easeOut,
+          )
           .then((_) => _thumbSyncing = false);
     }
   }
@@ -817,9 +885,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
   int _thumbComputeCenter() {
     final ctrl = _thumbScrollCtrl;
     if (ctrl == null || !ctrl.hasClients) return _selectedIndexNotifier.value;
-    return (ctrl.offset / _kThumbItemExtent)
-        .round()
-        .clamp(0, _files.length - 1);
+    return (ctrl.offset / _kThumbItemExtent).round().clamp(
+      0,
+      _files.length - 1,
+    );
   }
 
   /// 让 item i 居中所需的 scroll offset（= i × itemExtent）。
@@ -834,22 +903,35 @@ class _DetailPageState extends ConsumerState<DetailPage>
     if (_pageController.hasClients) {
       _pagerDrivenByThumb = true;
       // 兜底:万一主图 animateToPage 未触发 target onPageChanged,超时复位防 flag 卡死。
-      Future.delayed(_kThumbSyncDuration + const Duration(milliseconds: 80),
-          () => _pagerDrivenByThumb = false);
-      _pageController.animateToPage(i,
-          duration: _kThumbSyncDuration, curve: Curves.easeOut);
+      Future.delayed(
+        _kThumbSyncDuration + const Duration(milliseconds: 80),
+        () => _pagerDrivenByThumb = false,
+      );
+      _pageController.animateToPage(
+        i,
+        duration: _kThumbSyncDuration,
+        curve: Curves.easeOut,
+      );
     }
   }
 
   /// 主图翻页 → 缩略图条居中跟随（程序滚动，_thumbSyncing 防回环）。
+  /// 删除流程（_suppressThumbScroll）完全忽略：条数据/center 已由
+  /// _removeCurrentAndAdvance 直接同步，滑动期间的 onPageChanged 若
+  /// 更新会把 center 推到旧语义 index（白色框高亮跳出中心）。
   void _syncThumbTo(int i) {
     final ctrl = _thumbScrollCtrl;
     if (ctrl == null || !ctrl.hasClients) return;
+    if (_suppressThumbScroll) return;
+    debugPrint('[dbg] syncThumbTo($i) off=${ctrl.offset.toStringAsFixed(1)}');
     _thumbSyncing = true;
     _thumbCenterIndex?.value = i;
     ctrl
-        .animateTo(_thumbOffsetForCenter(i),
-            duration: _kThumbSyncDuration, curve: Curves.easeOut)
+        .animateTo(
+          _thumbOffsetForCenter(i),
+          duration: _kThumbSyncDuration,
+          curve: Curves.easeOut,
+        )
         .then((_) => _thumbSyncing = false);
   }
 
@@ -858,9 +940,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
   Future<void> _toggleFavoriteCurrent() async {
     final file = _selectedFile;
     if (file == null) return;
-    final err = await ref
-        .read(galleryControllerProvider.notifier)
-        .setFavorites([file.id], !file.isFavorite);
+    final err = await ref.read(galleryControllerProvider.notifier).setFavorites(
+      [file.id],
+      !file.isFavorite,
+    );
     if (!mounted) return;
     if (err != null) {
       toast(context, t(ref, 'favorite_failed'));
@@ -1083,8 +1166,18 @@ class _DetailPageState extends ConsumerState<DetailPage>
   }
 
   /// 删除/恢复成功后从列表移除当前项并跳到下一张（或末张），刷新栏位计数。
+  ///
+  /// 条动画 = 系统相册 PhotoPagerIndicator 同构（RecyclerView ItemAnimator
+  /// 位置动画）：
+  ///  1. 白框（center）立即翻到下一项（推入起点）；
+  ///  2. 被删项原地淡出（FadeTransition），后续项 Transform.translate
+  ///     平滑左移一格补位（位置动画，非 AnimatedList 布局重排——重排会
+  ///     在移除项占槽期间把高亮项排到右边一格 = "跳到第二个又弹回来"）；
+  ///  3. 条动画完成（250ms）：数据左移 + center 对齐（同一项，无跳变）；
+  ///  4. 主图在旧数据上 animateToPage(next) 滑动（300ms），完成后删数据
+  ///     + pixels 校正（同帧）。
   void _removeCurrentAndAdvance(String message) {
-    if (!mounted) return;
+    if (!mounted || _deletingInProgress) return;
     // 最后一张:直接退出,不 setState——否则 viewer 会先 rebuild 成空 Scaffold,
     // 在 pop 动画期间露出一帧空白。
     if (_files.length <= 1) {
@@ -1092,23 +1185,48 @@ class _DetailPageState extends ConsumerState<DetailPage>
       toast(context, message);
       return;
     }
-    setState(() {
-      _files.removeAt(_selectedIndexNotifier.value);
-      _selectedIndexNotifier.value = min(
-        _selectedIndexNotifier.value,
-        _files.length - 1,
-      );
-    });
-    widget.onIndexChanged?.call(_selectedIndexNotifier.value);
-    if (_pageController.hasClients) {
-      Future.microtask(() {
-        if (mounted && _pageController.hasClients) {
-          _pageController.jumpToPage(_selectedIndexNotifier.value);
-          // jumpToPage 触发的 onPageChanged 命中 value==index 不回弹,故手动同步。
-          _syncThumbTo(_selectedIndexNotifier.value);
-        }
-      });
-    }
+    final index = _selectedIndexNotifier.value;
+    final next = index < _files.length - 1 ? index + 1 : index - 1;
+    _deletingInProgress = true;
+    _suppressThumbScroll = true;
+
+    // ─ 条：平移补位动画 ─
+    _thumbDeleteIndex = index;
+    _thumbCenterIndex?.value = next; // 白框翻到下一项（推入起点）
+    unawaited(
+      _thumbDeleteAnim.forward(from: 0).then((_) {
+        if (!mounted) return;
+        setState(() => _thumbFiles.removeAt(index));
+        _thumbCenterIndex?.value = min(index, _thumbFiles.length - 1);
+        _thumbDeleteIndex = -1;
+      }),
+    );
+
+    // ─ 主图：旧数据滑动 ─
+    unawaited(
+      _pageController
+          .animateToPage(
+            next,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          )
+          .then((_) {
+            if (!mounted) return;
+            setState(() => _files.removeAt(index));
+            final newIndex = min(index, _files.length - 1);
+            _selectedIndexNotifier.value = newIndex;
+            widget.onIndexChanged?.call(newIndex);
+            // 删除倒数第二张时 pixels 可能在旧 maxScrollExtent 之外——校正。
+            if (_pageController.hasClients &&
+                (_pageController.page?.round() ?? newIndex) != newIndex) {
+              _pageController.jumpToPage(newIndex);
+            }
+          })
+          .whenComplete(() {
+            _deletingInProgress = false;
+            _suppressThumbScroll = false;
+          }),
+    );
     toast(context, message);
   }
 
@@ -1141,17 +1259,21 @@ class _DetailPageState extends ConsumerState<DetailPage>
         overlays: SystemUiOverlay.values,
       );
     }
-    _panelCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 220),
-      reverseDuration: const Duration(milliseconds: 180),
-    )..addListener(() {
-        _panelExtent.value = _panelCtrl!.value * _kDetailInitial;
-      });
+    _panelCtrl =
+        AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 220),
+          reverseDuration: const Duration(milliseconds: 180),
+        )..addListener(() {
+          _panelExtent.value = _panelCtrl!.value * _kDetailInitial;
+        });
     _panelCtrl!.value = 0;
     // 打开:easeOut(前快后慢)。
-    _panelCtrl!.animateTo(1,
-        duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+    _panelCtrl!.animateTo(
+      1,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+    );
   }
 
   /// 关闭:easeIn(前快后慢,不在一半突然加速),完成后移除面板。
@@ -1159,12 +1281,15 @@ class _DetailPageState extends ConsumerState<DetailPage>
     final ctrl = _panelCtrl;
     if (ctrl == null) return;
     ctrl
-        .animateTo(0,
-            duration: const Duration(milliseconds: 180), curve: Curves.easeIn)
+        .animateTo(
+          0,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeIn,
+        )
         .orCancel
         .then((_) {
-      if (mounted) _onDetailsDismissed();
-    });
+          if (mounted) _onDetailsDismissed();
+        });
   }
 
   /// 详情面板关闭收尾。
@@ -1190,11 +1315,17 @@ class _DetailPageState extends ConsumerState<DetailPage>
     if (v > 300) {
       _animateClose();
     } else if (v < -300) {
-      ctrl.animateTo(1,
-          duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+      ctrl.animateTo(
+        1,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
     } else if (ctrl.value > 0.5) {
-      ctrl.animateTo(1,
-          duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+      ctrl.animateTo(
+        1,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOut,
+      );
     } else {
       _animateClose();
     }
@@ -1259,8 +1390,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
                 onVerticalDragUpdate: (d) {
                   final ctrl = _panelCtrl;
                   if (ctrl == null) return;
-                  ctrl.value =
-                      (ctrl.value - d.primaryDelta! / slideOut).clamp(0.0, 1.0);
+                  ctrl.value = (ctrl.value - d.primaryDelta! / slideOut).clamp(
+                    0.0,
+                    1.0,
+                  );
                 },
                 onVerticalDragEnd: _onPanelDragEnd,
               ),
@@ -1313,18 +1446,22 @@ class _DetailPageState extends ConsumerState<DetailPage>
       ctrl.value = (ctrl.value + over / slideOutForPanel()).clamp(0.0, 1.0);
       return false; // 不消费:辉光反馈等仍由 Scrollable 内部处理
     }
-    if (n is ScrollEndNotification &&
-        _panelOverDragged &&
-        ctrl.value < 1.0) {
+    if (n is ScrollEndNotification && _panelOverDragged && ctrl.value < 1.0) {
       final v = _lastOverVel;
       if (v > 0) {
         _animateClose();
       } else if (v < 0) {
-        ctrl.animateTo(1,
-            duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+        ctrl.animateTo(
+          1,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
       } else if (ctrl.value > 0.5) {
-        ctrl.animateTo(1,
-            duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+        ctrl.animateTo(
+          1,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
       } else {
         _animateClose();
       }
@@ -1349,11 +1486,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
 /// [onTap] 跳转。
 class _ThumbLineStrip extends StatelessWidget {
   const _ThumbLineStrip({
+    super.key,
     required this.photos,
     required this.controller,
     required this.centerIndex,
     required this.onTap,
     required this.onScrollEnd,
+    this.deleteAnim,
+    this.deleteIndex = -1,
   });
 
   final List<MsImageInfo> photos;
@@ -1367,6 +1507,13 @@ class _ThumbLineStrip extends StatelessWidget {
 
   /// 滚动停止(fling 减速结束)→ 吸附居中 + 联动主图。
   final VoidCallback onScrollEnd;
+
+  /// 删除补位动画（系统相册 ItemAnimator 同构：被删项淡出、后续项
+  /// 平移左移一格）。null = 无删除动画。
+  final Animation<double>? deleteAnim;
+
+  /// 正在删除的条索引。
+  final int deleteIndex;
 
   @override
   Widget build(BuildContext context) {
@@ -1388,50 +1535,92 @@ class _ThumbLineStrip extends StatelessWidget {
           padding: EdgeInsets.symmetric(horizontal: pad),
           itemCount: photos.length,
           itemBuilder: (ctx, i) {
-            final info = photos[i];
-            return ValueListenableBuilder<int>(
-              valueListenable: centerIndex,
-              builder: (_, center, _) {
-                final isCenter = i == center;
-                final w = isCenter ? _kThumbCenterW : _kThumbNormalW;
-                // 中心项方形(矮),普通项竖条(高出一截):尺寸对比代替间距对比。
-                final h = isCenter ? _kThumbCenterH : _kThumbItemH;
-                final r = isCenter ? _kThumbRadiusCenter : _kThumbRadiusNormal;
-                return GestureDetector(
-                  onTap: () => onTap(i),
-                  behavior: HitTestBehavior.opaque,
-                  child: Align(
-                    alignment: Alignment.bottomCenter,
-                    child: Opacity(
-                      opacity: isCenter ? 1.0 : 0.5,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 120),
-                        width: w,
-                        height: h,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(r),
-                          border: isCenter
-                              ? Border.all(color: AppColors.text, width: 1.5)
-                              : null,
-                          image: DecorationImage(
-                            image: buildThumbnailProvider(
-                              imageRefFromMediaStoreId(info.id),
-                              size: _kThumbLoadSize,
-                            ),
-                            fit: BoxFit.cover,
-                          ),
-                        ),
-                      ),
-                    ),
+            Widget item = _buildStripItem(
+              photos[i],
+              centerIndex,
+              i,
+              onTap: () => onTap(i),
+            );
+            final anim = deleteAnim;
+            if (anim != null && deleteIndex >= 0) {
+              if (i == deleteIndex) {
+                // 被删项：原地淡出（白框已翻到下一项）。
+                item = FadeTransition(
+                  opacity: Tween<double>(begin: 1, end: 0).animate(anim),
+                  child: item,
+                );
+              } else if (i > deleteIndex) {
+                // 后续项：平滑左移一格补位（位置动画——平移不触发布局
+                // 重排，其余项位置稳定，无"跳到第二个又弹回"）。
+                item = AnimatedBuilder(
+                  animation: anim,
+                  child: item,
+                  builder: (_, child) => Transform.translate(
+                    offset: Offset(-anim.value * _kThumbItemExtent, 0),
+                    child: child,
                   ),
                 );
-              },
-            );
+              }
+            }
+            return item;
           },
         ),
       ),
     );
   }
+}
+
+/// 缩略图条单项渲染。
+Widget _buildStripItem(
+  MsImageInfo info,
+  ValueListenable<int> centerIndex,
+  int i, {
+  VoidCallback? onTap,
+  bool fading = false,
+}) {
+  return ValueListenableBuilder<int>(
+    valueListenable: centerIndex,
+    builder: (_, center, _) {
+      final isCenter = !fading && i == center;
+      final w = isCenter ? _kThumbCenterW : _kThumbNormalW;
+      // 中心项方形(矮),普通项竖条(高出一截):尺寸对比代替间距对比。
+      final h = isCenter ? _kThumbCenterH : _kThumbItemH;
+      final r = isCenter ? _kThumbRadiusCenter : _kThumbRadiusNormal;
+      // 固定 itemExtent 宽（AnimatedList 无 itemExtent 参数）——
+      // 居中偏移 _thumbOffsetForCenter = i × _kThumbItemExtent 依赖此。
+      return SizedBox(
+        width: _kThumbItemExtent,
+        child: GestureDetector(
+          onTap: onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: Opacity(
+              opacity: isCenter ? 1.0 : 0.5,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                width: w,
+                height: h,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(r),
+                  border: isCenter
+                      ? Border.all(color: AppColors.text, width: 1.5)
+                      : null,
+                  image: DecorationImage(
+                    image: buildThumbnailProvider(
+                      imageRefFromMediaStoreId(info.id),
+                      size: _kThumbLoadSize,
+                    ),
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
 }
 
 /// 面板内容区 physics:默认 physics 在内容不可滚(maxScrollExtent==0,占位/短内容)

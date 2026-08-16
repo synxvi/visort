@@ -131,7 +131,6 @@ const Map<String, String> stringsZh = {
   'sort_by_date_trashed': '按删除日期',
   'sort_asc': '升序',
   'sort_desc': '降序',
-  'photo_count': '{0} 张',
   'album_empty': '相册为空',
   'today': '今天',
   'yesterday': '昨天',

@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 
+import 'gallery_context_state.dart';
 import 'gallery_groups.dart' show GalleryGroups;
 import 'selected_files.dart';
 import 'thumbnail_widget.dart';
@@ -87,14 +88,19 @@ class _GalleryFileWidgetState extends State<GalleryFileWidget> {
     // 真机（cell 物理 ~316px）欠采样发糊。
     final mq = MediaQuery.of(context);
     final cellW =
-        (mq.size.width - 8 - (widget.photoGridSize - 1) * GalleryGroups.spacing) /
+        (mq.size.width -
+            8 -
+            (widget.photoGridSize - 1) * GalleryGroups.spacing) /
         widget.photoGridSize;
-    final thumbSize =
-        (cellW * mq.devicePixelRatio).round().clamp(160, 512);
+    final thumbSize = (cellW * mq.devicePixelRatio).round().clamp(160, 512);
     final Widget thumbnailWidget = ThumbnailWidget(
       widget.file,
       key: Key(heroTag),
       thumbnailSize: thumbSize,
+      // 收藏视图：全部是收藏项，红心徽标冗余 → 隐藏（外层
+      // GalleryContextState.hideFavoriteBadge 驱动）。
+      shouldShowFavoriteIcon:
+          !(GalleryContextState.of(context)?.hideFavoriteBadge ?? false),
     );
     final Widget hero = Hero(
       tag: heroTag,
@@ -107,10 +113,7 @@ class _GalleryFileWidgetState extends State<GalleryFileWidget> {
             toHeroContext,
           ) => (toHeroContext.widget as Hero).child,
       transitionOnUserGestures: true,
-      child: ClipRRect(
-        borderRadius: borderRadius,
-        child: thumbnailWidget,
-      ),
+      child: ClipRRect(borderRadius: borderRadius, child: thumbnailWidget),
     );
     if (_isFileSelected) {
       return Stack(
@@ -131,11 +134,7 @@ class _GalleryFileWidgetState extends State<GalleryFileWidget> {
           Positioned(
             right: 4,
             top: 4,
-            child: Icon(
-              Icons.check_circle,
-              size: 16,
-              color: AppColors.accent,
-            ),
+            child: Icon(Icons.check_circle, size: 16, color: AppColors.accent),
           ),
         ],
       );

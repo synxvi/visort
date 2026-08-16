@@ -10,9 +10,13 @@ class GalleryContextState extends InheritedWidget {
   final bool inSelectionMode;
   final GroupType type;
 
+  /// 收藏视图：所有项都是收藏项，红心徽标冗余 → 隐藏。
+  final bool hideFavoriteBadge;
+
   const GalleryContextState({
     this.inSelectionMode = false,
     this.type = GroupType.day,
+    this.hideFavoriteBadge = false,
     required this.sortOrderAsc,
     required super.child,
     super.key,
@@ -26,6 +30,7 @@ class GalleryContextState extends InheritedWidget {
   bool updateShouldNotify(GalleryContextState oldWidget) {
     return sortOrderAsc != oldWidget.sortOrderAsc ||
         inSelectionMode != oldWidget.inSelectionMode ||
-        type != oldWidget.type;
+        type != oldWidget.type ||
+        hideFavoriteBadge != oldWidget.hideFavoriteBadge;
   }
 }

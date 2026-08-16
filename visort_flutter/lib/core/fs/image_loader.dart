@@ -41,12 +41,17 @@ void evictImageCache(String mediaStoreId) {
   if (Platform.isAndroid) {
     // 缩略图：常见 size 逐个清理（_AndroidThumbnailProvider key = id+size）
     for (final size in const [200, 256, 300, 384]) {
-      cache.evict(_AndroidThumbnailProvider(
-          ref: imageRefFromMediaStoreId(mediaStoreId), size: size));
+      cache.evict(
+        _AndroidThumbnailProvider(
+          ref: imageRefFromMediaStoreId(mediaStoreId),
+          size: size,
+        ),
+      );
     }
     // 全图（_AndroidBytesImageProvider key = id+targetWidth，targetWidth=null）
-    cache.evict(_AndroidBytesImageProvider(
-        ref: imageRefFromMediaStoreId(mediaStoreId)));
+    cache.evict(
+      _AndroidBytesImageProvider(ref: imageRefFromMediaStoreId(mediaStoreId)),
+    );
   }
 }
 
@@ -88,8 +93,7 @@ Future<void> initMaxDecodePixels() async {
   final ramMb = await MediaStoreChannel().totalRamMb();
   if (ramMb == null) return;
   final base = ramMb < 5 * 1024 ? 24000000 : 100000000;
-  _cachedMaxDecodePixels =
-      base < 50000000 ? base : 50000000; // min(50MP, base)
+  _cachedMaxDecodePixels = base < 50000000 ? base : 50000000; // min(50MP, base)
 }
 
 /// 安卓端从 MediaStore 读字节的 ImageProvider。
@@ -102,7 +106,8 @@ class _AndroidBytesImageProvider
 
   @override
   Future<_AndroidBytesImageProvider> obtainKey(
-      ImageConfiguration configuration) {
+    ImageConfiguration configuration,
+  ) {
     return SynchronousFuture<_AndroidBytesImageProvider>(this);
   }
 
@@ -139,8 +144,12 @@ class _AndroidBytesImageProvider
             .readSampledImage(key.ref.relativePath, targetWidth: tw)
             .timeout(const Duration(seconds: 5));
         final sBuffer = await ui.ImmutableBuffer.fromUint8List(r.pixels);
-        final desc = ui.ImageDescriptor.raw(sBuffer,
-            width: r.width, height: r.height, pixelFormat: ui.PixelFormat.rgba8888);
+        final desc = ui.ImageDescriptor.raw(
+          sBuffer,
+          width: r.width,
+          height: r.height,
+          pixelFormat: ui.PixelFormat.rgba8888,
+        );
         return desc.instantiateCodec();
       } catch (_) {
         // readSampledImage 失败(超时/channel/解码)→ 落到下面 readBytes 兜底
@@ -148,34 +157,42 @@ class _AndroidBytesImageProvider
     }
     final bytes = await _fs.readBytes(key.ref);
     final buffer = await ui.ImmutableBuffer.fromUint8List(
-        bytes is Uint8List ? bytes : Uint8List.fromList(bytes));
+      bytes is Uint8List ? bytes : Uint8List.fromList(bytes),
+    );
     if (tw != null && tw > 0) {
       if (isGif) {
         // GIF:不降采样,全尺寸解码保全部帧(GIF 文件通常几 MB,可接受)。
         return decode(buffer);
       }
-      return decode(buffer,
-          getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
-        return ui.TargetImageSize(width: tw);
-      });
+      return decode(
+        buffer,
+        getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
+          return ui.TargetImageSize(width: tw);
+        },
+      );
     }
     // [ente 对齐] 全分辨率路径（HD/GIF）解码兜底：超过防崩阈值
     //（RAM 相关，见 _initMaxDecodePixels）等比降采样；未超阈值返回原始
     // 尺寸（getTargetSize 非空返回，等效全分辨率解码）。
-    return decode(buffer,
-        getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
-      final px = intrinsicWidth * intrinsicHeight;
-      final max = _cachedMaxDecodePixels;
-      if (px <= max) {
-        return ui.TargetImageSize(
-            width: intrinsicWidth, height: intrinsicHeight);
-      }
-      final aspect = intrinsicWidth / intrinsicHeight;
-      final targetH = math.sqrt(max / aspect);
-      final targetW = (aspect * targetH).round();
-      return ui.TargetImageSize(width: targetW, height: targetH.round());
-    });
+    return decode(
+      buffer,
+      getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
+        final px = intrinsicWidth * intrinsicHeight;
+        final max = _cachedMaxDecodePixels;
+        if (px <= max) {
+          return ui.TargetImageSize(
+            width: intrinsicWidth,
+            height: intrinsicHeight,
+          );
+        }
+        final aspect = intrinsicWidth / intrinsicHeight;
+        final targetH = math.sqrt(max / aspect);
+        final targetW = (aspect * targetH).round();
+        return ui.TargetImageSize(width: targetW, height: targetH.round());
+      },
+    );
   }
+
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
@@ -206,14 +223,22 @@ const int kThumbnailPlaceholderSize = 128;
 /// 安卓端优先走 MediaStore loadThumbnail（API 29+，系统级高效缩略图），
 /// 低版本回退 readBytes 全图 + targetWidth 下采样。
 /// Windows 端用 ResizeImage 包 FileImage 做下采样。
-ImageProvider buildThumbnailProvider(ImageRef ref,
-    {int size = 256, int? dateModifiedMs}) {
+ImageProvider buildThumbnailProvider(
+  ImageRef ref, {
+  int size = 256,
+  int? dateModifiedMs,
+}) {
   if (Platform.isAndroid) {
     return _AndroidThumbnailProvider(
-        ref: ref, size: size, dateModifiedMs: dateModifiedMs);
+      ref: ref,
+      size: size,
+      dateModifiedMs: dateModifiedMs,
+    );
   }
-  return ResizeImage(FileImage(File(p.join(ref.root, ref.relativePath))),
-      width: size);
+  return ResizeImage(
+    FileImage(File(p.join(ref.root, ref.relativePath))),
+    width: size,
+  );
 }
 
 /// 由 MediaStore _ID 直接构造 ImageRef（供相册网格临时包装用）。
@@ -245,7 +270,9 @@ class _AndroidThumbnailProvider
   final int? dateModifiedMs;
 
   @override
-  Future<_AndroidThumbnailProvider> obtainKey(ImageConfiguration configuration) {
+  Future<_AndroidThumbnailProvider> obtainKey(
+    ImageConfiguration configuration,
+  ) {
     return SynchronousFuture<_AndroidThumbnailProvider>(this);
   }
 
@@ -268,10 +295,12 @@ class _AndroidThumbnailProvider
     // 时序安全：Image 添加 listener 是同步的，microtask 在 listener 之后执行。
     scheduleMicrotask(() {
       // ignore: invalid_use_of_protected_member
-      completer.reportImageChunkEvent(const ImageChunkEvent(
-        cumulativeBytesLoaded: 1,
-        expectedTotalBytes: null,
-      ));
+      completer.reportImageChunkEvent(
+        const ImageChunkEvent(
+          cumulativeBytesLoaded: 1,
+          expectedTotalBytes: null,
+        ),
+      );
     });
     return completer;
   }
@@ -283,9 +312,12 @@ class _AndroidThumbnailProvider
     // 先试系统缩略图（API 29+）。空数组 = 低版本不支持，回退全图。
     Uint8List bytes;
     try {
-      bytes = await _msChannel.readThumbnail(key.ref.id,
-          width: key.size, height: key.size,
-          dateModifiedMs: key.dateModifiedMs);
+      bytes = await _msChannel.readThumbnail(
+        key.ref.id,
+        width: key.size,
+        height: key.size,
+        dateModifiedMs: key.dateModifiedMs,
+      );
     } catch (_) {
       bytes = Uint8List(0);
     }
@@ -295,10 +327,12 @@ class _AndroidThumbnailProvider
       bytes = raw is Uint8List ? raw : Uint8List.fromList(raw);
     }
     final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
-    return decode(buffer,
-        getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
-      return ui.TargetImageSize(width: key.size);
-    });
+    return decode(
+      buffer,
+      getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
+        return ui.TargetImageSize(width: key.size);
+      },
+    );
   }
 
   @override

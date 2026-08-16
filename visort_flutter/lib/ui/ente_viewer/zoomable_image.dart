@@ -19,7 +19,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:photo_view/photo_view.dart';
-import 'package:photo_view/src/core/photo_view_core.dart' show PhotoViewCoreState;
+import 'package:photo_view/src/core/photo_view_core.dart'
+    show PhotoViewCoreState;
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
@@ -39,13 +40,17 @@ class ZoomableImage extends StatefulWidget {
   final Function(bool)? shouldDisableScroll;
   final String? tagPrefix;
   final Decoration? backgroundDecoration;
+
   /// 上滑（>8px）→ 详情面板（visort 适配：外层 DetailPage 决定展示）。
   final VoidCallback? onSwipeUp;
+
   /// [photo_view fork] X 边缘溢出回调：放大后平移到 X 边缘继续拖
   /// （+1 右拖→上一张，-1 左拖→下一张，由外层 DetailPage 翻页）。
   final ValueChanged<int>? onEdgeX;
+
   /// 下滑（>8px）→ 返回（visort 适配：外层 DetailPage 面板打开时改为收面板）。
   final VoidCallback? onSwipeDown;
+
   /// 原图（下采样）就绪回调（外层记录 id，退出时 evict 缓存）。
   final ValueChanged<String>? onFullLoaded;
 
@@ -73,9 +78,13 @@ class ZoomableImage extends StatefulWidget {
 
 class _ZoomableImageState extends State<ZoomableImage> {
   /// PhotoViewCore 全局键：顶层双击 → doubleTapZoom 入口。
-  final GlobalKey<PhotoViewCoreState> _coreKey = GlobalKey<PhotoViewCoreState>();
+  final GlobalKey<PhotoViewCoreState> _coreKey =
+      GlobalKey<PhotoViewCoreState>();
   InheritedDetailPageState? _inherited;
 
+  /// 加载代际：换图（didUpdateWidget）时自增；旧图 precache 回调按代际
+  /// 丢弃，防止删除补位后旧图 large/final 迟到覆盖新图 provider。
+  int _loadGeneration = 0;
   ImageProvider? _imageProvider;
   bool _loadedSmallThumbnail = false;
   bool _loadingLargeThumbnail = false;
@@ -125,6 +134,24 @@ class _ZoomableImageState extends State<ZoomableImage> {
   }
 
   @override
+  void didUpdateWidget(covariant ZoomableImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.photo.id == widget.photo.id) return;
+    // 删除补位：PageView 同 index 复用本 state 但 photo 已换——必须整体
+    // 重置三级加载链与缩放，否则沿用旧 provider = 主图停留被删那张。
+    // 起始 provider 按 ImageCache 分级取最高可用级：补位图（原下一张）
+    // 通常已完成三级加载（原图在 cache）→ 直接原图，同帧显示、无
+    // "缩略图回退再渐进"闪烁；未命中则退 512/cell，观感同首次渐进。
+    _loadGeneration++;
+    _pickCachedProvider();
+    _showingThumbnailFallback = false;
+    _firedOnReady = false;
+    _initialScale = null;
+    _photoViewController.reset();
+    _scaleStateController.reset();
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     // 无条件设 cell 同款缩略图 provider → PhotoView（含 Hero）首帧必存在，
@@ -136,8 +163,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // dependOnInheritedWidgetOfExactType assert（红屏）；didChangeDependencies
     // 在 initState 之后、首帧 build 之前执行，Hero 首帧不受影响。
     if (_imageProvider == null) {
-      _imageProvider = buildThumbnailProvider(_ref, size: _cellThumbSize());
-      _loadedSmallThumbnail = true;
+      _pickCachedProvider();
       _notifyReadyOnce();
     }
     _inherited = InheritedDetailPageState.maybeOf(context);
@@ -147,12 +173,48 @@ class _ZoomableImageState extends State<ZoomableImage> {
     }
   }
 
+  /// 初始 provider 按 ImageCache 分级取最高可用级（原图 > 512 > cell）。
+  /// 删除补位/翻页切到已加载过的图时，若从 cell 缩略图起步再升级原图，
+  /// 会有一帧"糊图→清晰图"跳变闪烁；cache 命中直接同帧显示最高级。
+  /// didChangeDependencies（新 element）与 didUpdateWidget（复用 element）
+  /// 共用。
+  void _pickCachedProvider() {
+    final cache = PaintingBinding.instance.imageCache;
+    final full = buildImageProvider(
+      _ref,
+      targetWidth: computeViewerTargetWidth(
+        MediaQuery.sizeOf(context).width *
+            MediaQuery.devicePixelRatioOf(context),
+      ),
+    );
+    final large = buildThumbnailProvider(_ref, size: 512);
+    if (cache.containsKey(full)) {
+      _imageProvider = full;
+      _loadedFinalImage = true;
+      _loadedSmallThumbnail = true;
+      _loadedLargeThumbnail = true;
+    } else if (cache.containsKey(large)) {
+      _imageProvider = large;
+      _loadedLargeThumbnail = true;
+      _loadedSmallThumbnail = true;
+    } else {
+      // 无条件 cell 缩略图兜底 → PhotoView（含 Hero）首帧必存在，
+      // push 飞行层才能启动（否则 imageProvider 未就绪时 build 的是
+      // loading，无 Hero → flight 不启动 → 黑屏后加载，真机复现）。
+      _imageProvider = buildThumbnailProvider(_ref, size: _cellThumbSize());
+      _loadedSmallThumbnail = true;
+    }
+    _loadingLargeThumbnail = false;
+    // 保持 false：让 _loadLocalImage 正常启动缺失级别的加载（若置 true
+    // 会阻塞对应分支的 precache，又没有实际加载在跑 → 缩略图永不清晰）。
+    _loadingFinalImage = false;
+  }
+
   /// 顶层双击（global）→ core 局部坐标 → 精准缩放。
   void _handleTopDoubleTap(Offset globalPosition) {
     final box = context.findRenderObject();
     if (box is! RenderBox || !box.hasSize) return;
-    _coreKey.currentState
-        ?.doubleTapZoom(box.globalToLocal(globalPosition));
+    _coreKey.currentState?.doubleTapZoom(box.globalToLocal(globalPosition));
   }
 
   void _subscribeToZoomStream() {
@@ -307,21 +369,26 @@ class _ZoomableImageState extends State<ZoomableImage> {
         !_loadedLargeThumbnail &&
         !_loadedFinalImage) {
       _loadingLargeThumbnail = true;
+      final gen = _loadGeneration;
       final large = buildThumbnailProvider(_ref, size: 512);
-      precacheImage(large, context).then((_) {
-        if (mounted && !_loadedFinalImage) {
-          setState(() {
-            _imageProvider = large;
-            _loadedLargeThumbnail = true;
+      precacheImage(large, context)
+          .then((_) {
+            if (!mounted || gen != _loadGeneration) return;
+            if (!_loadedFinalImage) {
+              setState(() {
+                _imageProvider = large;
+                _loadedLargeThumbnail = true;
+              });
+              _notifyReadyOnce();
+            }
+          })
+          .catchError((_) {
+            if (gen == _loadGeneration) _loadingLargeThumbnail = false;
           });
-          _notifyReadyOnce();
-        }
-      }).catchError((_) {
-        _loadingLargeThumbnail = false;
-      });
     }
     if (!_loadingFinalImage && !_loadedFinalImage) {
       _loadingFinalImage = true;
+      final gen = _loadGeneration;
       final full = buildImageProvider(
         _ref,
         targetWidth: computeViewerTargetWidth(
@@ -329,18 +396,22 @@ class _ZoomableImageState extends State<ZoomableImage> {
               MediaQuery.devicePixelRatioOf(context),
         ),
       );
-      precacheImage(full, context).then((_) {
-        if (mounted && !_loadedFinalImage) {
-          _updateViewWithFinalImage(full);
-        }
-      }).catchError((Object e) {
-        _loadingFinalImage = false;
-        if (mounted) {
-          // 原图解码失败（损坏/超时）：回退大缩略图显示，不崩不黑屏。
-          setState(() => _showingThumbnailFallback = true);
-          _notifyReadyOnce();
-        }
-      });
+      precacheImage(full, context)
+          .then((_) {
+            if (!mounted || gen != _loadGeneration) return;
+            if (!_loadedFinalImage) {
+              _updateViewWithFinalImage(full);
+            }
+          })
+          .catchError((Object e) {
+            if (gen != _loadGeneration) return;
+            _loadingFinalImage = false;
+            if (mounted) {
+              // 原图解码失败（损坏/超时）：回退大缩略图显示，不崩不黑屏。
+              setState(() => _showingThumbnailFallback = true);
+              _notifyReadyOnce();
+            }
+          });
     }
   }
 
@@ -377,7 +448,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
         ? previousScale / _initialScale!
         : null;
     final scale =
-        previousScale / (finalImageInfo.image.width / prevImageInfo.image.width);
+        previousScale /
+        (finalImageInfo.image.width / prevImageInfo.image.width);
     final currentPosition = _photoViewController.value.position;
     unawaited(_zoomStreamSubscription?.cancel());
     _photoViewController = PhotoViewController(
@@ -408,7 +480,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
         stream.removeListener(listener);
       },
       onError: (Object e, StackTrace? s) {
-        if (!completer.isCompleted) completer.completeError(e, s ?? StackTrace.empty);
+        if (!completer.isCompleted)
+          completer.completeError(e, s ?? StackTrace.empty);
         stream.removeListener(listener);
       },
     );
@@ -423,7 +496,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
     final mq = MediaQuery.of(context);
     final cols = widget.gridCols;
     // 与 album_screen 网格一致：4×2 padding + (cols-1)*2 间距（ente Gallery）。
-    final cellW = (mq.size.width - 8 - (cols - 1) * GalleryGroups.spacing) / cols;
+    final cellW =
+        (mq.size.width - 8 - (cols - 1) * GalleryGroups.spacing) / cols;
     return (cellW * mq.devicePixelRatio).round().clamp(160, 512);
   }
 }

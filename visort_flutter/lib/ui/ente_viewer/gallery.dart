@@ -79,6 +79,9 @@ class Gallery extends StatefulWidget {
   /// 是否处于多选模式（透传给 GalleryContextState，供子组件读取）。
   final bool inSelectionMode;
 
+  /// 收藏视图：隐藏缩略图红心徽标（透传 GalleryContextState）。
+  final bool hideFavoriteBadge;
+
   /// 点击回调，透传给 GalleryFileWidget（外层处理选中切换/路由）。
   final ValueChanged<MsImageInfo>? onFileTap;
 
@@ -89,6 +92,7 @@ class Gallery extends StatefulWidget {
 
   const Gallery({
     required this.allFiles,
+
     /// 外部滚动控制器（外层 Hero 返回定位/拖拽手柄复用）；null 时内部自建。
     this.scrollController,
     this.tagPrefix = 'photo',
@@ -101,6 +105,7 @@ class Gallery extends StatefulWidget {
     this.emptyState,
     this.showSelectAll = true,
     this.inSelectionMode = false,
+    this.hideFavoriteBadge = false,
     this.onFileTap,
     this.onFileLongPress,
     super.key,
@@ -245,22 +250,23 @@ class GalleryState extends State<Gallery> {
 
     final cellWidth =
         (MediaQuery.sizeOf(context).width -
-                8 -
-                (widget.crossAxisCount - 1) * GalleryGroups.spacing) /
+            8 -
+            (widget.crossAxisCount - 1) * GalleryGroups.spacing) /
         widget.crossAxisCount;
 
     final grid = GalleryContextState(
       sortOrderAsc: _sortOrderAsc,
       inSelectionMode: widget.inSelectionMode,
+      hideFavoriteBadge: widget.hideFavoriteBadge,
       type: _groupType,
       child: _allGalleryFiles.isEmpty
           ? (widget.emptyState ??
-              const Center(
-                child: Text(
-                  '没有照片',
-                  style: TextStyle(color: AppColors.muted, fontSize: 14),
-                ),
-              ))
+                const Center(
+                  child: Text(
+                    '没有照片',
+                    style: TextStyle(color: AppColors.muted, fontSize: 14),
+                  ),
+                ))
           : Stack(
               clipBehavior: Clip.none,
               children: [
@@ -268,9 +274,7 @@ class GalleryState extends State<Gallery> {
                   physics: const BouncingScrollPhysics(),
                   controller: _scrollController,
                   slivers: [
-                    SectionedListSliver(
-                      sectionLayouts: groups.groupLayouts,
-                    ),
+                    SectionedListSliver(sectionLayouts: groups.groupLayouts),
                   ],
                 ),
                 if (groups.groupType.showGroupHeader())

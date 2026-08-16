@@ -25,7 +25,8 @@ import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 
-import 'package:visort_flutter/ui/ente_viewer/gallery.dart' show Gallery;import 'package:visort_flutter/ui/ente_viewer/gallery_groups.dart';
+import 'package:visort_flutter/ui/ente_viewer/gallery.dart' show Gallery;
+import 'package:visort_flutter/ui/ente_viewer/gallery_groups.dart';
 import 'package:visort_flutter/ui/ente_viewer/gallery_boundaries_provider.dart';
 import 'package:visort_flutter/ui/ente_viewer/gallery_files_inherited_widget.dart';
 import 'package:visort_flutter/ui/ente_viewer/group_type.dart';
@@ -63,6 +64,7 @@ class AlbumScreen extends ConsumerStatefulWidget {
 
 class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   late final ScrollController _scrollCtrl = ScrollController();
+
   /// 日期视图独立的滚动控制器（与沉浸网格分用，避免切换视图时
   /// ScrollController 同时 attached 到两个 scrollable 触发断言）。
   final ScrollController _timelineScrollCtrl = ScrollController();
@@ -79,8 +81,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   // ── 批量选择模式：长按 cell 进入，勾选后底部操作栏执行批量操作 ──
   bool _selectMode = false;
   final Set<String> _selectedIds = {};
+
   /// ente Gallery 选择态（勾选渲染用）；_selectedIds 保持真源，双向同步。
   final SelectedFiles _selection = SelectedFiles();
+
   /// 视图模式：false=沉浸网格(默认)；true=日期分组视图。
   bool _timelineView = false;
 
@@ -120,8 +124,9 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   void _toggleViewMode() {
     setState(() => _timelineView = !_timelineView);
     // 持久化视图偏好（重进相册保持）。
-    ref.read(configProvider.notifier).state =
-        ref.read(configProvider).copyWith(photoTimelineView: _timelineView);
+    ref.read(configProvider.notifier).state = ref
+        .read(configProvider)
+        .copyWith(photoTimelineView: _timelineView);
     if (_timelineView) {
       final c = ref.read(galleryControllerProvider);
       if (c.effectivePhotoSortBy != SortBy.dateCreated) {
@@ -283,18 +288,35 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                   // 与首页顶栏一致的排版：SortToggle 右移 14 贴近右侧按钮
                   Transform.translate(
                     offset: const Offset(14, 0),
-                    child: SortToggle(
-                      // 日期视图固定按创建日期，只留升/降序
-                      sortBy: _timelineView
-                          ? SortBy.dateCreated
-                          : gallery.effectivePhotoSortBy,
-                      asc: gallery.photoSortAsc,
-                      dateOnly: _timelineView,
-                      // 回收站视图额外提供「按删除日期」
-                      showDateTrashed: widget.trashedOnly,
-                      onChanged: (by, asc) => ref
-                          .read(galleryControllerProvider.notifier)
-                          .setPhotoSort(by, asc),
+                    child: Padding(
+                      // 收藏/回收站没有右侧视图切换按钮(48px)——补右距
+                      // 对齐普通相册排序图标位置（否则紧贴屏幕右缘）。
+                      padding: EdgeInsets.only(
+                        // 收藏/回收站没有右侧视图切换按钮(48px)——补右距
+                        // 对齐标准 action 图标边距（视觉距右缘 ~18px）。
+                        right: (widget.favoritesOnly || widget.trashedOnly)
+                            ? 24
+                            : 0,
+                      ),
+                      child: SortToggle(
+                        // 日期视图固定按创建日期，只留升/降序
+                        sortBy: _timelineView
+                            ? SortBy.dateCreated
+                            : gallery.effectivePhotoSortBy,
+                        asc: gallery.photoSortAsc,
+                        // dateOnly 仅在日期视图实际生效时（收藏/回收站
+                        // 不走日期视图 body，但 _timelineView 若从普通相册
+                        // 偏好恢复为 true，会把菜单误砍成只剩升/降序）。
+                        dateOnly:
+                            _timelineView &&
+                            !widget.favoritesOnly &&
+                            !widget.trashedOnly,
+                        // 回收站视图额外提供「按删除日期」
+                        showDateTrashed: widget.trashedOnly,
+                        onChanged: (by, asc) => ref
+                            .read(galleryControllerProvider.notifier)
+                            .setPhotoSort(by, asc),
+                      ),
                     ),
                   ),
                   // 视图切换（排序组件右侧；仅普通相册，收藏/回收站保持沉浸）
@@ -307,40 +329,29 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                         color: AppColors.text,
                       ),
                       tooltip: t(
-                          ref, _timelineView ? 'view_immersive' : 'view_date'),
+                        ref,
+                        _timelineView ? 'view_immersive' : 'view_date',
+                      ),
                       onPressed: _toggleViewMode,
                     ),
                 ],
         ),
-        // [ente 对齐] 排序/视图切换内容交叉淡入 150ms
-        //（albums_tab _kContentTransitionDuration：easeInQuart 进 / easeOutExpo 出）。
+        // 视图切换淡入（TweenAnimationBuilder）：AnimatedSwitcher 的交叉
+        // 淡化要求新旧 child **同时挂载**——两个视图的 Gallery 共享
+        // ScrollController 时双 attach 崩溃（"ScrollController attached
+        // to multiple scroll views"，模拟器红屏实证：视图切换/排序切换
+        // 均触发）。TweenAnimationBuilder key 变化时旧 child 先卸载
+        // （scrollable detach）再挂新 child 淡入——无重叠挂载，保留淡入
+        // 效果且彻底杜绝双 attach 崩溃。
         body: SafeArea(
-          child: AnimatedSwitcher(
+          child: TweenAnimationBuilder<double>(
+            key: ValueKey(_timelineView),
+            tween: Tween(begin: 0.0, end: 1.0),
             duration: AppDurations.enteContentSwitch,
-            switchInCurve: Curves.easeInQuart,
-            switchOutCurve: Curves.easeOutExpo,
-            layoutBuilder: (currentChild, previousChildren) => Stack(
-              fit: StackFit.expand,
-              children: [
-                for (final previous in previousChildren)
-                  Positioned.fill(child: previous),
-                if (currentChild != null) Positioned.fill(child: currentChild),
-              ],
-            ),
-            transitionBuilder: (child, animation) =>
-                FadeTransition(opacity: animation, child: child),
-            // 排序变化交叉淡入（key 只含排序——含 _timelineView 时切到日期
-            // 视图会连续两次 key 变化（视图+排序）：动画 #1 启动即被 #2
-            // 打断，旧网格淡出动画卡在半透明 = 顶栏以下灰遮罩（复现）。
-            // 视图切换直接换 child（无动画），排序变化仍交叉淡入且只
-            // 触发一次（setPhotoSort 异步，视图已直换后 key 才变）。
-            child: KeyedSubtree(
-              key: ValueKey((
-                gallery.effectivePhotoSortBy,
-                gallery.photoSortAsc,
-              )),
-              child: _buildBody(gallery),
-            ),
+            curve: Curves.easeOut,
+            builder: (_, opacity, child) =>
+                Opacity(opacity: opacity, child: child),
+            child: _buildBody(gallery),
           ),
         ),
         // 批量选择模式：底部操作栏（按视图模式提供不同批量操作）
@@ -427,25 +438,35 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       key: const ValueKey('grid'),
       child: GalleryFilesState(
         child: Gallery(
-      allFiles: photos,
-      tagPrefix: 'photo',
-      groupType: GroupType.none,
-      selectedFiles: _selectMode ? _selection : null,
-      inSelectionMode: _selectMode,
-      crossAxisCount: cols,
-      sortOrderAsc: !gallery.photoSortAsc,
-      scrollController: _scrollCtrl,
-      emptyState: const SizedBox.shrink(),
-      onFileTap: (file) {
-        final i = photos.indexOf(file);
-        if (i < 0) return;
-        _selectMode
-            ? _toggleSelect(file.id)
-            : _openViewer(context, gallery, photos, i, null);
-      },
-      onFileLongPress: (file) {
-        if (!_selectMode) _enterSelectMode(file.id);
-      },
+          allFiles: photos,
+          tagPrefix: 'photo',
+          groupType: GroupType.none,
+          // selectedFiles 恒传（非选择模式 files 为空）：保证 Gallery 内
+          // SelectionState 包裹结构恒定——若按 _selectMode 切 null，进入/
+          // 退出选择模式时 child 位置变化导致网格子树整体重建（无 GlobalKey
+          // → 旧 CustomScrollView 未 detach 新的已 attach）→ debug 红屏
+          // "attached to multiple scroll views"、release 渲染 ErrorWidget
+          // 灰盒 + AnimatedSwitcher 淡化 = 半透明灰遮罩盖住网格。
+          selectedFiles: _selection,
+          // 非选择模式组头/PinnedGroupHeader 不显示全选圈。
+          showSelectAll: _selectMode,
+          inSelectionMode: _selectMode,
+          // 收藏视图：所有项都是收藏项，红心徽标冗余 → 隐藏。
+          hideFavoriteBadge: widget.favoritesOnly,
+          crossAxisCount: cols,
+          sortOrderAsc: !gallery.photoSortAsc,
+          scrollController: _scrollCtrl,
+          emptyState: const SizedBox.shrink(),
+          onFileTap: (file) {
+            final i = photos.indexOf(file);
+            if (i < 0) return;
+            _selectMode
+                ? _toggleSelect(file.id)
+                : _openViewer(context, gallery, photos, i, null);
+          },
+          onFileLongPress: (file) {
+            if (!_selectMode) _enterSelectMode(file.id);
+          },
         ),
       ),
     );
@@ -481,25 +502,29 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       key: const ValueKey('timeline'),
       child: GalleryFilesState(
         child: Gallery(
-      allFiles: photos,
-      tagPrefix: 'photo',
-      groupType: GroupType.day,
-      selectedFiles: _selectMode ? _selection : null,
-      inSelectionMode: _selectMode,
-      crossAxisCount: cols,
-      sortOrderAsc: !gallery.photoSortAsc,
-      scrollController: _timelineScrollCtrl,
-      emptyState: const SizedBox.shrink(),
-      onFileTap: (file) {
-        final i = photos.indexOf(file);
-        if (i < 0) return;
-        _selectMode
-            ? _toggleSelect(file.id)
-            : _openViewer(context, gallery, photos, i, null);
-      },
-      onFileLongPress: (file) {
-        if (!_selectMode) _enterSelectMode(file.id);
-      },
+          allFiles: photos,
+          tagPrefix: 'photo',
+          groupType: GroupType.day,
+          // 同沉浸视图：selectedFiles 恒传防网格子树重建（双 attach 红屏/
+          // release 灰遮罩）；组头全选圈仅选择模式显示。
+          selectedFiles: _selection,
+          showSelectAll: _selectMode,
+          inSelectionMode: _selectMode,
+          hideFavoriteBadge: widget.favoritesOnly,
+          crossAxisCount: cols,
+          sortOrderAsc: !gallery.photoSortAsc,
+          scrollController: _timelineScrollCtrl,
+          emptyState: const SizedBox.shrink(),
+          onFileTap: (file) {
+            final i = photos.indexOf(file);
+            if (i < 0) return;
+            _selectMode
+                ? _toggleSelect(file.id)
+                : _openViewer(context, gallery, photos, i, null);
+          },
+          onFileLongPress: (file) {
+            if (!_selectMode) _enterSelectMode(file.id);
+          },
         ),
       ),
     );
@@ -917,7 +942,9 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     // targetWidth 必须与 photo_viewer computeViewerTargetWidth 同值（ImageCache key）。
     final info = photos[index];
     final imgRef = imageRefFromMediaStoreId(
-        info.id, extension: extOf(info.name));
+      info.id,
+      extension: extOf(info.name),
+    );
     precacheImage(
       buildImageProvider(
         imgRef,
@@ -974,4 +1001,3 @@ class _ThumbGridPlaceholder extends StatelessWidget {
     );
   }
 }
-

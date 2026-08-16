@@ -253,9 +253,12 @@ class GalleryController extends Notifier<GalleryState> {
         final id = state.bucketId;
         if (id != null) await enterBucket(id, silent: true);
       case GalleryView.favorites:
-        await enterFavorites();
+        // silent：切排序保留旧数据直到新数据到达（与 bucket 分支一致）。
+        // 否则 photos 清空 → UI 渲染灰格占位网格 + AnimatedSwitcher
+        // crossfade 叠加 = 收藏/回收站切排序"灰色遮罩"。
+        await enterFavorites(silent: true);
       case GalleryView.trash:
-        await enterTrash();
+        await enterTrash(silent: true);
       case GalleryView.albums:
         break;
     }

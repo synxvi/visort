@@ -51,9 +51,22 @@ class ImageRef {
   String get name => p.split(relativePath).last;
 
   /// 用户可见文件名：优先 [displayName]，回退 [name]。两端通用。
-  String get label => (displayName != null && displayName!.isNotEmpty)
-      ? displayName!
-      : name;
+  String get label =>
+      (displayName != null && displayName!.isNotEmpty) ? displayName! : name;
+
+  /// 值等值：ImageCache key（provider 等值）依赖本类字段相等——
+  /// 缺省 identity 会让"同参数两次构造"的 provider 永远 cache miss
+  ///（删除补位时 containsKey 分级全部失灵 → 回退缩略图闪烁）。
+  @override
+  bool operator ==(Object other) =>
+      other is ImageRef &&
+      other.root == root &&
+      other.relativePath == relativePath &&
+      other.extension == extension &&
+      other.displayName == displayName;
+
+  @override
+  int get hashCode => Object.hash(root, relativePath, extension, displayName);
 
   /// 供 Desktop 实现拼接完整路径用
   String absolutePathOn(String rootPath) => p.join(rootPath, relativePath);
