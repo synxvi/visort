@@ -8,6 +8,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 
+import 'gallery_context_state.dart';
 import 'selected_files.dart';
 
 class GroupHeaderWidget extends StatefulWidget {
@@ -83,6 +84,14 @@ class _GroupHeaderWidgetState extends State<GroupHeaderWidget> {
 
   @override
   Widget build(BuildContext context) {
+    // 圈显示/点击以 GalleryContextState.inSelectionMode（实时，InheritedWidget
+    // 随选择模式切换重建所有依赖子树）为准——widget.showSelectAll 是
+    // GalleryGroups 构造时的快照，选择模式切换不触发重新分组，滚动组头
+    // 会停留在旧值（实测：切换后只有 PinnedGroupHeader 吸附头有圈，
+    // 其余组头无圈）。
+    final selectAll =
+        GalleryContextState.of(context)?.inSelectionMode ??
+        widget.showSelectAll;
     // 组头整行手势（aves 交互）：选择模式点击 = 切换该组全选（扩大点击面，
     // 不必精确点圈）；非选择模式长按 = 进入选择模式并全选该组。
     Widget header = SizedBox(
@@ -107,7 +116,7 @@ class _GroupHeaderWidgetState extends State<GroupHeaderWidget> {
               ),
             ),
           ),
-          widget.showSelectAll
+          selectAll
               ? GestureDetector(
                   behavior: HitTestBehavior.translucent,
                   onTap: _toggleGroup,
@@ -122,7 +131,9 @@ class _GroupHeaderWidgetState extends State<GroupHeaderWidget> {
                   ),
                 )
               : const SizedBox.shrink(),
-          const SizedBox(width: 16),
+          // 尾距 12：圈中心（≈25px）与顶栏 AppBar action 图标中心（≈24px）
+          // 垂直对齐。
+          const SizedBox(width: 12),
         ],
       ),
     );
@@ -130,7 +141,7 @@ class _GroupHeaderWidgetState extends State<GroupHeaderWidget> {
     if (longPress != null) {
       header = GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: widget.showSelectAll ? _toggleGroup : null,
+        onTap: selectAll ? _toggleGroup : null,
         onLongPress: () => longPress(widget.filesInGroup),
         child: header,
       );
