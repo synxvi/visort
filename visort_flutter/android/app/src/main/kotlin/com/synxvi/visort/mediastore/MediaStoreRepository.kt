@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.IntentSender
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
@@ -193,6 +194,8 @@ class MediaStoreRepository(private val context: Context) {
             // 原图像素尺寸（viewer 双击自适应铺满按宽高比算 coverRatio；损坏项为 0）
             add(MediaStore.Images.Media.WIDTH)
             add(MediaStore.Images.Media.HEIGHT)
+            // EXIF 方向（0/90/180/270）：HEIC 尺寸复核时交换宽高用（对齐 Q+ 显示尺寸语义）
+            add(MediaStore.Images.Media.ORIENTATION)
             // IS_FAVORITE 仅 Android R+ 存在；低版本不加该列，解析时 getColumnIndex 返回 -1 当 false
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 add(MediaStore.Images.Media.IS_FAVORITE)
@@ -297,6 +300,7 @@ class MediaStoreRepository(private val context: Context) {
                 // WIDTH/HEIGHT：标准列（全版本），个别格式/损坏项可能无值（-1 或 null → 0）
                 val idxWidth = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
                 val idxHeight = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
+                val idxOrient = cursor.getColumnIndex(MediaStore.Images.Media.ORIENTATION)
 
                 var lastSortRaw = ""
                 var lastId = ""
@@ -325,8 +329,23 @@ class MediaStoreRepository(private val context: Context) {
                     val isTrashed = idxTrash >= 0 && !cursor.isNull(idxTrash) && cursor.getInt(idxTrash) == 1
                     val dateTrashed = if (idxDateExpires >= 0 && !cursor.isNull(idxDateExpires))
                         cursor.getLong(idxDateExpires) * 1000 else 0L
-                    val imgWidth = if (idxWidth >= 0 && !cursor.isNull(idxWidth)) cursor.getInt(idxWidth) else 0
-                    val imgHeight = if (idxHeight >= 0 && !cursor.isNull(idxHeight)) cursor.getInt(idxHeight) else 0
+                    var imgWidth = if (idxWidth >= 0 && !cursor.isNull(idxWidth)) cursor.getInt(idxWidth) else 0
+                    var imgHeight = if (idxHeight >= 0 && !cursor.isNull(idxHeight)) cursor.getInt(idxHeight) else 0
+                    // HEIC/HEIF：MediaStore 对部分机型报错误尺寸（aves 同修，见
+                    // aves MediaStoreImageProvider 复核逻辑）——inJustDecodeBounds
+                    // 读容器真实尺寸覆盖。仅 HEIC 行付一次流头读成本，JPEG/PNG 零开销。
+                    if (mime == "image/heic" || mime == "image/heif") {
+                        val orient = if (idxOrient >= 0 && !cursor.isNull(idxOrient)) cursor.getInt(idxOrient) else 0
+                        val longId = id.toLongOrNull()
+                        if (longId != null) {
+                            val uri = ContentUris.withAppendedId(
+                                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
+                            )
+                            heicVerifiedSize(uri, orient)?.let { (w, h) ->
+                                imgWidth = w; imgHeight = h
+                            }
+                        }
+                    }
                     results.add(MsImageInfo(id, name, size, mime, bucketId, dateAdded, dateModified, isFavorite, isTrashed, dateTrashed, imgWidth, imgHeight))
                     lastSortRaw = cursor.getString(idxSort) ?: ""
                     lastId = id
@@ -397,6 +416,8 @@ class MediaStoreRepository(private val context: Context) {
             MediaStore.Images.Media.DATE_MODIFIED,
             MediaStore.Images.Media.WIDTH,
             MediaStore.Images.Media.HEIGHT,
+            MediaStore.Images.Media.MIME_TYPE,
+            MediaStore.Images.Media.ORIENTATION,
         )
         try {
             contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
@@ -404,8 +425,16 @@ class MediaStoreRepository(private val context: Context) {
                     val name = cursor.getString(0) ?: id
                     val size = if (cursor.isNull(1)) 0L else cursor.getLong(1)
                     val modified = if (cursor.isNull(2)) 0L else cursor.getLong(2) * 1000
-                    val width = if (cursor.isNull(3)) 0 else cursor.getInt(3)
-                    val height = if (cursor.isNull(4)) 0 else cursor.getInt(4)
+                    var width = if (cursor.isNull(3)) 0 else cursor.getInt(3)
+                    var height = if (cursor.isNull(4)) 0 else cursor.getInt(4)
+                    val mime = cursor.getString(5)
+                    // HEIC 尺寸复核（同 scanImages，单图调用频率低，成本可忽略）
+                    if (mime == "image/heic" || mime == "image/heif") {
+                        val orient = if (cursor.isNull(6)) 0 else cursor.getInt(6)
+                        heicVerifiedSize(uri, orient)?.let { (w, h) ->
+                            width = w; height = h
+                        }
+                    }
                     return MsMetaInfo(name, size, modified, width, height)
                 }
             }
@@ -586,6 +615,11 @@ class MediaStoreRepository(private val context: Context) {
     /// 解码量 12MP → ~3MP,相机大图全图解码 ~250ms → ~80-100ms,质量从原图解码保证清晰。
     /// (系统相册走私有 native libcodec 区域解码;visort 用标准 BitmapFactory
     ///  + inSampleSize 下采样,同样只解目标尺寸像素,够用。)
+    ///
+    /// EXIF orientation 应用(对标 aves/系统相册):BitmapFactory 不读 EXIF 方向,
+    /// 竖拍照片解出横躺位图;Dart 侧 coverRatio 用 MediaStore WIDTH/HEIGHT
+    /// (Q+ 已是旋转后显示尺寸)→ 位图与框宽高比不符。故解码后按 EXIF 方向
+    /// Matrix 旋转,返回已是正立位图。网格路径 loadThumbnail 系统自动旋转,不受影响。
     fun readSampledImage(id: String, targetWidth: Int): Map<String, Any> {
         val longId = id.toLongOrNull() ?: throw MsError.InvalidArg("非法图片 id: $id")
         val uri = ContentUris.withAppendedId(
@@ -609,14 +643,20 @@ class MediaStoreRepository(private val context: Context) {
             // 尺寸读不出(非图片/损坏)→ 抛异常,由 dart 端 catch 走 readBytes 兜底
             throw MsError.QueryFailed("readSampledImage: 无法读尺寸 id=$id")
         }
+        val origH = boundsOpts.outHeight
+        val rotationDegrees = exifRotationDegrees(uri)
         // ② 算 inSampleSize(2 的幂,使解码宽度 ≤ targetWidth)。
-        //    ⚠️ 用 origW/sampleSize > targetWidth(非 origW/(sample*2) >= target):
-        //    后者要求 origW >= 2*target 才下采样,对 origW≈target 的相机原图(3072 vs 2880)
+        //    ⚠️ 用显示宽(旋转后)算,非原始位图宽:竖拍照片原始位图横躺
+        //    (如 4096×3072 + orientation 90 → 显示 3072×4096),targetWidth
+        //    对齐显示宽才能解出正确分辨率。
+        //    ⚠️ 用 displayW/sampleSize > targetWidth(非 displayW/(sample*2) >= target):
+        //    后者要求 displayW >= 2*target 才下采样,对 displayW≈target 的相机原图(3072 vs 2880)
         //    会得 sample=1 → 解全图 12MP + compress 大 JPEG + dart 再解一遍,比 readBytes 还慢。
-        //    改成 > targetWidth:只要 origW > target 就 sample≥2,解码宽度落到 (target/2, target]。
-        //    例:origW=3072, target=2880 → sample=2(解码 1536);origW=4096 → sample=2(解码 2048)。
+        //    改成 > targetWidth:只要 displayW > target 就 sample≥2,解码宽度落到 (target/2, target]。
+        //    例:displayW=3072, target=2880 → sample=2(解码 1536);displayW=4096 → sample=2(解码 2048)。
+        val displayW = if (rotationDegrees == 90 || rotationDegrees == 270) origH else origW
         var sampleSize = 1
-        while (origW / sampleSize > targetWidth) {
+        while (displayW / sampleSize > targetWidth) {
             sampleSize *= 2
         }
         // ③ 按 inSampleSize 解码(只解 origW/sampleSize 像素,native libjpeg-turbo 快)
@@ -626,9 +666,18 @@ class MediaStoreRepository(private val context: Context) {
         }
         val dStream = contentResolver.openInputStream(uri)
             ?: throw MsError.QueryFailed("无法打开 InputStream: $id")
-        val bitmap = dStream.use {
+        var bitmap = dStream.use {
             BitmapFactory.decodeStream(BufferedInputStream(it, 65536), null, opts)
         } ?: throw MsError.QueryFailed("无法解码 id=$id")
+        // ③ 应用 EXIF 旋转(见函数 doc):竖拍照片位图横躺,Matrix.postRotate
+        //    转正。翻转组合(TRANSPOSE/TRANSVERSE,多见于前置摄像头)忽略镜像
+        //    只取旋转角——比横躺好,罕见场景不引入翻转复杂度。
+        if (rotationDegrees != 0) {
+            val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+            val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            bitmap.recycle()
+            bitmap = rotated
+        }
         // ④ 直接拷贝 ARGB_8888 原始像素(不 compress JPEG):省掉 JPEG encode + dart 再
         //    decode 两步 codec。copyPixelsToBuffer 字节序 RGBA(= Flutter rgba8888)。
         val w = bitmap.width
@@ -637,6 +686,50 @@ class MediaStoreRepository(private val context: Context) {
         bitmap.copyPixelsToBuffer(ByteBuffer.wrap(pixels))
         bitmap.recycle()
         return mapOf("pixels" to pixels, "width" to w, "height" to h)
+    }
+
+    /// 读 EXIF orientation 映射为旋转角(0/90/180/270)。
+    /// PNG/WebP 无 orientation → 0;解析失败 → 0(横躺兜底,不崩)。
+    private fun exifRotationDegrees(uri: Uri): Int {
+        return try {
+            val stream = contentResolver.openInputStream(uri) ?: return 0
+            stream.use { s ->
+                when (ExifInterface(s).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_UNDEFINED
+                )) {
+                    ExifInterface.ORIENTATION_ROTATE_90,
+                    ExifInterface.ORIENTATION_TRANSPOSE -> 90
+                    ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                    ExifInterface.ORIENTATION_ROTATE_270,
+                    ExifInterface.ORIENTATION_TRANSVERSE -> 270
+                    else -> 0
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "exifRotationDegrees 失败: ${e.message}")
+            0
+        }
+    }
+
+    /// HEIC/HEIF 尺寸复核：inJustDecodeBounds 读容器真实尺寸。
+    ///
+    /// BitmapFactory 对 HEIF 读的是 ispe box 原始尺寸（不解析 irot 旋转 box），
+    /// 而 MediaStore Q+ 的 WIDTH/HEIGHT 是旋转后显示尺寸——覆盖前按
+    /// [orientation]（MediaStore ORIENTATION 列）交换宽高保持同语义。
+    /// API<28 无 HEIF 解码支持/损坏/读失败返回 null，调用方保留 MediaStore 原值。
+    private fun heicVerifiedSize(uri: Uri, orientation: Int): Pair<Int, Int>? {
+        val bounds: Pair<Int, Int> = try {
+            val stream = contentResolver.openInputStream(uri) ?: return null
+            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            stream.use { s ->
+                BitmapFactory.decodeStream(BufferedInputStream(s, 65536), null, opts)
+            }
+            if (opts.outWidth > 0 && opts.outHeight > 0) opts.outWidth to opts.outHeight else return null
+        } catch (e: Exception) {
+            Log.w(TAG, "heicVerifiedSize 失败: ${e.message}")
+            return null
+        }
+        return if (orientation == 90 || orientation == 270) bounds.second to bounds.first else bounds
     }
 
     // ──────────── 读取缩略图（相册网格用） ────────────
