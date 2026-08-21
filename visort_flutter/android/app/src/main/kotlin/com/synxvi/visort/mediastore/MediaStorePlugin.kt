@@ -260,6 +260,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         when (call.method) {
             "listBuckets" -> handleListBuckets(call, result)
             "scanImages" -> handleScanImages(call, result)
+            "detectHdrs" -> handleDetectHdrs(call, result)
             "readMeta" -> handleReadMeta(call, result)
             "getMetadata" -> handleGetMetadata(call, result)
             "readBytes" -> handleReadBytes(call, result)
@@ -552,6 +553,31 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         } catch (e: Exception) {
             pendingRestoreResult = null
             result.error(MsError.QueryFailed("启动恢复弹窗失败: ${e.message}").code, e.message, null)
+        }
+    }
+
+    /// 批量 HDR 检测（后台补测通道，见 repo.detectHdrs）。IO 密集
+    /// （每张 miss 一次 64KB 头读），必须走 ioExecutor，绝不占主线程。
+    private fun handleDetectHdrs(call: MethodCall, result: Result) {
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        if (!hasReadPermission()) {
+            result.error(MsError.PermissionDenied.code, MsError.PermissionDenied.message, null); return
+        }
+        val ids = call.argument<List<String>>("ids") ?: emptyList()
+        // Dart int 经 StandardMessageCodec 解为 Integer/Long（视大小），
+        // 统一按 Number 转 Long。
+        val mtimes = (call.argument<List<Number>>("mtimes") ?: emptyList()).map { it.toLong() }
+        ioExecutor.execute {
+            try {
+                val flags = repo.detectHdrs(ids, mtimes)
+                mainHandler.post { result.success(flags) }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("detectHdrs 异常: ${e.message}").code, e.message, null)
+                }
+            }
         }
     }
 

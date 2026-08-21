@@ -94,6 +94,7 @@ class MsImageInfo {
     this.dateTrashedMs = 0,
     this.width = 0,
     this.height = 0,
+    this.isHdr = false,
   });
   final String id; // MediaStore _ID（ImageRef.relativePath 编码此值）
   final String name;
@@ -109,6 +110,9 @@ class MsImageInfo {
   /// viewer 双击自适应铺满按宽高比算 coverRatio，为 0 时 fallback readMeta 或 2.5×。
   final int width;
   final int height;
+  /// JPEG Ultra HDR（Kotlin 读文件头检测 XMP hdrgm:Version gainmap）；
+  /// 非 JPEG 恒 false。网格 HDR 徽标用。
+  final bool isHdr;
 
   /// 持久化用（snapshot 磁盘缓存）。
   Map<String, dynamic> toJson() => {
@@ -124,6 +128,7 @@ class MsImageInfo {
         'dateTrashedMs': dateTrashedMs,
         'width': width,
         'height': height,
+        'isHdr': isHdr,
       };
 
   factory MsImageInfo.fromJson(Map<String, dynamic> j) => MsImageInfo(
@@ -139,6 +144,24 @@ class MsImageInfo {
         dateTrashedMs: j['dateTrashedMs'] as int? ?? 0,
         width: j['width'] as int? ?? 0,
         height: j['height'] as int? ?? 0,
+        isHdr: j['isHdr'] as bool? ?? false,
+      );
+
+  /// HDR 后台补测回填用（controller 回填 isHdr 后重建列表）。
+  MsImageInfo copyWith({bool? isHdr}) => MsImageInfo(
+        id: id,
+        name: name,
+        size: size,
+        mime: mime,
+        bucketId: bucketId,
+        dateAddedMs: dateAddedMs,
+        dateModifiedMs: dateModifiedMs,
+        isFavorite: isFavorite,
+        isTrashed: isTrashed,
+        dateTrashedMs: dateTrashedMs,
+        width: width,
+        height: height,
+        isHdr: isHdr ?? this.isHdr,
       );
 }
 
@@ -266,6 +289,7 @@ class MediaStoreChannel {
       final dateTrasheds = raw['dateTrasheds'] as List<dynamic>;
       final widths = raw['widths'] as List<dynamic>;
       final heights = raw['heights'] as List<dynamic>;
+      final isHdrs = (raw['isHdrs'] as List<dynamic>?) ?? const [];
       final images = List<MsImageInfo>.generate(ids.length, (i) {
         final added = (dateAddeds[i] as num).toInt();
         return MsImageInfo(
@@ -281,9 +305,26 @@ class MediaStoreChannel {
           dateTrashedMs: (dateTrasheds[i] as num?)?.toInt() ?? 0,
           width: (widths[i] as num?)?.toInt() ?? 0,
           height: (heights[i] as num?)?.toInt() ?? 0,
+          // 旧包兼容：isHdrs 空数组时 false
+          isHdr: isHdrs.isNotEmpty && isHdrs[i] == true,
         );
       }, growable: false);
       return MsScanPage(images: images, nextCursor: next);
+    } on PlatformException catch (e) {
+      throw _convertError(e);
+    }
+  }
+
+  /// 批量 HDR 检测（后台补测通道，Kotlin ioExecutor 读文件头 + 进程内
+  /// 缓存）。与 scanImages 分离：网格先上屏，徽标数据到货后回填。
+  /// [ids]/[mtimes] 并行数组，返回同序布尔列表。
+  Future<List<bool>> detectHdrs(List<String> ids, List<int> mtimes) async {
+    try {
+      final raw = await _channel.invokeMethod<List<dynamic>>('detectHdrs', {
+        'ids': ids,
+        'mtimes': mtimes,
+      });
+      return (raw ?? const []).map((e) => e == true).toList();
     } on PlatformException catch (e) {
       throw _convertError(e);
     }

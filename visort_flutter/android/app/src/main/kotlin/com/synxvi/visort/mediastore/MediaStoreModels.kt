@@ -47,6 +47,7 @@ data class MsImageInfo(
     val dateTrashedMs: Long = 0,   // DATE_EXPIRES * 1000（回收站删除日期；非回收站项为 0）
     val width: Int = 0,           // WIDTH 像素；损坏/未知项为 0，Dart 侧 fallback readMeta 取尺寸
     val height: Int = 0,          // HEIGHT 像素；损坏/未知项为 0
+    val isHdr: Boolean = false,   // JPEG Ultra HDR（XMP hdrgm:Version gainmap，读文件头检测）；非 JPEG 恒 false
 ) {
     fun toMap(): Map<String, Any> = mapOf(
         "id" to id,
@@ -61,6 +62,7 @@ data class MsImageInfo(
         "dateTrashedMs" to dateTrashedMs,
         "width" to width,
         "height" to height,
+        "isHdr" to isHdr,
     )
 }
 

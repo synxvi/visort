@@ -2,6 +2,7 @@
 // 加载管线改写：ente 的 LRU/磁盘/服务端/TaskQueue → visort buildThumbnailProvider
 // （MediaStore 下采样，ImageCache 由 provider+size 管理）。删除上传状态/
 // owner avatar/live photo/视频时长 overlay。
+// [aves 移植] GIF 动图徽标（左下胶囊，OverlayIcon 同款样式）。
 
 import 'package:flutter/material.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
@@ -74,6 +75,21 @@ class _ThumbnailWidgetState extends State<ThumbnailWidget> {
         ),
       );
     }
+    // 类型徽标（aves 同款语义）：GIF / HDR 二选一（动图与 Ultra HDR
+    // 互斥），放左下与右上红心/勾选圈错开。GIF 按 mime 判定（单帧 GIF
+    // 也会标，系统相册同款行为）；HDR 由 Kotlin 读文件头检测（isHdr）。
+    {
+      final badge = widget.file.mime == 'image/gif'
+          ? const _TypeBadge('GIF')
+          : widget.file.isHdr
+          ? const _TypeBadge('HDR')
+          : null;
+      if (badge != null) {
+        contentChildren.add(
+          Positioned(left: 4, bottom: 4, child: badge),
+        );
+      }
+    }
     return Stack(
       clipBehavior: Clip.none,
       fit: StackFit.expand,
@@ -111,6 +127,45 @@ class _ThumbnailWidgetState extends State<ThumbnailWidget> {
     _imageProvider = null;
     _hasLoadedThumbnail = false;
     _failed = false;
+  }
+}
+
+/// 类型徽标（GIF/HDR）：左下圆形，Text + FittedBox 让字母撑满圆内接
+/// 区（Icons 图标字形里字母占比太小，小尺寸发糊；文字版同徽标尺寸下
+/// 字母最大化）。比例沿用 GIF 徽标调定的形态（18px 圆 + 2.5 padding，
+/// 字母约为满撑的 7/8）。
+class _TypeBadge extends StatelessWidget {
+  final String label;
+
+  const _TypeBadge(this.label);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 18,
+      height: 18,
+      decoration: const BoxDecoration(
+        color: Color(0xAA000000),
+        shape: BoxShape.circle,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(2.5),
+        child: FittedBox(
+          fit: BoxFit.contain,
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              // 全局字体规则：数字/英文 Space Mono。
+              fontFamily: 'Space Mono',
+              height: 1,
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

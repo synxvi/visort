@@ -322,7 +322,7 @@ class GalleryController extends Notifier<GalleryState> {
         asc: state.photoSortAsc,
       );
       if (token != _loadToken || state.bucketId != bucketId) return;
-      _applyBucketPage(bucketId, page);
+      _applyBucketPage(bucketId, token, page);
     } catch (e) {
       if (token != _loadToken) return;
       state = state.copyWith(error: e.toString());
@@ -340,7 +340,7 @@ class GalleryController extends Notifier<GalleryState> {
         asc: state.photoSortAsc,
       );
       if (token != _loadToken || state.bucketId != bucketId) return;
-      _applyBucketPage(bucketId, page);
+      _applyBucketPage(bucketId, token, page);
     } catch (e) {
       if (token != _loadToken) return;
       state = state.copyWith(error: e.toString());
@@ -348,7 +348,7 @@ class GalleryController extends Notifier<GalleryState> {
   }
 
   /// 应用第一页结果 + 更新桶快照（供下次直出）。
-  void _applyBucketPage(String bucketId, MsScanPage page) {
+  void _applyBucketPage(String bucketId, int token, MsScanPage page) {
     state = state.copyWith(
       photos: page.images,
       nextCursor: page.nextCursor,
@@ -358,6 +358,46 @@ class GalleryController extends Notifier<GalleryState> {
     _putSnapshot(bucketId,
         _BucketSnapshot(page.images, page.nextCursor,
             state.effectivePhotoSortBy, state.photoSortAsc));
+    // 网格先上屏，HDR 异步补测回填（aves cataloguing 语义）。
+    unawaited(_backfillHdr(bucketId, token, page.images));
+  }
+
+  /// HDR 后台补测：scanImages 不做文件 IO（曾内联 64KB 头读，全 JPEG
+  /// 大相册一把梭页几十秒，真机 Camera 相册卡死实证），徽标数据经独立
+  /// channel 批量检测，到货后 copyWith 回填列表。Kotlin hdrCache 保证
+  /// 重复进桶/二次启动零文件 IO（缓存命中）。
+  Future<void> _backfillHdr(
+    String bucketId,
+    int token,
+    List<MsImageInfo> photos,
+  ) async {
+    final jpegs = photos.where((p) => p.mime == 'image/jpeg').toList();
+    if (jpegs.isEmpty) return;
+    try {
+      final hdrs = await _channel.detectHdrs(
+        jpegs.map((p) => p.id).toList(),
+        jpegs.map((p) => p.dateModifiedMs).toList(),
+      );
+      if (token != _loadToken || state.bucketId != bucketId) return;
+      // 全 false 不重建（无谓的全网格 rebuild）。
+      final hdrIds = <String>{
+        for (var i = 0; i < jpegs.length; i++)
+          if (hdrs[i]) jpegs[i].id,
+      };
+      if (hdrIds.isEmpty) return;
+      final updated = [
+        for (final p in state.photos)
+          if (hdrIds.contains(p.id)) p.copyWith(isHdr: true) else p,
+      ];
+      state = state.copyWith(photos: updated);
+      _putSnapshot(
+        bucketId,
+        _BucketSnapshot(updated, state.nextCursor,
+            state.effectivePhotoSortBy, state.photoSortAsc),
+      );
+    } catch (_) {
+      // 补测失败静默：badge 缺失可接受，不阻塞网格。
+    }
   }
 
   /// 桶快照 LRU：最多保留 8 桶，超出删最早写入的。

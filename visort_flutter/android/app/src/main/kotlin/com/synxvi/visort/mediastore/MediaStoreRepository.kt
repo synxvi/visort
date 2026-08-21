@@ -346,6 +346,10 @@ class MediaStoreRepository(private val context: Context) {
                             }
                         }
                     }
+                    // isHdr 不在此检测：scan 路径保持零文件 IO（曾把 64KB 头读
+                    // 塞进 scan，全 JPEG 大相册一把梭页 = 几十秒，真机卡死实证）。
+                    // HDR 走独立后台批量通道 detectHdrs，网格先上屏后补徽标
+                    // （aves cataloguing 同语义：快字段先出，慢元数据异步到货）。
                     results.add(MsImageInfo(id, name, size, mime, bucketId, dateAdded, dateModified, isFavorite, isTrashed, dateTrashed, imgWidth, imgHeight))
                     lastSortRaw = cursor.getString(idxSort) ?: ""
                     lastId = id
@@ -399,6 +403,7 @@ class MediaStoreRepository(private val context: Context) {
             "dateTrasheds" to images.map { it.dateTrashedMs },
             "widths" to images.map { it.width },
             "heights" to images.map { it.height },
+            "isHdrs" to images.map { it.isHdr },
             "nextCursor" to nextCursor,
         )
     }
@@ -730,6 +735,65 @@ class MediaStoreRepository(private val context: Context) {
             return null
         }
         return if (orientation == 90 || orientation == 270) bounds.second to bounds.first else bounds
+    }
+
+    // ──────────── HDR 检测（JPEG Ultra HDR gainmap）────────────
+
+    /// HDR 检测缓存：id → (dateModified, isHdr)。命中且 mtime 一致直接复用，
+    /// 否则读文件头重测（aves (contentId, dateModified) 增量语义）。进程内有效；
+    /// 冷启动每页首扫重测（60 张 × 64KB 流读 ≈ 数十 ms，分页加载路径可接受），
+    /// 实测偏慢再加磁盘层——避免为一个 bool 提前引入 DB。
+    private val hdrCache = HashMap<String, Pair<Long, Boolean>>()
+
+    /// JPEG Ultra HDR 判定（网格 HDR 徽标数据源）。
+    ///
+    /// Ultra HDR（Android 14 官方格式）= 基础 JPEG + 末尾 MPF 辅图 gainmap +
+    /// XMP `<hdrgm:Version>` 标识（aves XMP.hasHdrGainMap 同语义，其用
+    /// metadata-extractor 解析 XMP 目录；此处拷头 64KB 直接字符串匹配，
+    /// XMP APP1 段在文件头、短小，零依赖够用）。仅 JPEG；HEIC 的 gainmap
+    /// 藏在 item property（需完整 ISO 14496 解析），不支持。
+    private fun isHdrJpeg(uri: Uri): Boolean {
+        return try {
+            val stream = contentResolver.openInputStream(uri) ?: return false
+            val head = ByteArray(65536)
+            val n = stream.use { s ->
+                var off = 0
+                while (off < head.size) {
+                    val r = s.read(head, off, head.size - off)
+                    if (r < 0) break
+                    off += r
+                }
+                off
+            }
+            val text = String(head, 0, n, Charsets.ISO_8859_1)
+            text.contains("hdrgm:Version")
+        } catch (e: Exception) {
+            Log.w(TAG, "isHdrJpeg 失败: ${e.message}")
+            false
+        }
+    }
+
+    /// 带缓存的 HDR 检测入口。
+    private fun detectHdr(id: String, mime: String, dateModifiedMs: Long): Boolean {
+        if (mime != "image/jpeg") return false
+        hdrCache[id]?.let { (m, hdr) ->
+            if (m == dateModifiedMs) return hdr
+        }
+        val longId = id.toLongOrNull() ?: return false
+        val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId)
+        val hdr = isHdrJpeg(uri)
+        hdrCache[id] = dateModifiedMs to hdr
+        return hdr
+    }
+
+    /// 批量 HDR 检测（后台补测通道）：ids/mtimes 并行数组，返回同序布尔
+    /// 列表。缓存命中零 IO；miss 读文件头并回写缓存。与 scanImages 分离
+    /// ——网格数据先上屏，徽标数据到货后由 Dart 侧回填（aves cataloguing
+    /// 同语义）。调用方须在后台线程执行（IO 密集）。
+    fun detectHdrs(ids: List<String>, mtimes: List<Long>): List<Boolean> {
+        return ids.mapIndexed { i, id ->
+            detectHdr(id, "image/jpeg", mtimes.getOrElse(i) { 0L })
+        }
     }
 
     // ──────────── 读取缩略图（相册网格用） ────────────
