@@ -159,7 +159,9 @@ class _AndroidBytesImageProvider
           height: r.height,
           pixelFormat: ui.PixelFormat.rgba8888,
         );
-        return desc.instantiateCodec();
+        // 必须 await：否则 instantiateCodec 的异步错误逃出 catch，
+        // 不落 readBytes 兜底（3.47 unawaited_return_in_try_block 揪出）。
+        return await desc.instantiateCodec();
       } catch (_) {
         // readSampledImage 失败(超时/channel/解码)→ 落到下面 readBytes 兜底
       }

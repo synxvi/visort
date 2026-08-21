@@ -11,12 +11,13 @@ void main() {
       final c = AppConfig.defaults();
       expect(c.activeProfile, 'Default');
       expect(c.profiles, contains('Default'));
-      expect(c.language, 'en');
+      expect(c.language, 'system'); // 默认跟随系统语言（曾为 'en'，i18n 改造后更新）
       expect(c.lastSourceDir, '');
       expect(c.lastDestParent, '');
       final p = c.activeProfileData;
-      expect(p.folders.single.key, 'A');
-      expect(p.folders.single.label, 'General');
+      // defaults 单 Profile 空 folders（首启动用户自建；曾含单个
+      // key='A'/label='General' 模板，语义演变后测试同步更新）。
+      expect(p.folders, isEmpty);
       expect(p.actionKeys.undo, 'Z');
       expect(p.actionKeys.delete, 'X');
       expect(p.actionKeys.skip, 'C');
