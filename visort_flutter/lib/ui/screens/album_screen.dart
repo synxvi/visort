@@ -301,6 +301,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                     onPressed: () => setState(() {
                       final photos = ref.read(galleryControllerProvider).photos;
                       _selectedIds.addAll(photos.map((p) => p.id));
+                      // 真源改了必须同步 Gallery 勾选渲染（单击/组头全选
+                      // 都走 _syncSelection，此处曾漏调 → 数量变而小勾
+                      // 不应用，回收站勾选全部实证）。
+                      _syncSelection();
                     }),
                   ),
                   IconButton(
