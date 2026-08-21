@@ -22,7 +22,8 @@ class DesktopFileSystem implements FileSystemRepository {
 
   @override
   Future<List<String>> pickDirectories() async {
-    final result = await FilePicker.platform.getDirectoryPath(
+    // file_picker 12：getDirectoryPath 改静态方法（原 FilePicker.platform 已移除）
+    final result = await FilePicker.getDirectoryPath(
       dialogTitle: 'Select directory',
     );
     // 单目录包成单元素 list（用户取消返回空 list）

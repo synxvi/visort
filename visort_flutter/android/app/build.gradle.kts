@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
-    id("kotlin-android")
+    // AGP 9 内置 Kotlin 编译（built-in Kotlin），不再 apply kotlin-android——
+    // 旧 apply 会让 android{} 解析到 BaseAppModuleExtension（AGP 9 移除路径）。
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
@@ -13,10 +14,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
     defaultConfig {
@@ -64,6 +61,13 @@ android {
             include("arm64-v8a", "armeabi-v7a")
             isUniversalApk = true
         }
+    }
+}
+
+// kotlinOptions 已废弃（Kotlin 2.3 移除路径），迁移 compilerOptions DSL。
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
 }
 
