@@ -124,14 +124,23 @@ Future<void> _setupWindows() async {
 /// Android 15+ 已强制 edge-to-edge；这里显式开启以兼容更低版本并让
 /// 全屏看图器（PhotoViewer）中的图片在物理屏幕正中央居中，而非被
 /// 实色状态栏挤偏。深色 App 用亮色系统栏图标。
+///
+/// 手势条（小横条）无背景的两个关键点（对齐 ente photos main.dart）：
+///   - systemNavigationBarColor 用 0x00010000 而非纯 0x00000000——部分 ROM
+///     （ColorOS 实测）把全零当作「未设置」而回退默认半透明 scrim；
+///   - 两个 contrastEnforced=false：关闭系统对透明系统栏强加的半透明
+///     对比度遮罩。窗口层的同款设置在 MainActivity.onCreate 已提前完成。
 void _enableEdgeToEdge() {
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
-    systemNavigationBarColor: Colors.transparent,
+    // ente 同款 workaround：alpha=0 但 RGB 非零，避免被 ROM 当未设置忽略。
+    systemNavigationBarColor: Color(0x00010000),
     systemNavigationBarDividerColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light, // 深底白字
     systemNavigationBarIconBrightness: Brightness.light,
+    systemNavigationBarContrastEnforced: false,
+    systemStatusBarContrastEnforced: false,
   ));
 }
 

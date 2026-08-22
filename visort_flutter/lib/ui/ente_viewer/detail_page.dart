@@ -1329,10 +1329,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // 面板打开期间底栏/缩略图条需可见、顶栏随占比淡出:强制退出全屏(edge-to-edge)。
     if (enableFullScreenNotifier.value) {
       enableFullScreenNotifier.value = false;
-      SystemChrome.setEnabledSystemUIMode(
-        SystemUiMode.edgeToEdge,
-        overlays: SystemUiOverlay.values,
-      );
+      restoreEdgeToEdgeBars();
     }
     _panelCtrl =
         AnimationController(

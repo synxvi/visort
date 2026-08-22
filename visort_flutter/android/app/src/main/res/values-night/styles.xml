@@ -6,6 +6,8 @@
              the Flutter engine draws its first frame -->
         <item name="android:windowBackground">@drawable/launch_background</item>
         <item name="android:statusBarColor">@color/visort_launch_bg</item>
+        <!-- 同 values/styles.xml：启动期实色深底，onCreate 切透明 + edge-to-edge。 -->
+        <item name="android:navigationBarColor">@color/visort_launch_bg</item>
     </style>
     <!-- Theme applied to the Android Window as soon as the process has started.
          This theme determines the color of the Android Window while your
@@ -16,5 +18,6 @@
     <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
         <item name="android:windowBackground">@color/visort_launch_bg</item>
         <item name="android:statusBarColor">@color/visort_launch_bg</item>
+        <item name="android:navigationBarColor">@color/visort_launch_bg</item>
     </style>
 </resources>

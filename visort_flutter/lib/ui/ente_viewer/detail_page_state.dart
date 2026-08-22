@@ -28,6 +28,28 @@ class ZoomTransform {
 
 enum FullScreenRequestReason { userInteraction, playbackStateChange }
 
+// ───────────────── [visort 追加] 沉浸退出后恢复无背景系统栏 ─────────────────
+// 手势条（小横条）无背景：导航栏透明色用 alpha=0 但 RGB 非零的 workaround
+// （部分 ROM 把全零当「未设置」而回退半透明 scrim；同 main.dart
+// _enableEdgeToEdge）。immersive（overlays: []）进出在部分 ROM 上会把
+// 导航栏色重置回默认 scrim，故每次退出沉浸都重申一遍（ente photos 在
+// detail_page dispose 做同样重申）。
+const Color kTransparentNavBarColor = Color(0x00010000);
+
+/// 退出沉浸：恢复 edge-to-edge + 重申透明导航栏（手势条无背景悬浮）。
+void restoreEdgeToEdgeBars() {
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      systemNavigationBarColor: kTransparentNavBarColor,
+      systemNavigationBarContrastEnforced: false,
+    ),
+  );
+  SystemChrome.setEnabledSystemUIMode(
+    SystemUiMode.edgeToEdge,
+    overlays: SystemUiOverlay.values,
+  );
+}
+
 typedef FullScreenRequestCallback =
     void Function(bool shouldEnable, FullScreenRequestReason reason);
 
@@ -97,10 +119,7 @@ class InheritedDetailPageState extends InheritedWidget {
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
       });
     } else {
-      SystemChrome.setEnabledSystemUIMode(
-        SystemUiMode.edgeToEdge,
-        overlays: SystemUiOverlay.values,
-      );
+      restoreEdgeToEdgeBars();
     }
   }
 

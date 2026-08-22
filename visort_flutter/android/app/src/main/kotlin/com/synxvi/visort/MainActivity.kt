@@ -16,6 +16,40 @@ import io.flutter.plugin.common.MethodChannel
 import com.synxvi.visort.mediastore.MediaStorePlugin
 
 class MainActivity : FlutterActivity() {
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        // 首帧前进入 edge-to-edge（先于 Dart 侧 main() 的 SystemChrome 调用——那是
+        // platform message，到达 window 已在首帧后，ColorOS 期间会给导航栏挂半透明
+        // scrim 再花 ~1s 动画收走，表现为「小横条带半透明底→延迟收回」）。
+        applyEdgeToEdgeWindow()
+    }
+
+    /** 窗口创建即声明 edge-to-edge：透明系统栏 + 关闭对比度 scrim。
+     *
+     * - SYSTEM_UI_FLAG_LAYOUT_*：窗口布局延伸到状态栏/导航栏后方（legacy 路径，
+     *   与 Dart SystemUiMode.edgeToEdge 最终设置的 flags 一致，仅把时机提前到
+     *   onCreate；Flutter engine 后续覆写为相同值，不冲突）。
+     * - isXxxContrastEnforced=false（API 29+）：系统对透明系统栏强制叠加的半透明
+     *   scrim 关闭——ColorOS 手势条「半透明背景」的直接来源（XML 无对应 theme
+     *   attr，只能代码设）。
+     * - statusBarColor 透明后状态栏后面是窗口背景（launch_bg 深色），不回退白闪。
+     */
+    private fun applyEdgeToEdgeWindow() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isStatusBarContrastEnforced = false
+            window.isNavigationBarContrastEnforced = false
+        }
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility =
+            android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+            android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+            android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        @Suppress("DEPRECATION")
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        @Suppress("DEPRECATION")
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         // 注册 MediaStore MethodChannel + EventChannel plugin（visort/mediastore）

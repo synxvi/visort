@@ -7,6 +7,11 @@
              the Flutter engine draws its first frame -->
         <item name="android:windowBackground">@drawable/launch_background</item>
         <item name="android:statusBarColor">@color/visort_launch_bg</item>
+        <!-- 导航栏（小横条区）启动期实色深底：与 splash 同色融为一体；
+             MainActivity.onCreate 会立即切透明 + edge-to-edge（布局延伸后
+             该区域由窗口背景接管，视觉不变）。不设则窗口未延伸时透明导航
+             栏会露桌面，且系统默认色在 ColorOS 上是半透明 scrim。 -->
+        <item name="android:navigationBarColor">@color/visort_launch_bg</item>
     </style>
     <!-- Theme applied to the Android Window as soon as the process has started.
          This theme determines the color of the Android Window while your
@@ -17,5 +22,6 @@
     <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
         <item name="android:windowBackground">@color/visort_launch_bg</item>
         <item name="android:statusBarColor">@color/visort_launch_bg</item>
+        <item name="android:navigationBarColor">@color/visort_launch_bg</item>
     </style>
 </resources>
