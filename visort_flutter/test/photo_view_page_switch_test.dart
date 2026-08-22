@@ -13,7 +13,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:photo_view/photo_view.dart';
 
 void main() {
-  Widget buildApp({ValueChanged<int>? onEdgeX}) {
+  Widget buildApp({
+    ValueChanged<int>? onEdgeX,
+    PhotoViewController? controller,
+    PhotoViewScaleStateController? scaleStateController,
+  }) {
     return MaterialApp(
       home: Scaffold(
         body: PhotoViewGestureDetectorScope(
@@ -21,6 +25,8 @@ void main() {
           child: PhotoView.customChild(
             child: const ColoredBox(color: Color(0xFF224422)),
             childSize: const Size(1, 1),
+            controller: controller,
+            scaleStateController: scaleStateController,
             minScale: PhotoViewComputedScale.contained,
             maxScale: PhotoViewComputedScale.covered * 3,
             backgroundDecoration: const BoxDecoration(
@@ -35,7 +41,15 @@ void main() {
 
   /// 双击中心 → 放大（viewport 800×600：initial 600 → target 1500，
   /// 视觉 1500×1500，X 可移 ±350）。
-  Future<void> doubleTapZoom(WidgetTester tester) async {
+  ///
+  /// 前置自检：断言放大已生效（scale/position/zoomedIn）——全量并发跑
+  /// 下若双击链路断裂，这里先炸，错误直接指向手势未识别，而非
+  /// onEdgeX 平移逻辑。
+  Future<void> doubleTapZoom(
+    WidgetTester tester, {
+    PhotoViewController? controller,
+    PhotoViewScaleStateController? scaleStateController,
+  }) async {
     final center = tester.getCenter(find.byType(PhotoView));
     await tester.tapAt(center);
     await tester.pump(const Duration(milliseconds: 60));
@@ -43,6 +57,14 @@ void main() {
     // 300ms decelerate 双击动画。
     for (var i = 0; i < 5; i++) {
       await tester.pump(const Duration(milliseconds: 100));
+    }
+    if (controller != null && scaleStateController != null) {
+      expect(scaleStateController.scaleState, PhotoViewScaleState.zoomedIn,
+          reason: '双击放大未生效（前置自检）');
+      expect(controller.scale, closeTo(1500, 0.5),
+          reason: '双击放大 scale 前置自检');
+      expect(controller.position, Offset.zero,
+          reason: '中心双击 position 归零前置自检');
     }
   }
 
@@ -53,9 +75,16 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     var edgeCalls = 0;
-    await tester.pumpWidget(buildApp(onEdgeX: (_) => edgeCalls++));
+    final controller = PhotoViewController();
+    final scaleStateController = PhotoViewScaleStateController();
+    await tester.pumpWidget(buildApp(
+      onEdgeX: (_) => edgeCalls++,
+      controller: controller,
+      scaleStateController: scaleStateController,
+    ));
     await tester.pump(const Duration(milliseconds: 300));
-    await doubleTapZoom(tester);
+    await doubleTapZoom(tester,
+        controller: controller, scaleStateController: scaleStateController);
 
     // 拖 -200：position 0 → -200，未到 -350 边界 → 纯平移。
     final g = await tester.startGesture(const Offset(400, 300));
@@ -76,9 +105,16 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     var edgeCalls = 0;
-    await tester.pumpWidget(buildApp(onEdgeX: (_) => edgeCalls++));
+    final controller = PhotoViewController();
+    final scaleStateController = PhotoViewScaleStateController();
+    await tester.pumpWidget(buildApp(
+      onEdgeX: (_) => edgeCalls++,
+      controller: controller,
+      scaleStateController: scaleStateController,
+    ));
     await tester.pump(const Duration(milliseconds: 300));
-    await doubleTapZoom(tester);
+    await doubleTapZoom(tester,
+        controller: controller, scaleStateController: scaleStateController);
 
     // 拖到左边界（-350）后再拖 40px：溢出 40 < 64 阈值 → 不翻页
     // （用户"贴边"动作的真实场景）。
@@ -100,9 +136,16 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     final dirs = <int>[];
-    await tester.pumpWidget(buildApp(onEdgeX: dirs.add));
+    final controller = PhotoViewController();
+    final scaleStateController = PhotoViewScaleStateController();
+    await tester.pumpWidget(buildApp(
+      onEdgeX: dirs.add,
+      controller: controller,
+      scaleStateController: scaleStateController,
+    ));
     await tester.pump(const Duration(milliseconds: 300));
-    await doubleTapZoom(tester);
+    await doubleTapZoom(tester,
+        controller: controller, scaleStateController: scaleStateController);
 
     // 拖到左边界后继续拖：总 -600 → 溢出 250 > 64 → onEdgeX(-1) 左拖翻下一张。
     final g = await tester.startGesture(const Offset(400, 300));

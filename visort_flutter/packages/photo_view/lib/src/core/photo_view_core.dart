@@ -384,7 +384,11 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     final Offset q = (tap - c - controller.position) / begin;
     final double tapX = q.dx + child.width / 2;
     final double tapY = q.dy + child.height / 2;
-    // 边缘判定阈值：距图边缘 < 视口半宽/半高 视为边缘点击。
+    // 边缘判定阈值：距图边缘 < 视口半宽/半高（屏幕像素）视为边缘点击。
+    // 判定须同坐标系：tapX/tapY 是图本地坐标，margin 是屏幕像素，
+    // 终态缩放 target 下换算 (child − tap)·target < margin
+    // （3.47 升级暴露的原错位：tapX > child.width − marginX 把屏幕
+    // margin 当图本地用，childSize ≪ margin 时恒命中贴边）。
     final double marginX = viewSize.width / 2;
     final double marginY = viewSize.height / 2;
     double dx = clamped.dx;
@@ -392,16 +396,16 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     // 贴边只在目标缩放后该轴溢出视口时生效（未溢出轴 clamp 本就跳过，
     // 贴边值无意义；黑边图 cornersX/Y 的 min>max 翻转值不能用）。
     if (child.width * target > viewSize.width) {
-      if (tapX > child.width - marginX) {
+      if ((child.width - tapX) * target < marginX) {
         dx = cornersX(scale: target).min; // 贴右：图右缘对齐视口右缘
-      } else if (tapX < marginX) {
+      } else if (tapX * target < marginX) {
         dx = cornersX(scale: target).max; // 贴左：图左缘对齐视口左缘
       }
     }
     if (child.height * target > viewSize.height) {
-      if (tapY > child.height - marginY) {
+      if ((child.height - tapY) * target < marginY) {
         dy = cornersY(scale: target).min; // 贴底：图底缘对齐视口底缘
-      } else if (tapY < marginY) {
+      } else if (tapY * target < marginY) {
         dy = cornersY(scale: target).max; // 贴顶：图顶缘对齐视口顶缘
       }
     }

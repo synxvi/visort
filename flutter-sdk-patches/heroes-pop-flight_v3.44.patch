@@ -1,0 +1,95 @@
+diff --git a/packages/flutter/lib/src/widgets/heroes.dart b/packages/flutter/lib/src/widgets/heroes.dart
+index d4951873d7f..911acd44357 100644
+--- a/packages/flutter/lib/src/widgets/heroes.dart
++++ b/packages/flutter/lib/src/widgets/heroes.dart
+@@ -850,6 +850,68 @@ class HeroController extends NavigatorObserver {
+   // Indexed by the hero tag.
+   final Map<Object, _HeroFlight> _flights = <Object, _HeroFlight>{};
+ 
++  // visort patch: programmatic pop (back key / system back swipe / explicit
++  // Navigator.pop) never starts a hero flight because didChangeTop fires only
++  // after the pop animation finished (fromRoute.animation.value == 0.0 → return)
++  // and didStartUserGesture can't find the popping route (its entry state is
++  // already `pop`, not willBePresent). Hook didPop (fires synchronously at pop,
++  // animation not yet reversed) and start the flight when the reverse begins.
++  PageRoute<dynamic>? _popRoute;
++  PageRoute<dynamic>? _popPreviousRoute;
++  // 已由 didPop patch 启动 pop flight 的 route：didChangeTop 在动画结束后触发，
++  // 此时再 divert 会让飞行层闪一下（shuttle 跟 value≈0 的动画立即结束）。
++  PageRoute<dynamic>? _popFlightHandled;
++
++  /// visort patch: pop flight overlay 插入后的同步钩子（app 侧把 chrome
++  /// overlay entry 重插到飞行层之上，栏保持原消失时机）。单 viewer 路由。
++  static void Function()? onPopFlightStarted;
++
++  @override
++  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
++    if (route is! PageRoute<dynamic> || previousRoute is! PageRoute<dynamic>) {
++      return;
++    }
++    final Animation<double>? anim = route.animation;
++    if (anim == null) return;
++    if (anim.status == AnimationStatus.reverse) {
++      _startPopFlight(route, previousRoute);
++      return;
++    }
++    _popRoute = route;
++    _popPreviousRoute = previousRoute;
++    anim.addStatusListener(_handlePopAnimationStatus);
++  }
++
++  void _handlePopAnimationStatus(AnimationStatus status) {
++    if (status != AnimationStatus.reverse) return;
++    final PageRoute<dynamic>? route = _popRoute;
++    final PageRoute<dynamic>? previous = _popPreviousRoute;
++    _popRoute?.animation?.removeStatusListener(_handlePopAnimationStatus);
++    _popRoute = null;
++    _popPreviousRoute = null;
++    if (route != null && previous != null) {
++      _startPopFlight(route, previous);
++    }
++  }
++
++  void _startPopFlight(PageRoute<dynamic> route, PageRoute<dynamic> previousRoute) {
++    _popFlightHandled = route;
++    // 直接 _startHeroTransition（跳过 _maybeStartHeroTransition 的 postFrame 延迟）：
++    // pop 时 toRoute(album) 一直保持布局（maintainState），Hero bounds 已就绪，
++    // 无需等下一帧。postFrame 会让 pop 第一帧出现"viewer 已隐藏(opacity 0)但
++    // shuttle 未创建"的间隙——网格直接露出 1 帧 = 概率性闪烁（frame timing 决定
++    // 有时同帧丝滑、有时差帧闪烁）。同步创建 → shuttle 与 transitionsBuilder 同帧。
++    _startHeroTransition(
++      route,
++      previousRoute,
++      HeroFlightDirection.pop,
++      false,
++    );
++    // visort patch: flight overlay 已插到最上 → 同步通知 app 重插 chrome
++    // entry（同帧回到飞行层之上，无首帧闪烁）。
++    onPopFlightStarted?.call();
++  }
++
+   @override
+   void didChangeTop(Route<dynamic> topRoute, Route<dynamic>? previousTopRoute) {
+     assert(topRoute.isCurrent);
+@@ -860,6 +922,12 @@ class HeroController extends NavigatorObserver {
+     // Don't trigger another flight when a pop is committed as a user gesture
+     // back swipe is snapped.
+     if (!navigator!.userGestureInProgress) {
++      if (previousTopRoute == _popFlightHandled) {
++        // visort patch: 该 pop 已在动画开头由 didPop 启动 flight（见 didPop），
++        // didChangeTop 在动画结束后触发，跳过避免 divert 闪烁。
++        _popFlightHandled = null;
++        return;
++      }
+       _maybeStartHeroTransition(
+         fromRoute: previousTopRoute,
+         toRoute: topRoute,
+@@ -1046,6 +1114,8 @@ class HeroController extends NavigatorObserver {
+ 
+       // Only proceed with a valid manifest. Otherwise abort the existing
+       // flight, and call endFlight when this for loop finishes.
++      if (manifest != null && manifest.isValid) {
++        }
+       if (manifest != null && manifest.isValid) {
+         toHeroes.remove(tag);
+         if (existingFlight != null) {
