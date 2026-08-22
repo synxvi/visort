@@ -48,6 +48,8 @@ void restoreEdgeToEdgeBars() {
     SystemUiMode.edgeToEdge,
     overlays: SystemUiOverlay.values,
   );
+  // engine 的 edgeToEdge 会清零 legacy flags（ColorOS 判定依据），Android 侧补设。
+  MethodChannel('visort/app').invokeMethod('reassertSystemUiFlags');
 }
 
 typedef FullScreenRequestCallback =
@@ -116,6 +118,9 @@ class InheritedDetailPageState extends InheritedWidget {
     enableFullScreenNotifier.value = shouldEnable;
     if (shouldEnable) {
       Future.delayed(const Duration(milliseconds: 200), () {
+        // 竞态守卫:延迟期间页面已 pop(dispose 已把 notifier 复位为 false)
+        // → 不再进沉浸,否则会在网格上凭空隐藏手势条(真机实测残留)。
+        if (!enableFullScreenNotifier.value) return;
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
       });
     } else {

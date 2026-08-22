@@ -26,9 +26,9 @@ class MainActivity : FlutterActivity() {
 
     /** 窗口创建即声明 edge-to-edge：透明系统栏 + 关闭对比度 scrim。
      *
-     * - SYSTEM_UI_FLAG_LAYOUT_*：窗口布局延伸到状态栏/导航栏后方（legacy 路径，
-     *   与 Dart SystemUiMode.edgeToEdge 最终设置的 flags 一致，仅把时机提前到
-     *   onCreate；Flutter engine 后续覆写为相同值，不冲突）。
+     * - SYSTEM_UI_FLAG_LAYOUT_*：窗口布局延伸到状态栏/导航栏后方（legacy 路径）。
+     *   ⚠️ 3.47 engine 的 edgeToEdge 会把这里设的值清零（见上方 guard 注释），
+     *   onCreate 设置只为覆盖 engine 起动前的窗口期；后续由 guard 持续补回。
      * - isXxxContrastEnforced=false（API 29+）：系统对透明系统栏强制叠加的半透明
      *   scrim 关闭——ColorOS 手势条「半透明背景」的直接来源（XML 无对应 theme
      *   attr，只能代码设）。
@@ -57,15 +57,52 @@ class MainActivity : FlutterActivity() {
         // SAF plugin 已移除（MediaStore 取代）。非媒体文件场景如需恢复，需重新引入 saf 包。
         // 「回桌面」通道：首页（根路由）右滑返回时 Dart 调 moveTaskToBack，
         // 等效 Home 键（task 保留后台，不 finish——finish 会从最近任务移除应用）。
+        // 「重申 e2e flags」：Dart 侧 SystemChrome(edgeToEdge) 调用后请求补设
+        // legacy LAYOUT bits（engine 会清零，见 registerSystemUiFlagsGuard 注释）。
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "visort/app")
             .setMethodCallHandler { call, result ->
-                if (call.method == "moveTaskToBack") {
-                    runOnUiThread { moveTaskToBack(true) }
-                    result.success(null)
-                } else {
-                    result.notImplemented()
+                when (call.method) {
+                    "moveTaskToBack" -> {
+                        runOnUiThread { moveTaskToBack(true) }
+                        result.success(null)
+                    }
+                    "reassertSystemUiFlags" -> {
+                        runOnUiThread { reassertEdgeToEdgeFlags() }
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
                 }
             }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // engine 在 onResume/恢复时会重跑 enableEdgeToEdge 清零 flags（post 排其
+        // 后一帧再补）。listener 对 LAYOUT bits 变化不回调（只认 HIDE 类），靠
+        // 焦点回调 + Dart channel 双保险。
+        if (hasFocus) reassertEdgeToEdgeFlags()
+    }
+
+    /** 非沉浸态且缺 LAYOUT bits 时补设（幂等；沉浸态不干预）。 */
+    private fun reassertEdgeToEdgeFlags() {
+        val decor = window.decorView
+        decor.post {
+            @Suppress("DEPRECATION")
+            val vis = decor.systemUiVisibility
+            @Suppress("DEPRECATION")
+            val hideBits =
+                android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+            @Suppress("DEPRECATION")
+            val layoutBits =
+                android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            if (vis and hideBits == 0 && vis and layoutBits != layoutBits) {
+                @Suppress("DEPRECATION")
+                decor.systemUiVisibility = layoutBits
+            }
+        }
     }
 
     override fun onAttachedToWindow() {

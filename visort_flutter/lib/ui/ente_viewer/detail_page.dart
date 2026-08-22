@@ -299,6 +299,15 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   @override
   void dispose() {
+    // 沉浸残留修复（真机实测）：沉浸态直接 pop 时引擎窗口上仍挂着
+    // HIDE_NAVIGATION|IMMERSIVE_STICKY，返回网格后手势条消失。pop 时若仍
+    // 沉浸：先复位 notifier（使 200ms 延迟进沉浸的竞态回调失效）再恢复
+    // 系统栏。ente 原版 dispose 即有此恢复（setSystemUIOverlayStyle +
+    // edgeToEdge），移植时丢失。恢复顺序须在 notifier.dispose() 之前。
+    if (enableFullScreenNotifier.value) {
+      enableFullScreenNotifier.value = false;
+      restoreEdgeToEdgeBars();
+    }
     _routeAnimation?.removeStatusListener(_onRouteAnimationStatus);
     _removeChromeEntry();
     isZoomedNotifier.removeListener(_onZoomedForImmersive);

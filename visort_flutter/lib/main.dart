@@ -142,6 +142,10 @@ void _enableEdgeToEdge() {
     systemNavigationBarContrastEnforced: false,
     systemStatusBarContrastEnforced: false,
   ));
+  // 3.47 engine 的 edgeToEdge 会把 legacy systemUiVisibility 清零，而 ColorOS
+  // 靠 LAYOUT_* bits 判定「沉浸式窗口→手势条无背景悬浮」（不认新 API）。
+  // 通知 Android 侧在 engine 覆写后补设（详见 MainActivity.reassert…注释）。
+  MethodChannel('visort/app').invokeMethod('reassertSystemUiFlags');
 }
 
 Future<void> _setupAndroid() async {
