@@ -368,7 +368,11 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         // 均触发）。TweenAnimationBuilder key 变化时旧 child 先卸载
         // （scrollable detach）再挂新 child 淡入——无重叠挂载，保留淡入
         // 效果且彻底杜绝双 attach 崩溃。
+        // edge-to-edge 沉浸：bottom:false——网格延伸画到屏幕物理底边（手势条
+        // 悬浮在照片上，系统自动对比取色）；末行避让由 Gallery 尾部 inset
+        // sliver 承担（gallery.dart）。选择态底栏出现时 Scaffold 自动垫高 body。
         body: SafeArea(
+          bottom: false,
           child: TweenAnimationBuilder<double>(
             key: ValueKey(_timelineView),
             tween: Tween(begin: 0.0, end: 1.0),
@@ -622,12 +626,16 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
               _runBatchTrash,
             ),
           ];
-    return SafeArea(
-      child: Container(
-        color: AppColors.surface,
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Row(children: ops),
+    // edge-to-edge：不用 SafeArea（其内容避让会让 Container 色止步于手势条
+    // 上缘，条区露 Scaffold 背景黑条）——Container 自垫 bottomInset，背景
+    // （surface）延伸到物理底边，内容避让手势条。
+    return Container(
+      color: AppColors.surface,
+      padding: EdgeInsets.only(
+        top: 6,
+        bottom: 6 + MediaQuery.viewPaddingOf(context).bottom,
       ),
+      child: Row(children: ops),
     );
   }
 

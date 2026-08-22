@@ -292,6 +292,14 @@ class GalleryState extends State<Gallery> {
                   controller: _scrollController,
                   slivers: [
                     SectionedListSliver(sectionLayouts: groups.groupLayouts),
+                    // [visort 追加] edge-to-edge：尾部补手势条 inset 占位——
+                    // 配合外层 SafeArea(bottom:false)，末行可滚进手势条区
+                    // （照片穿过手势条，系统相册/ente 行为），停稳时不被遮挡。
+                    SliverToBoxAdapter(
+                      child: SizedBox(
+                        height: MediaQuery.viewPaddingOf(context).bottom,
+                      ),
+                    ),
                   ],
                 ),
                 if (groups.groupType.showGroupHeader())

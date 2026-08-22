@@ -539,41 +539,61 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           // 左右滑动切换移动模式(对标系统相册页间滑动):右滑→相册间,左滑→子目录。
           onHorizontalDragEnd: _onModeSwipe,
           behavior: HitTestBehavior.opaque,
+          // edge-to-edge 沉浸：bottom:false——卡片流延伸画到屏幕物理底边，
+          // 手势条悬浮在卡片上（系统自动对比取色）；底栏改悬浮卡片（Stack
+          // 叠加，卡片流从其下方穿过），不再贴边遮挡内容（真机实测贴边
+          // 实色延伸会在手势条区形成固定黑条，「无沉浸」）。
           child: SafeArea(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+            bottom: false,
+            child: Stack(
               children: [
-                // 模式切换 segmented control
-                _buildModeSelector(),
-                // 顶栏↔源相册分隔线：固定显示。模式选择器自身 bottom:10 已提供到分隔线
-                // 的间距，与选择器 top:10（到顶栏）相等，故不再加额外 SizedBox。
-                const Divider(color: AppColors.border, height: 1),
-                // 主体（在分隔线下方滚动，不进入分隔线区域 → 不被遮挡）
-                // [ente 对齐] 相册排序切换内容交叉淡入 150ms（easeInQuart/easeOutExpo）。
-                Expanded(
-                  child: AnimatedSwitcher(
-                    duration: AppDurations.enteContentSwitch,
-                    switchInCurve: Curves.easeInQuart,
-                    switchOutCurve: Curves.easeOutExpo,
-                    layoutBuilder: (currentChild, previousChildren) => Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        for (final previous in previousChildren)
-                          Positioned.fill(child: previous),
-                        if (currentChild != null)
-                          Positioned.fill(child: currentChild),
-                      ],
-                    ),
-                    transitionBuilder: (child, animation) =>
-                        FadeTransition(opacity: animation, child: child),
-                    child: KeyedSubtree(
-                      key: ValueKey((config.albumSortBy, config.albumSortAsc)),
-                      child: _buildBody(),
-                    ),
+                Positioned.fill(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // 模式切换 segmented control
+                      _buildModeSelector(),
+                      // 顶栏↔源相册分隔线：固定显示。模式选择器自身 bottom:10 已提供到分隔线
+                      // 的间距，与选择器 top:10（到顶栏）相等，故不再加额外 SizedBox。
+                      const Divider(color: AppColors.border, height: 1),
+                      // 主体（在分隔线下方滚动，不进入分隔线区域 → 不被遮挡）
+                      // [ente 对齐] 相册排序切换内容交叉淡入 150ms（easeInQuart/easeOutExpo）。
+                      Expanded(
+                        child: AnimatedSwitcher(
+                          duration: AppDurations.enteContentSwitch,
+                          switchInCurve: Curves.easeInQuart,
+                          switchOutCurve: Curves.easeOutExpo,
+                          layoutBuilder: (currentChild, previousChildren) => Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              for (final previous in previousChildren)
+                                Positioned.fill(child: previous),
+                              if (currentChild != null)
+                                Positioned.fill(child: currentChild),
+                            ],
+                          ),
+                          transitionBuilder: (child, animation) =>
+                              FadeTransition(opacity: animation, child: child),
+                          child: KeyedSubtree(
+                            key: ValueKey((config.albumSortBy, config.albumSortAsc)),
+                            child: _buildBody(),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                // 底部 Start
-                _buildBottomBar(),
+                // 悬浮底栏：键盘弹出时贴键盘上方（adjustResize 下 viewInsets>0
+                // 且窗口已 resize，viewPadding 语义不再适用）；平时距屏底留
+                // 手势条 inset + 空隙，卡片流从下方穿过。
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: View.of(context).viewInsets.bottom > 0
+                      ? 6
+                      : MediaQuery.viewPaddingOf(context).bottom + 10,
+                  child: _buildBottomBar(),
+                ),
               ],
             ),
           ),
@@ -803,8 +823,13 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       child: ListView(
         // 动画对齐 ente：iOS 式回弹滚动物理。
         physics: const BouncingScrollPhysics(),
-        // 分隔线（固定在上）到源相册 header 内容 = 10：top:5 + 源相册 header top:5
-        padding: const EdgeInsets.only(top: 5),
+        // 分隔线（固定在上）到源相册 header 内容 = 10：top:5 + 源相册 header top:5。
+        // bottom：悬浮底栏（高约 72 + bottom 空隙 10）+ 手势条 inset——卡片
+        // 流可滚穿底栏与手势条区（延伸到物理底边），末行停稳时不被遮挡。
+        padding: EdgeInsets.only(
+          top: 5,
+          bottom: MediaQuery.viewPaddingOf(context).bottom + 92,
+        ),
         children: [
           // MANAGE_MEDIA 引导（未授权时显示）
           if (!_manageMediaGranted) _buildManageMediaBanner(),
@@ -1422,15 +1447,23 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         _sourceBucketIds.isNotEmpty &&
         ((_mode == ClassifyMode.toAlbum && _targetBucketIds.isNotEmpty) ||
             (_mode == ClassifyMode.toNewDir && _subDirs.isNotEmpty));
+    // 悬浮卡片式底栏（Stack Positioned 叠加在卡片流上）：圆角 + surface 底 +
+    // 轻阴影。不再 SafeArea（悬浮位置已由 Positioned 的 bottom 避让手势条）。
     return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.bg,
-        border: Border(top: BorderSide(color: AppColors.border)),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x66000000),
+            blurRadius: 16,
+            offset: Offset(0, 4),
+          ),
+        ],
       ),
-      padding: const EdgeInsets.all(16),
-      child: SafeArea(
-        top: false,
-        child: Row(
+      padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+      child: Row(
           children: [
             Expanded(
               child: Text(
@@ -1479,7 +1512,6 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             ),
           ],
         ),
-      ),
     );
   }
 
