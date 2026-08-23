@@ -14,13 +14,12 @@
 // 缩略图渲染时由 UI 层把 MsImageInfo.id 包成 ImageRef（imageRefFromMediaStoreId）。
 
 import 'dart:async';
-import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/config/profiles_service.dart';
+import 'package:visort_flutter/core/db/database_service.dart';
+import 'package:visort_flutter/core/db/gallery_snapshot_store.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/fs/mediastore_events.dart';
@@ -181,6 +180,10 @@ class GalleryController extends Notifier<GalleryState> {
   /// 桶快照缓存（内存）：exitBucket 写入，同桶重进直出。上限 8 桶 LRU 淘汰。
   final Map<String, _BucketSnapshot> _bucketSnapshots = {};
 
+  /// 桶快照磁盘 store(P1:SQLite bucket_snapshot/bucket_photo 表)。
+  /// 旧方案(SharedPreferences 整桶 JSON)已废弃,见 gallery_snapshot_store.dart。
+  late final GallerySnapshotStore _snapshotStore;
+
   /// 视图加载序号：enterBucket/enterFavorites/enterTrash 每次 +1，
   /// 异步返回时比对，旧请求结果直接丢弃（防止切桶/切视图竞态覆盖）。
   int _loadToken = 0;
@@ -194,6 +197,8 @@ class GalleryController extends Notifier<GalleryState> {
   @override
   GalleryState build() {
     final config = ref.read(configProvider);
+    _snapshotStore = GallerySnapshotStore(
+        ref.read(databaseServiceProvider).database);
     // 订阅 MediaStore 变更：图库增删时静默刷新当前视图。
     // 通过 provider 取流，便于测试 override（绕过 EventChannel）。
     // 非安卓端 EventChannel 无 handler，订阅 onError 静默忽略。
@@ -409,51 +414,24 @@ class GalleryController extends Notifier<GalleryState> {
     _persistSnapshot(bucketId, snap); // fire-and-forget 磁盘持久化（杀后台后秒出）
   }
 
-  /// 磁盘快照 key。
-  static String _snapKey(String bucketId) => 'visort_snap_$bucketId';
-
-  /// 写磁盘快照（异步，失败静默）。杀后台/进程重建后 [enterBucket] 可秒出。
+  /// 写磁盘快照（异步，失败静默——store 内部吞错）。杀后台/进程重建后
+  /// [enterBucket] 可秒出。P1 起走 SQLite(事务整桶覆写)。
   Future<void> _persistSnapshot(String bucketId, _BucketSnapshot snap) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(
-        _snapKey(bucketId),
-        jsonEncode({
-          'photos': snap.photos.map((p) => p.toJson()).toList(growable: false),
-          'nextCursor': snap.nextCursor,
-          'sortBy': snap.sortBy.name,
-          'asc': snap.asc,
-        }),
-      );
-    } catch (_) {
-      // 磁盘写失败不影响功能（仅退化为下次无磁盘缓存）。
-    }
+    await _snapshotStore.save(
+      bucketId,
+      BucketSnapshotData(
+        photos: snap.photos,
+        nextCursor: snap.nextCursor,
+        sortBy: snap.sortBy,
+        asc: snap.asc,
+      ),
+    );
   }
+
   Future<_BucketSnapshot?> _loadDiskSnapshot(String bucketId) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_snapKey(bucketId));
-      if (raw == null) return null;
-      final j = jsonDecode(raw) as Map<String, dynamic>;
-      final photos = (j['photos'] as List)
-          .map((e) => MsImageInfo.fromJson(e as Map<String, dynamic>))
-          .toList(growable: false);
-      final sortBy = SortBy.values.firstWhere(
-        (s) => s.name == j['sortBy'],
-        orElse: () => SortBy.dateCreated,
-      );
-      final nextCursor = (j['nextCursor'] == null || j['nextCursor'] == 'null')
-          ? null
-          : j['nextCursor'] as String?;
-      return _BucketSnapshot(
-        photos,
-        nextCursor,
-        sortBy,
-        (j['asc'] as bool?) ?? false,
-      );
-    } catch (_) {
-      return null;
-    }
+    final data = await _snapshotStore.load(bucketId);
+    if (data == null) return null;
+    return _BucketSnapshot(data.photos, data.nextCursor, data.sortBy, data.asc);
   }
 
   /// 退出相册，回到相册列表。退出前把当前网格数据存入桶快照，

@@ -18,6 +18,7 @@ import 'package:window_manager/window_manager.dart';
 import 'core/fs/image_loader.dart' show initMaxDecodePixels;
 import 'package:flutter/scheduler.dart';
 import 'app.dart';
+import 'core/db/database_service.dart';
 import 'core/i18n/i18n.dart';
 import 'core/window/window_state.dart';
 
@@ -49,6 +50,12 @@ Future<void> main() async {
   } catch (_) {
     // 加载失败用默认配置
   }
+
+  // ──────────── SQLite 预热(P0) ────────────
+  // 后台打开 + 迁移,不阻塞首帧(与安卓 prefs 预热同模式)。首屏不依赖 DB;
+  // store 一律经 DatabaseService.database 幂等 getter 兜底,慢一点也不出错。
+  // 失败静默降级为纯内存(降级红线,见 database_service.dart)。
+  unawaited(container.read(databaseServiceProvider).init());
 
   // 手动注册 SpaceMono 字体:FontManifest 注册在本机 release 下不生效(字体 asset
   // 能加载、文件等宽、FontManifest 正确,但 Flutter 渲染时 fallback 成系统 sans)。
@@ -155,6 +162,23 @@ Future<void> _setupAndroid() async {
   await SharedPreferences.getInstance();
   // [ente 对齐] 解码防崩阈值（RAM < 5GB → 24MP）：后台预热，不阻塞首帧。
   await initMaxDecodePixels();
+  // [P1 迁移] 桶快照已迁 SQLite(bucket_snapshot 表);旧 visort_snap_* prefs
+  // 是缓存语义,不做数据搬迁,一次性清 key 即可。
+  await _purgeLegacySnapKeys();
+}
+
+/// 清除旧版桶快照的 SharedPreferences key(P1 SQLite 迁移遗留)。
+Future<void> _purgeLegacySnapKeys() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final legacy =
+        prefs.getKeys().where((k) => k.startsWith('visort_snap_')).toList();
+    for (final k in legacy) {
+      await prefs.remove(k);
+    }
+  } catch (_) {
+    // 清理失败无碍(残留 key 只占几 KB,不影响功能)。
+  }
 }
 
 // ───────────────────────── 窗口持久化监听器（Windows） ─────────────────────────

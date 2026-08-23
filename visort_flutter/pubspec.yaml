@@ -19,6 +19,13 @@ dependencies:
   window_manager: ^0.5.0
   shared_preferences: ^2.2.0
   flutter_animate: ^4.5.0
+  # [SQLite 改造 P0] 数据级持久化底座(见 docs/SQLITE_ROADMAP.md):
+  #   - sqflite: 安卓走 method channel(系统 SQLite)
+  #   - sqflite_common_ffi: Windows/测试走 ffi(databaseFactory 覆盖)
+  #   - sqlite3_flutter_libs: 桌面端捆绑 SQLite 原生库(Win 无系统 sqlite3.dll)
+  sqflite: ^2.4.1
+  sqflite_common_ffi: ^2.3.4
+  sqlite3_flutter_libs: ^0.5.28
   # [ente 对齐] 大图浏览器用 photo_view（ente 同款 0.15.0）本地 fork：
   # 缩放/回弹/双击/Hero 动画与 ente 完全一致。
   # fork patch：PhotoViewGestureRecognizer 双轴边缘裁决（X/Y 任一可移动即 accept，
