@@ -196,8 +196,12 @@ class _ZoomableImageState extends State<ZoomableImage> {
             MediaQuery.devicePixelRatioOf(context),
       ),
     );
-    final large = buildThumbnailProvider(_ref, size: 512);
-    final cell = buildThumbnailProvider(_ref, size: _cellThumbSize());
+    // squareCrop:true = 与网格 cell 共享同一 provider key（ente
+    // ThumbnailInMemoryLruCache 同款语义）：首帧同步命中网格 live 缓存 →
+    // Hero flight 必启动。长图经 Kotlin 等比请求框返回与原图同 aspect 的
+    // 等比图 → contain 布局无落位跳变。
+    final large = buildThumbnailProvider(_ref, size: 512, squareCrop: true);
+    final cell = buildThumbnailProvider(_ref, size: _cellThumbSize(), squareCrop: true);
     bool completed(ImageProvider p) => _probeSyncComplete(p);
     if (completed(full)) {
       _imageProvider = full;
@@ -348,7 +352,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
     } else if (_showingThumbnailFallback) {
       content = Center(
         child: Image(
-          image: buildThumbnailProvider(_ref, size: 512),
+          image: buildThumbnailProvider(_ref, size: 512, squareCrop: true),
           fit: BoxFit.contain,
         ),
       );
@@ -393,7 +397,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
     if (!_loadedSmallThumbnail &&
         !_loadedLargeThumbnail &&
         !_loadedFinalImage) {
-      final cellThumb = buildThumbnailProvider(_ref, size: _cellThumbSize());
+      final cellThumb = buildThumbnailProvider(_ref, size: _cellThumbSize(), squareCrop: true);
       if (PaintingBinding.instance.imageCache.containsKey(cellThumb)) {
         _imageProvider = cellThumb;
         _loadedSmallThumbnail = true;
@@ -405,7 +409,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
         !_loadedFinalImage) {
       _loadingLargeThumbnail = true;
       final gen = _loadGeneration;
-      final large = buildThumbnailProvider(_ref, size: 512);
+      final large = buildThumbnailProvider(_ref, size: 512, squareCrop: true);
       precacheImage(large, context)
           .then((_) {
             if (!mounted || gen != _loadGeneration) return;

@@ -7,9 +7,7 @@ import android.content.Context
 import android.content.IntentSender
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.BitmapRegionDecoder
 import android.graphics.Matrix
-import android.graphics.Rect
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
@@ -813,11 +811,15 @@ class MediaStoreRepository(private val context: Context) {
     /// 容量上限 [MAX_THUMBNAIL_CACHE_BYTES]，超出按 mtime 删最旧。
     ///
     /// [width]/[height] 为目标缩略图像素尺寸（如 256x256）。
+    /// [squareCrop]=true：方形 cover 显示场景（网格 cell/封面）——长图走
+    /// centerCrop；false（默认）：contain 场景（大图渐进链）——fit-inside
+    /// 保全图 aspect（方形 crop 占位会在 contain 位被拉伸，Hero 落位突变）。
     fun readThumbnail(
         id: String,
         width: Int = 256,
         height: Int = 256,
         dateModifiedMs: Long? = null,
+        squareCrop: Boolean = false,
     ): ByteArray {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             // 低版本不支持 loadThumbnail，返回空让 Dart 回退
@@ -827,10 +829,12 @@ class MediaStoreRepository(private val context: Context) {
         val longId = id.toLongOrNull() ?: throw MsError.InvalidArg("非法图片 id: $id")
 
         // ① 长图（极端 aspect）专用 centerCrop 解码（见 tallImageCropBytes）。
-        //    判定在最前（先于普通缓存）：旧版已把长图 fit-inside 的糊结果
-        //    缓存进普通目录，若普通缓存先查会命中旧糊图、crop 永不执行。
+        //    仅 squareCrop 请求；判定在最前（先于普通缓存）：旧版已把长图
+        //    fit-inside 的糊结果缓存进普通目录，后置判定会命中旧糊图。
         //    判定 = 一次 _ID 索引查询（~0.1ms），普通图 miss 后继续原路径。
-        tallImageCropBytes(longId, width, height, dateModifiedMs)?.let { return it }
+        if (squareCrop) {
+            tallImageCropBytes(longId, width, height, dateModifiedMs)?.let { return it }
+        }
 
         // ② 磁盘缓存命中 → 零解码直出
         readThumbnailCache(longId, width, height, dateModifiedMs)?.let { return it }
@@ -871,25 +875,35 @@ class MediaStoreRepository(private val context: Context) {
         return bytes
     }
 
-    // ──────────── 长图专用 centerCrop 缩略图 ────────────
+    // ──────────── 长图专用等比缩略图（cover 请求框） ────────────
 
     /// 长图判定阈值：源宽/高 < 0.5 或 > 2（356×1920 → 0.185 命中）。
     /// 方形 cell 的 cover 显示下，fit-inside 结果的窄边像素不足 target 的一半。
     private val tallImageAspectRange = 0.5..2.0
 
-    /// 长图（极端 aspect）缩略图：BitmapRegionDecoder 只解码中央方形区域 +
-    /// 缩放到 target（对标系统相册 center-crop 解码管线）。
+    /// 等比请求框长边上限：超长图（1080×20000 级）等比会放大出 300×5555
+    /// 级 bitmap（~19MB），clamp 2048 防内存尖峰（系统 fit-inside 返回
+    /// 等比更小值，aspect 不变）。
+    private val tallImageMaxLongSide = 2048
+
+    /// 长图（极端 aspect）缩略图：按「等比放大请求框」走系统 loadThumbnail，
+    /// 返回与原图【同 aspect】的等比图（窄边保有 target 级真实像素）。
     ///
-    /// 背景（真机实证）：loadThumbnail 的 Size 是 fit-inside 语义——356×1920
-    /// 请求 300×300 系统只返回 56×300 窄条，Flutter 侧 BoxFit.cover 再横向
-    /// ~6 倍上采样 → 糊。系统相册走 center-crop 解码，横向保有原始像素。
+    /// 背景（真机实证）：loadThumbnail(Size(300,300)) 是 fit-inside 语义——
+    /// 356×1920 只返回 56×300 窄条，Flutter cover 横向 ~6 倍上采样 → 糊。
     ///
-    /// 实现要点：
-    ///   - 只支持方形 target（当前调用全为方形 cell）。非方形涉及 EXIF
-    ///     orientation 旋转下的宽高交换，回退系统路径。
-    ///   - 区域解码内存恒定：1080×20000 级超长图也只解码中央 1/9 面积。
-    ///   - 任何失败返回 null → 调用方回退 loadThumbnail（本路径纯优化）。
-    ///   - 缓存独立子目录（_crop 后缀）：普通图缓存零失效。
+    /// 为什么等比而非 centerCrop 裁剪（v1 已回退）：detail 大图首帧用与
+    /// 网格共享的 cell 缩略图（ente ThumbnailInMemoryLruCache 同款语义——
+    /// 共享缓存首帧同步有图，Hero flight 才能启动）。裁剪版 aspect≠原图，
+    /// detail contain 布局在原图到达时突变 = 落位拉伸跳变；等比版三端全
+    /// 对：网格 cover 裁中（清晰）、Hero 飞行（aspect 连续）、detail
+    /// contain（无跳变）。
+    ///
+    /// 请求框：短边 = min(target, 源短边)；长边 = 等比放大但不超源长边与
+    /// [tallImageMaxLongSide] → 系统 fit-inside 返回等比结果：
+    /// 356×1920 t300 → 300×1618；1080×2556 → 300×713；
+    /// 1080×20000 → 300×2048（系统返 110×2048，等比）。
+    /// 任何失败返回 null → 调用方回退原 Size 路径。缓存独立 _crop 子目录。
     private fun tallImageCropBytes(
         id: Long,
         width: Int,
@@ -900,52 +914,48 @@ class MediaStoreRepository(private val context: Context) {
         val (srcW, srcH) = queryImageSize(id) ?: return null
         val aspect = srcW.toDouble() / srcH.toDouble()
         if (tallImageAspectRange.contains(aspect)) return null
+        val srcShort = min(srcW, srcH)
+        val srcLong = max(srcW, srcH)
+        val reqShort = max(1, min(width, srcShort))
+        val reqLong = min(
+            min((reqShort.toLong() * srcLong / srcShort).toInt(), srcLong),
+            tallImageMaxLongSide,
+        )
+        val reqW: Int
+        val reqH: Int
+        if (srcW < srcH) {
+            reqW = reqShort
+            reqH = reqLong
+        } else {
+            reqW = reqLong
+            reqH = reqShort
+        }
         readThumbnailCache(id, width, height, dateModifiedMs, crop = true)?.let { return it }
         val uri = ContentUris.withAppendedId(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id
         )
+        val bitmap: Bitmap
+        thumbnailSemaphore.acquire()
         try {
-            contentResolver.openInputStream(uri)?.use { stream ->
-                // BitmapRegionDecoder 低 API 未实现 AutoCloseable，手动 close
-                val decoder = BitmapRegionDecoder.newInstance(stream, false) ?: return null
-                try {
-                    // cover 语义源区域：中央方形（边 = min(srcW, srcH)）。
-                    // EXIF orientation 旋转不影响中央方形的对称性（方形 target 免旋转处理）。
-                    val side = min(decoder.width, decoder.height)
-                    val left = (decoder.width - side) / 2
-                    val top = (decoder.height - side) / 2
-                    // inSampleSize：方形边/target 的 2^n 下取（356/300=1.19→1；
-                    // 1080/300=3.6→2，解码 540×540）。
-                    var sample = 1
-                    while (side / (sample * 2) >= width) sample *= 2
-                    val region = decoder.decodeRegion(
-                        Rect(left, top, left + side, top + side),
-                        BitmapFactory.Options().apply { inSampleSize = sample },
-                    ) ?: return null
-                    val scaled = if (region.width == width && region.height == height) {
-                        region
-                    } else {
-                        Bitmap.createScaledBitmap(region, width, height, true)
-                    }
-                    val baos = ByteArrayOutputStream()
-                    scaled.compress(Bitmap.CompressFormat.JPEG, 70, baos)
-                    val bytes = baos.toByteArray()
-                    Log.d(
-                        TAG,
-                        "readThumbnail: 长图crop id=$id ${srcW}x${srcH} -> " +
-                            "${scaled.width}x${scaled.height} sample=$sample ${bytes.size}B",
-                    )
-                    writeThumbnailCache(id, width, height, dateModifiedMs, bytes, crop = true)
-                    return bytes
-                } finally {
-                    decoder.recycle()
-                }
+            bitmap = try {
+                contentResolver.loadThumbnail(uri, Size(reqW, reqH), null)
+            } catch (e: Exception) {
+                Log.d(TAG, "readThumbnail: 长图等比失败 id=$id: ${e.message}")
+                return null
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "readThumbnail: 长图crop失败 id=$id: ${e.message}")
-            return null
+        } finally {
+            thumbnailSemaphore.release()
         }
-        return null
+        val baos = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+        val bytes = baos.toByteArray()
+        Log.d(
+            TAG,
+            "readThumbnail: 长图等比 id=$id ${srcW}x${srcH} req=${reqW}x${reqH} " +
+                "-> ${bitmap.width}x${bitmap.height} ${bytes.size}B",
+        )
+        writeThumbnailCache(id, width, height, dateModifiedMs, bytes, crop = true)
+        return bytes
     }
 
     /// 查单图源尺寸（WIDTH/HEIGHT 列，_ID 索引查询）。失败返回 null。
@@ -998,8 +1008,9 @@ class MediaStoreRepository(private val context: Context) {
         dateModifiedMs: Long?,
         crop: Boolean = false,
     ): ByteArray? {
-        // crop=true：长图 centerCrop 专用子目录（与 fit-inside 结果不混存）
-        val dirName = if (crop) "${width}x${height}_crop" else "${width}x$height"
+        // crop=true：长图等比专用子目录（_iso；与 fit-inside 结果及 v1 方形
+        // 裁剪版的 _crop 目录都不混存——v1 缓存命中会把等比管线短路）
+        val dirName = if (crop) "${width}x${height}_iso" else "${width}x$height"
         val file = File(File(thumbnailCacheDir, dirName), "$id.jpg")
         if (!file.exists()) return null
         val dm = dateModifiedMs
@@ -1019,7 +1030,7 @@ class MediaStoreRepository(private val context: Context) {
         crop: Boolean = false,
     ) {
         try {
-            val dirName = if (crop) "${width}x${height}_crop" else "${width}x$height"
+            val dirName = if (crop) "${width}x${height}_iso" else "${width}x$height"
             val dir = File(thumbnailCacheDir, dirName)
             dir.mkdirs()
             val file = File(dir, "$id.jpg")

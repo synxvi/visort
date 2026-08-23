@@ -353,7 +353,7 @@ class _CoverThumb extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(8),
         child: Image(
-          image: buildThumbnailProvider(ref, size: thumbSize),
+          image: buildThumbnailProvider(ref, size: thumbSize, squareCrop: true),
           width: size,
           height: size,
           fit: BoxFit.cover,
@@ -364,7 +364,7 @@ class _CoverThumb extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
               child: Image(
                 image: buildThumbnailProvider(ref,
-                    size: kThumbnailPlaceholderSize),
+                    size: kThumbnailPlaceholderSize, squareCrop: true),
                 width: size,
                 height: size,
                 fit: BoxFit.cover,

@@ -639,10 +639,13 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         val height = call.argument<Int>("height") ?: 256
         // 源图 DATE_MODIFIED（毫秒，可空）：磁盘缩略图缓存校验用
         val dateModifiedMs = call.argument<Long?>("dateModifiedMs")
+        // 方形 cover 显示（网格 cell/封面）→ 长图走 centerCrop；
+        // contain 显示（大图渐进链）→ fit-inside（全图 aspect）
+        val squareCrop = call.argument<Boolean>("squareCrop") ?: false
         // loadThumbnail + compress 放后台线程，避免卡 UI
         ioExecutor.execute {
             try {
-                val bytes = repo.readThumbnail(id, width, height, dateModifiedMs)
+                val bytes = repo.readThumbnail(id, width, height, dateModifiedMs, squareCrop)
                 mainHandler.post { result.success(bytes) }
             } catch (e: MsError) {
                 mainHandler.post { result.error(e.code, e.message, null) }

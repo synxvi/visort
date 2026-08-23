@@ -411,7 +411,10 @@ class MediaStoreChannel {
   /// 返回空数组表示当前平台不支持（API <29），调用方应回退 readBytes。
   /// [dateModifiedMs]：源图 DATE_MODIFIED（毫秒，可空），供 Kotlin 磁盘缓存校验。
   Future<Uint8List> readThumbnail(String id,
-      {int width = 256, int height = 256, int? dateModifiedMs}) async {
+      {int width = 256,
+      int height = 256,
+      int? dateModifiedMs,
+      bool squareCrop = false}) async {
     try {
       final raw = await _channel.invokeMethod<Uint8List>(
         'readThumbnail',
@@ -420,6 +423,7 @@ class MediaStoreChannel {
           'width': width,
           'height': height,
           if (dateModifiedMs != null) 'dateModifiedMs': dateModifiedMs,
+          'squareCrop': squareCrop,
         },
       );
       return raw ?? Uint8List(0);

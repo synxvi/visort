@@ -103,7 +103,12 @@ class _ThumbnailWidgetState extends State<ThumbnailWidget> {
 
   void _loadThumbnail() {
     // visort provider：按 size 下采样，ImageCache 命中（网格/飞行层共用）即显。
-    final provider = buildThumbnailProvider(_ref, size: widget.thumbnailSize);
+    // squareCrop：方形 cover cell——长图走 centerCrop（横向保真实像素）。
+    final provider = buildThumbnailProvider(
+      _ref,
+      size: widget.thumbnailSize,
+      squareCrop: true,
+    );
     if (PaintingBinding.instance.imageCache.containsKey(provider)) {
       setState(() {
         _imageProvider = provider;

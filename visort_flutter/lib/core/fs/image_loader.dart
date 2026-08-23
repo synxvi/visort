@@ -234,16 +234,24 @@ const int kThumbnailPlaceholderSize = 128;
 /// 安卓端优先走 MediaStore loadThumbnail（API 29+，系统级高效缩略图），
 /// 低版本回退 readBytes 全图 + targetWidth 下采样。
 /// Windows 端用 ResizeImage 包 FileImage 做下采样。
+///
+/// [squareCrop]（Android）：true = 方形 cover 显示场景（网格 cell/封面/
+/// 缩略图条）——长图走 centerCrop 解码（横向保真实像素，对标系统相册）；
+/// false（默认）= contain 显示场景（大图渐进链）——走系统 fit-inside，
+/// 缩略图与原图同 aspect，避免 Hero 落位时几何突变（真机实证：方形
+/// crop 占位在大图 contain 位被拉伸，原图解完瞬间变回）。
 ImageProvider buildThumbnailProvider(
   ImageRef ref, {
   int size = 256,
   int? dateModifiedMs,
+  bool squareCrop = false,
 }) {
   if (Platform.isAndroid) {
     return _AndroidThumbnailProvider(
       ref: ref,
       size: size,
       dateModifiedMs: dateModifiedMs,
+      squareCrop: squareCrop,
     );
   }
   return ResizeImage(
@@ -271,6 +279,7 @@ class _AndroidThumbnailProvider
     required this.ref,
     required this.size,
     this.dateModifiedMs,
+    this.squareCrop = false,
   });
 
   final ImageRef ref;
@@ -279,6 +288,10 @@ class _AndroidThumbnailProvider
   /// 源图 DATE_MODIFIED（毫秒）：① 参与 ImageCache key —— 图片被编辑后
   /// dateModified 变化 → 新 key 自动重取；② 透传 Kotlin 磁盘缓存校验。
   final int? dateModifiedMs;
+
+  /// 方形 cover 显示（true）→ 长图 centerCrop；contain 显示（false）→
+  /// fit-inside（全图 aspect）。参与缓存 key：同 size 两种语义不混存。
+  final bool squareCrop;
 
   @override
   Future<_AndroidThumbnailProvider> obtainKey(
@@ -334,6 +347,7 @@ class _AndroidThumbnailProvider
           width: key.size,
           height: key.size,
           dateModifiedMs: key.dateModifiedMs,
+          squareCrop: key.squareCrop,
         ),
       );
     } catch (_) {
@@ -359,9 +373,10 @@ class _AndroidThumbnailProvider
     return other is _AndroidThumbnailProvider &&
         other.ref.id == ref.id &&
         other.size == size &&
-        other.dateModifiedMs == dateModifiedMs;
+        other.dateModifiedMs == dateModifiedMs &&
+        other.squareCrop == squareCrop;
   }
 
   @override
-  int get hashCode => Object.hash(ref.id, size, dateModifiedMs);
+  int get hashCode => Object.hash(ref.id, size, dateModifiedMs, squareCrop);
 }
