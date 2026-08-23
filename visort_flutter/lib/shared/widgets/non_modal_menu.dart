@@ -27,6 +27,8 @@ import '../../core/theme/app_animations.dart';
 /// [onDismiss] = 菜单收回后的回调（可选，收回动画结束后触发）。
 /// [menuWidth] = 菜单宽度。
 /// [offsetX] / [offsetY] = 相对按钮左上角的额外偏移（微调定位）。
+/// [upward] = 向上展开（菜单底贴按钮顶上方 4dp）：锚点在屏幕下方时用
+///   （如大图浏览页底栏按钮——向下展开会跑到屏幕外）。
 ///
 /// 返回一个 controller，可手动调 close() 收回（带收回动画）。
 NonModalMenuController showNonModalMenu({
@@ -38,6 +40,7 @@ NonModalMenuController showNonModalMenu({
   VoidCallback? onDismiss,
   double offsetX = 0,
   double offsetY = 0,
+  bool upward = false,
 }) {
   final overlay = Overlay.of(context, rootOverlay: true);
   final controller = NonModalMenuController();
@@ -58,6 +61,7 @@ NonModalMenuController showNonModalMenu({
       menuWidth: menuWidth,
       offsetX: offsetX,
       offsetY: offsetY,
+      upward: upward,
       isScrolling: isScrolling,
       closeSignal: closeSignal,
       routeSecondary: routeSecondary,
@@ -101,6 +105,7 @@ class _NonModalMenuBody extends StatefulWidget {
     required this.menuWidth,
     required this.offsetX,
     required this.offsetY,
+    required this.upward,
     required this.isScrolling,
     required this.closeSignal,
     this.routeSecondary,
@@ -112,6 +117,8 @@ class _NonModalMenuBody extends StatefulWidget {
   final double menuWidth;
   final double offsetX;
   final double offsetY;
+  /// 向上展开（菜单底贴按钮顶上方 4dp）。
+  final bool upward;
   final ValueNotifier<bool> isScrolling;
   /// controller.close() 触发的收回信号。
   final ValueNotifier<bool> closeSignal;
@@ -233,7 +240,7 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
     // 定位：基于锚点按钮的屏幕坐标
     final btnCtx = widget.anchorKey.currentContext;
     final screen = MediaQuery.sizeOf(context);
-    double left = 0, top = 0, btnW = 0;
+    double left = 0, top = 0, bottom = 0, btnW = 0;
     if (btnCtx != null) {
       final box = btnCtx.findRenderObject() as RenderBox;
       btnW = box.size.width;
@@ -241,14 +248,19 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
       // 菜单右对齐按钮右缘 -8dp
       left = (pos.dx + box.size.width - widget.menuWidth - 8 + widget.offsetX)
           .clamp(0.0, screen.width - widget.menuWidth);
-      // 菜单顶 = 按钮底 + 4dp
-      top = pos.dy + box.size.height + 4 + widget.offsetY;
+      if (widget.upward) {
+        // 向上展开：菜单底 = 按钮顶 - 4dp（Positioned.bottom 相对屏幕底）。
+        // 底栏按钮下方是屏幕外，只能向上长（如大图浏览页底栏 ⋮）。
+        bottom = screen.height - pos.dy + 4 - widget.offsetY;
+      } else {
+        // 菜单顶 = 按钮底 + 4dp
+        top = pos.dy + box.size.height + 4 + widget.offsetY;
+      }
     }
 
-    // 锚点（菜单内坐标）：按钮水平中心正下方、与菜单顶边的交点。
-    // 菜单右缘对齐「按钮右缘 -8」，故按钮中心相对菜单左 = menuWidth + 8 - btnW/2；
-    // anchorDy=0 即菜单顶边。从此点缩放 → 菜单像从按钮正下方「长出来」，
-    // 比原先按钮右下角（≈右上顶点）更贴合触发位置、观感更自然。
+    // 锚点（菜单内坐标）：按钮水平中心、菜单靠近按钮那侧边（向下=顶边，
+    // 向上=底边）的交点。菜单右缘对齐「按钮右缘 -8」，故按钮中心相对菜单左
+    // = menuWidth + 8 - btnW/2。
     final anchorDx = widget.menuWidth + 8 - btnW / 2;
     final anchorDy = 0.0;
 
@@ -267,7 +279,8 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
         ),
         Positioned(
           left: left,
-          top: top,
+          top: widget.upward ? null : top,
+          bottom: widget.upward ? bottom : null,
           width: widget.menuWidth,
           child: AnimatedBuilder(
             animation: _ctrl,
@@ -283,17 +296,31 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
                   .clamp(0.0, 1.0);
               return Opacity(
                 opacity: o,
-                child: Transform(
-                  // 支点由下方 translate·scale·translate 矩阵精确给出（按钮正下方
-                  // 顶边交点，见上 anchorDx/anchorDy）。
-                  // ⚠️ 不能再传 alignment：RenderTransform 会再叠一层 alignment 平移，
-                  //    把有效支点推到错误位置。默认 center 分支会原样使用此矩阵。
-                  transform: Matrix4.identity()
-                    ..translateByDouble(anchorDx, anchorDy, 0, 1)
-                    ..scaleByDouble(s, s, 1, 1)
-                    ..translateByDouble(-anchorDx, -anchorDy, 0, 1),
-                  child: widget.menuBuilder(ctx),
-                ),
+                child: widget.upward
+                    ? Transform.scale(
+                        // 向上展开的支点 = (anchorDx, 菜单底边)。菜单高度未知
+                        // （menuBuilder 是 min-Column，layout 后才定），拿不到 y，
+                        // 用 Alignment 等价表达：x = anchorDx/menuWidth 映射到
+                        // [-1,1]，y = 1（底边）。Transform.scale(alignment:) 即
+                        // 绕该支点缩放，与手动矩阵 T(支点)·S·T(-支点) 数学等价。
+                        scale: s,
+                        alignment: Alignment(
+                          2 * anchorDx / widget.menuWidth - 1,
+                          1.0,
+                        ),
+                        child: widget.menuBuilder(ctx),
+                      )
+                    : Transform(
+                        // 支点由下方 translate·scale·translate 矩阵精确给出（按钮正下方
+                        // 顶边交点，见上 anchorDx/anchorDy）。
+                        // ⚠️ 不能再传 alignment：RenderTransform 会再叠一层 alignment 平移，
+                        //    把有效支点推到错误位置。默认 center 分支会原样使用此矩阵。
+                        transform: Matrix4.identity()
+                          ..translateByDouble(anchorDx, anchorDy, 0, 1)
+                          ..scaleByDouble(s, s, 1, 1)
+                          ..translateByDouble(-anchorDx, -anchorDy, 0, 1),
+                        child: widget.menuBuilder(ctx),
+                      ),
               );
             },
           ),

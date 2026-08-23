@@ -34,6 +34,7 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/middle_ellipsis_text.dart';
+import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
 import 'package:visort_flutter/shared/widgets/rename_dialog.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
@@ -200,6 +201,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
   OverlayEntry? _chromeEntry;
   Offset? _lastDoubleTapDown;
 
+  // ─────────────── 底栏 ⋮ 菜单（NonModalMenu 向上展开）───────────────
+  // 必须走 rootOverlay 的 NonModalMenu（PopupMenu 走 Navigator overlay，
+  // 层级低于挂在 Overlay 之上的底栏/缩略图条，会被盖住）；底栏按钮在屏幕
+  // 下缘，用 upward 让菜单向上长。
+  final GlobalKey _viewerMenuKey = GlobalKey();
+  NonModalMenuController? _viewerMenuCtl;
+
+  /// viewer 无纵向滚动信号（屏障本身拦截手势），恒 false 占位满足 API。
+  final ValueNotifier<bool> _viewerMenuScrolling = ValueNotifier(false);
+
   void initState() {
     super.initState();
     _files = List.of(widget.files);
@@ -309,6 +320,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   @override
   void dispose() {
+    // 菜单浮层挂 rootOverlay（不随本页 dispose），主动收回防残留。
+    _viewerMenuCtl?.close();
+    _viewerMenuScrolling.dispose();
     // 沉浸残留修复（真机实测）：沉浸态直接 pop 时引擎窗口上仍挂着
     // HIDE_NAVIGATION|IMMERSIVE_STICKY，返回网格后手势条消失。pop 时若仍
     // 沉浸：先复位 notifier（使 200ms 延迟进沉浸的竞态回调失效）再恢复
@@ -853,98 +867,18 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                 ),
                               // 原删除位 ⋮ 选项菜单：对当前图 复制/移动/重命名。
                               // 回收站项这三项均无意义，不显示（与收藏按钮同规则）。
-                              // PopupMenuButton 自动向上弹出（NonModalMenu 仅向下，
-                              // 底栏按钮下方是屏幕外）。
+                              // 走 rootOverlay NonModalMenu（upward 向上展开）——
+                              // PopupMenu 挂 Navigator overlay，层级低于挂在
+                              // Overlay 之上的底栏/缩略图条，会被盖住。
                               if (!file.isTrashed)
-                                PopupMenuButton<String>(
+                                IconButton(
+                                  key: _viewerMenuKey,
                                   icon: const Icon(
                                     Icons.more_vert,
                                     color: AppColors.text,
                                   ),
                                   tooltip: t(ref, 'gallery_manage'),
-                                  color: AppColors.surfaceElevated,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  position: PopupMenuPosition.over,
-                                  onSelected: (v) {
-                                    switch (v) {
-                                      case 'copy':
-                                        _copyMoveCurrent(copy: true);
-                                      case 'move':
-                                        _copyMoveCurrent(copy: false);
-                                      case 'rename':
-                                        _renameCurrent();
-                                    }
-                                  },
-                                  itemBuilder: (ctx) => [
-                                    PopupMenuItem(
-                                      value: 'copy',
-                                      child: Row(
-                                        children: [
-                                          const Icon(
-                                            Icons.content_copy,
-                                            size: 20,
-                                            color: AppColors.text,
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Text(
-                                            t(ref, 'copy_to_album'),
-                                            style: const TextStyle(
-                                              fontFamily: 'Space Mono',
-                                              fontFamilyFallback:
-                                                  AppFonts.cjkFallback,
-                                              fontSize: 14,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    PopupMenuItem(
-                                      value: 'move',
-                                      child: Row(
-                                        children: [
-                                          const Icon(
-                                            Icons.drive_file_move_outlined,
-                                            size: 20,
-                                            color: AppColors.text,
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Text(
-                                            t(ref, 'move_to_album'),
-                                            style: const TextStyle(
-                                              fontFamily: 'Space Mono',
-                                              fontFamilyFallback:
-                                                  AppFonts.cjkFallback,
-                                              fontSize: 14,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    PopupMenuItem(
-                                      value: 'rename',
-                                      child: Row(
-                                        children: [
-                                          const Icon(
-                                            Icons.drive_file_rename_outline,
-                                            size: 20,
-                                            color: AppColors.text,
-                                          ),
-                                          const SizedBox(width: 12),
-                                          Text(
-                                            t(ref, 'rename'),
-                                            style: const TextStyle(
-                                              fontFamily: 'Space Mono',
-                                              fontFamilyFallback:
-                                                  AppFonts.cjkFallback,
-                                              fontSize: 14,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
+                                  onPressed: _showViewerMenu,
                                 ),
                             ],
                           ),
@@ -1306,6 +1240,93 @@ class _DetailPageState extends ConsumerState<DetailPage>
   }
 
   // ─────────────── ⋮ 菜单：复制/移动/重命名（当前图） ───────────────
+
+  /// 底栏 ⋮ 菜单（首页/相册勾选态同款 NonModalMenu，向上展开）。
+  void _showViewerMenu() {
+    if (_viewerMenuCtl != null && !_viewerMenuCtl!.isClosed) {
+      _viewerMenuCtl!.close();
+      return;
+    }
+    const menuWidth = 184.0;
+    _viewerMenuCtl = showNonModalMenu(
+      context: context,
+      anchorKey: _viewerMenuKey,
+      menuWidth: menuWidth,
+      upward: true,
+      isScrolling: _viewerMenuScrolling,
+      menuBuilder: (ctx) => Material(
+        color: AppColors.surfaceElevated,
+        elevation: 3,
+        borderRadius: BorderRadius.circular(12),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _viewerMenuItem(
+              ctx,
+              Icons.content_copy,
+              t(ref, 'copy_to_album'),
+              onTap: () {
+                _viewerMenuCtl?.close();
+                _copyMoveCurrent(copy: true);
+              },
+            ),
+            _viewerMenuItem(
+              ctx,
+              Icons.drive_file_move_outlined,
+              t(ref, 'move_to_album'),
+              onTap: () {
+                _viewerMenuCtl?.close();
+                _copyMoveCurrent(copy: false);
+              },
+            ),
+            _viewerMenuItem(
+              ctx,
+              Icons.drive_file_rename_outline,
+              t(ref, 'rename'),
+              onTap: () {
+                _viewerMenuCtl?.close();
+                _renameCurrent();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 菜单单项（首页 _buildMenuItem 同款：图标 + 文本，48 高）。
+  Widget _viewerMenuItem(
+    BuildContext ctx,
+    IconData icon,
+    String label, {
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: SizedBox(
+        height: 48,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Icon(icon, color: AppColors.text, size: 20),
+              const SizedBox(width: 12),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontFamily: 'Space Mono',
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  color: AppColors.text,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   /// 复制/移动当前图到选定相册。copy 原图不动只 toast；move 走删除同款
   /// 移除+补位（_removeCurrentAndAdvance）。

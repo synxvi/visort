@@ -112,6 +112,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   }
 
   void _exitSelectMode() {
+    // 菜单浮层挂 rootOverlay（不随勾选态退出而消失），主动收回。
+    _menuCtl?.close();
     setState(() {
       _selectMode = false;
       _selectedIds.clear();
@@ -229,6 +231,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
 
   @override
   void dispose() {
+    // 菜单浮层挂 rootOverlay（不随本页 dispose），主动收回防残留。
+    _menuCtl?.close();
     _routeAnim?.removeStatusListener(_onRouteStatus);
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
