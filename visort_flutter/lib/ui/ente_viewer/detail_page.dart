@@ -940,23 +940,41 @@ class _DetailPageState extends ConsumerState<DetailPage>
               valueListenable: _panelExtent,
               builder: (_, extent, ___) {
                 final thumbVis = (1 - extent / _kDetailInitial).clamp(0.0, 1.0);
-                final vis = (isFullScreen ? 0.0 : 1.0) * thumbVis;
-                // 下滑滑出 + 淡出，比纯 alpha 更有"沉下去"的丝滑感。
-                final dy = (1 - vis) * _kThumbLineHeight;
-                return Transform.translate(
-                  offset: Offset(0, dy),
-                  child: Opacity(
-                    opacity: vis,
-                    child: IgnorePointer(
-                      ignoring: vis < 0.5,
-                      child: _ThumbLineStrip(
-                        photos: _thumbFiles,
-                        controller: _thumbScrollCtrl!,
-                        centerIndex: _thumbCenterIndex!,
-                        onTap: _onThumbTap,
-                        onScrollEnd: _onThumbScrollEnd,
-                        deleteAnim: _thumbDeleteAnim,
-                        deleteIndex: _thumbDeleteIndex,
+                // 面板联动：面板展开时条下沉 + 淡出（原逻辑保留）。
+                final dy = (1 - thumbVis) * _kThumbLineHeight;
+                // 沉浸显隐：AnimatedSlide 与底栏同 duration/curve，整组
+                // 「一起长出来 / 收回去」。条位移 = 底栏高 + inset + 条高
+                // （多滑一个条高）：滑动中条的下部藏进底栏（z 序在其上）
+                // 后面，终态完全出屏；两栏同进度 → 条下缘全程贴着底栏上缘
+                // 缝隙插入底栏区域被盖住，视觉无缝。
+                // （原 isFullScreen 布尔直算 vis：退出沉浸时条瞬现在终点、
+                // 底栏还在滑 → 白底图上两栏之间露缝，真机实证。）
+                return AnimatedSlide(
+                  offset: isFullScreen
+                      ? Offset(
+                          0,
+                          (_kBottomChromeHeight + bottomInset +
+                                  _kThumbLineHeight) /
+                              _kThumbLineHeight,
+                        )
+                      : Offset.zero,
+                  duration: _kChromeAnimDuration,
+                  curve: Curves.easeOutCubic,
+                  child: Transform.translate(
+                    offset: Offset(0, dy),
+                    child: Opacity(
+                      opacity: thumbVis,
+                      child: IgnorePointer(
+                        ignoring: isFullScreen || thumbVis < 0.5,
+                        child: _ThumbLineStrip(
+                          photos: _thumbFiles,
+                          controller: _thumbScrollCtrl!,
+                          centerIndex: _thumbCenterIndex!,
+                          onTap: _onThumbTap,
+                          onScrollEnd: _onThumbScrollEnd,
+                          deleteAnim: _thumbDeleteAnim,
+                          deleteIndex: _thumbDeleteIndex,
+                        ),
                       ),
                     ),
                   ),
