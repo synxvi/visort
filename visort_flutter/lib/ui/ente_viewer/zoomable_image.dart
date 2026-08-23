@@ -143,7 +143,16 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 通常已完成三级加载（原图在 cache）→ 直接原图，同帧显示、无
     // "缩略图回退再渐进"闪烁；未命中则退 512/cell，观感同首次渐进。
     _loadGeneration++;
-    _pickCachedProvider();
+    // 复位三级链状态（复用 State 上残留旧图的 provider/加载 flag 会阻塞
+    // _loadLocalImage 对缺失级别的重启加载；miss 时旧 provider 还会继续
+    // 显示被删那张图）。_pickCachedProvider 按 cache 重新分级。
+    _imageProvider = null;
+    _loadedSmallThumbnail = false;
+    _loadedLargeThumbnail = false;
+    _loadedFinalImage = false;
+    _loadingLargeThumbnail = false;
+    _loadingFinalImage = false;
+    _pickCachedProvider(allowCellThumb: false);
     _showingThumbnailFallback = false;
     _firedOnReady = false;
     _initialScale = null;
@@ -199,7 +208,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// 只有「已完成」条目 resolve 才同步回调（synchronousCall）→ 首帧
   /// _loading=false → Hero 在树。pending 一律不选，回落 cell（正在网格
   /// 显示中 = live 条目，必已完成）。
-  void _pickCachedProvider() {
+  void _pickCachedProvider({bool allowCellThumb = true}) {
     final full = buildImageProvider(
       _ref,
       targetWidth: computeViewerTargetWidth(
@@ -207,11 +216,12 @@ class _ZoomableImageState extends State<ZoomableImage> {
             MediaQuery.devicePixelRatioOf(context),
       ),
     );
-    // squareCrop:true = 与网格 cell 共享同一 provider key（ente
-    // ThumbnailInMemoryLruCache 同款语义）：首帧同步命中网格 live 缓存 →
-    // Hero flight 必启动。长图经 Kotlin 等比请求框返回与原图同 aspect 的
-    // 等比图 → contain 布局无落位跳变。
-    final large = buildThumbnailProvider(_ref, size: 512, squareCrop: true);
+    // large 用【等比】请求框（squareCrop:false）：childSize 宽高比与原图
+    // 一致 → 补位/慢图过渡期 contain 视觉与原图完全相同（仅清晰度差），
+    // 原图到货后无大小跳变。方形版（centerCrop 裁切 + 方形 childSize）会让
+    // 过渡期横图视野变小/竖图裁切放大，宽高比交替的序列（竖→横→竖连续
+    // 删除）频繁可见（真机实证）。
+    final large = buildThumbnailProvider(_ref, size: 512, squareCrop: false);
     final cell = buildThumbnailProvider(_ref, size: _cellThumbSize(), squareCrop: true);
     bool completed(ImageProvider p) => _probeSyncComplete(p);
     if (completed(full)) {
@@ -223,12 +233,16 @@ class _ZoomableImageState extends State<ZoomableImage> {
       _imageProvider = large;
       _loadedLargeThumbnail = true;
       _loadedSmallThumbnail = true;
-    } else {
+    } else if (allowCellThumb) {
       // cell 兜底：网格正在显示 = live 条目（已完成），首帧同步有图；
       // 极端场景（占位图都未出就点开）loading 一帧、无 flight，可接受。
       _imageProvider = cell;
       _loadedSmallThumbnail = true;
     }
+    // 补位路径（allowCellThumb=false）full/large 均未就绪时不落方形 cell：
+    // 保持 null 走 loadingBuilder（按 _photo 宽高比显示占位框，无裁切
+    // 变形），large 很快到货（翻页预加载已发起）替换——方形裁剪图的
+    // childSize 会造成过渡期大小跳变。
     _loadingLargeThumbnail = false;
     // 保持 false：让 _loadLocalImage 正常启动缺失级别的加载（若置 true
     // 会阻塞对应分支的 precache，又没有实际加载在跑 → 缩略图永不清晰）。
@@ -363,7 +377,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
     } else if (_showingThumbnailFallback) {
       content = Center(
         child: Image(
-          image: buildThumbnailProvider(_ref, size: 512, squareCrop: true),
+          // 等比（同 large key），错误兜底显示也不裁切变形。
+          image: buildThumbnailProvider(_ref, size: 512, squareCrop: false),
           fit: BoxFit.contain,
         ),
       );
@@ -420,7 +435,9 @@ class _ZoomableImageState extends State<ZoomableImage> {
         !_loadedFinalImage) {
       _loadingLargeThumbnail = true;
       final gen = _loadGeneration;
-      final large = buildThumbnailProvider(_ref, size: 512, squareCrop: true);
+      // 等比 512（与 _pickCachedProvider 的 large 同 key，翻页预加载即补位
+      // 缓存命中）：过渡期 childSize 宽高比与原图一致，无大小跳变。
+      final large = buildThumbnailProvider(_ref, size: 512, squareCrop: false);
       precacheImage(large, context)
           .then((_) {
             if (!mounted || gen != _loadGeneration) return;
