@@ -252,6 +252,7 @@ const Map<String, String> stringsZh = {
   // ───────── P1a · 回收站对话框 ─────────
   'delete_permanently': '彻底删除',
   'delete_permanently_desc': '删除后无法恢复。',
+  'delete_confirm_desc': '删除后可在回收站中恢复。',
   'restore_desc': '恢复到原相册。',
   'confirm': '确认',
   'trash_deleted_label': '删除于',

@@ -32,6 +32,7 @@ import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart' show configProvider, t;
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
+import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/middle_ellipsis_text.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
@@ -164,6 +165,13 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   /// 删除流程进行中（主图动画结束前禁止重复删除/恢复，防数据错乱）。
   bool _deletingInProgress = false;
+
+  /// 删除确认 sheet 显示中（防重入：sheet scrim 吸收栏上点击，再点「删除」
+  /// 不响应，无叠加；PopScope 拦截系统返回依赖本标志，须 setState 切换）。
+  bool _deleteDialogShowing = false;
+
+  /// 当前 sheet 的外部关闭句柄（PopScope 拦截系统返回时关闭 sheet）。
+  VoidCallback? _deleteSheetClose;
 
   /// 缩略图条驱动主图 animateToPage 期间标记:主图跨多页时中间页 onPageChanged 据此
   /// 忽略,不回弹缩略图条。到达 target 复位,另有超时兜底。
@@ -411,10 +419,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
       // 面板打开时点击图片区 → 收面板（而非切换全屏）。
       onImageTap: _detailsOpen ? _animateClose : null,
       child: PopScope(
-        // 面板展开时拦截系统返回:收回面板而非退出大图;关闭时正常返回相册。
-        canPop: !_detailsOpen,
+        // 面板展开/删除 sheet 显示时拦截系统返回:先收回面板/关 sheet
+        // 而非退出大图;都关闭时正常返回相册。
+        canPop: !_detailsOpen && !_deleteDialogShowing,
         onPopInvokedWithResult: (didPop, _) {
-          if (!didPop && _detailsOpen) _animateClose();
+          if (didPop) return;
+          if (_deleteDialogShowing) {
+            _deleteSheetClose?.call();
+            return;
+          }
+          if (_detailsOpen) _animateClose();
         },
         child: Scaffold(
           extendBodyBehindAppBar: true,
@@ -788,23 +802,25 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                 tooltip: t(ref, 'photo_details'),
                                 onPressed: _toggleDetails,
                               ),
-                              IconButton(
-                                icon: Icon(
-                                  file.isFavorite
-                                      ? Icons.favorite
-                                      : Icons.favorite_border,
-                                  color: file.isFavorite
-                                      ? AppColors.danger
-                                      : AppColors.text,
+                              // 回收站视图无收藏（系统相册式，网格批量栏同规则）
+                              if (!file.isTrashed)
+                                IconButton(
+                                  icon: Icon(
+                                    file.isFavorite
+                                        ? Icons.favorite
+                                        : Icons.favorite_border,
+                                    color: file.isFavorite
+                                        ? AppColors.danger
+                                        : AppColors.text,
+                                  ),
+                                  tooltip: t(
+                                    ref,
+                                    file.isFavorite
+                                        ? 'action_unfavorite'
+                                        : 'action_favorite',
+                                  ),
+                                  onPressed: _toggleFavoriteCurrent,
                                 ),
-                                tooltip: t(
-                                  ref,
-                                  file.isFavorite
-                                      ? 'action_unfavorite'
-                                      : 'action_favorite',
-                                ),
-                                onPressed: _toggleFavoriteCurrent,
-                              ),
                               const Spacer(),
                               // 回收站项：删除按钮左侧显示删除日期
                               if (file.isTrashed && file.dateTrashedMs > 0)
@@ -1057,64 +1073,47 @@ class _DetailPageState extends ConsumerState<DetailPage>
   }
 
   Future<void> _deleteCurrent() async {
+    // 弹窗模态守卫：底栏挂在 root Overlay（Hero 飞行层之上），在 dialog 的
+    // ModalBarrier 之上仍可点——弹窗显示期间再点「删除」会叠加弹窗（真机
+    // 复现多层 barrier 越点越黑）。弹窗已开时忽略重复点击，等效模态。
+    if (_deleteDialogShowing) return;
     final current = _selectedFile;
     if (current == null) return;
+    // setState：PopScope.canPop 依赖本标志，不重建则系统返回仍 pop 页面。
+    setState(() => _deleteDialogShowing = true);
+    try {
+      await _confirmAndDelete(current);
+    } finally {
+      _deleteDialogShowing = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  /// 弹出删除确认 sheet（系统相册式，公用 ConfirmSheet）。返回是否确认。
+  /// session.close 存入 [_deleteSheetClose] 供 PopScope 拦截系统返回时关闭。
+  Future<bool> _showDeleteSheet({required String title, String? desc}) async {
+    final session = showConfirmSheet(
+      context,
+      title: title,
+      desc: desc,
+      cancelText: t(ref, 'cancel'),
+      confirmText: t(ref, 'confirm'),
+    );
+    _deleteSheetClose = session.close;
+    try {
+      return await session.confirmed;
+    } finally {
+      _deleteSheetClose = null;
+    }
+  }
+
+  Future<void> _confirmAndDelete(MsImageInfo current) async {
     final controller = ref.read(galleryControllerProvider.notifier);
     if (current.isTrashed) {
       // 回收站视图：彻底删除。
-      final confirmed = await showCenterDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: AppColors.surface,
-          title: Text(
-            t(ref, 'delete_permanently'),
-            style: const TextStyle(
-              fontFamily: 'Space Mono',
-              fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-              color: AppColors.text,
-              fontSize: 15,
-            ),
-          ),
-          content: Text(
-            t(ref, 'delete_permanently_desc'),
-            style: const TextStyle(
-              fontFamily: 'Space Mono',
-              fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-              color: AppColors.muted,
-              fontSize: 13,
-            ),
-          ),
-          actions: [
-            Row(
-              children: [
-                Expanded(
-                  child: TextButton(
-                    onPressed: () => Navigator.pop(ctx, false),
-                    child: Text(
-                      t(ref, 'cancel'),
-                      style: const TextStyle(
-                        fontFamily: 'Space Mono',
-                        fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                        color: AppColors.muted,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: FilledButton(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.danger,
-                      foregroundColor: AppColors.bg,
-                    ),
-                    onPressed: () => Navigator.pop(ctx, true),
-                    child: Text(t(ref, 'confirm')),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
+      final confirmed = await _showDeleteSheet(
+        title: t(ref, 'delete_permanently'),
+        desc: t(ref, 'delete_permanently_desc'),
       );
       if (confirmed != true) return;
       final err = await controller.deletePhoto(current.id);
@@ -1126,50 +1125,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
       return;
     }
     // 普通视图：删除 = 移入回收站（与系统相册一致；回收站内可恢复/彻底删除）
-    final confirmed = await showCenterDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: Text(
-          t(ref, 'delete_confirm'),
-          style: const TextStyle(
-            fontFamily: 'Space Mono',
-            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-            color: AppColors.text,
-            fontSize: 15,
-          ),
-        ),
-        actions: [
-          Row(
-            children: [
-              Expanded(
-                child: TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: Text(
-                    t(ref, 'cancel'),
-                    style: const TextStyle(
-                      fontFamily: 'Space Mono',
-                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                      color: AppColors.muted,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.danger,
-                    foregroundColor: AppColors.bg,
-                  ),
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: Text(t(ref, 'confirm')),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
+    final confirmed = await _showDeleteSheet(
+      title: t(ref, 'delete_confirm'),
+      desc: t(ref, 'delete_confirm_desc'),
     );
     if (confirmed != true) return;
     final err = await controller.trashPhoto(current.id);
@@ -1691,6 +1649,7 @@ Widget _buildStripItem(
                     image: buildThumbnailProvider(
                       imageRefFromMediaStoreId(info.id),
                       size: _kThumbLoadSize,
+                      squareCrop: true, // 方形 cover item
                     ),
                     fit: BoxFit.cover,
                   ),

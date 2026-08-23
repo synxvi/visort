@@ -21,6 +21,7 @@ import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/ui/router_android.dart';
+import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
@@ -570,6 +571,12 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// 日期标签：今天/昨天/M月d日/YYYY年M月d日（跨年带年份）。
   /// 批量选择模式的底部操作栏：按视图模式提供不同操作。
   /// 普通相册：批量删除（移入回收站）；收藏：取消收藏 + 删除；回收站：恢复 + 彻底删除。
+  /// 选中集是否全部已收藏（系统相册式按钮三态判定；空集 = false）。
+  bool _selectedAllFavorited(GalleryState gallery) {
+    final selected = gallery.photos.where((p) => _selectedIds.contains(p.id));
+    return selected.isNotEmpty && selected.every((p) => p.isFavorite);
+  }
+
   Widget _buildBatchBar(GalleryState gallery) {
     final enabled = _selectedIds.isNotEmpty;
     Widget op(IconData icon, String label, Color color, VoidCallback? onTap) =>
@@ -617,12 +624,22 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             ),
           ]
         : [
-            op(
-              Icons.favorite_border,
-              t(ref, 'action_favorite'),
-              AppColors.accent,
-              _runBatchFavorite,
-            ),
+            // 系统相册式收藏按钮三态：选中集全部已收藏 → 「取消收藏」；
+            // 有任一未收藏（混合/全未收藏）→ 「收藏」（点击收藏未收藏项，
+            // 已收藏保持）。回收藏视图不显示收藏（trashedOnly 分支）。
+            _selectedAllFavorited(gallery)
+                ? op(
+                    Icons.favorite_border,
+                    t(ref, 'action_unfavorite'),
+                    AppColors.accent,
+                    _runBatchUnfavorite,
+                  )
+                : op(
+                    Icons.favorite_border,
+                    t(ref, 'action_favorite'),
+                    AppColors.accent,
+                    _runBatchFavorite,
+                  ),
             op(
               Icons.delete_outline,
               t(ref, 'delete_photo'),
@@ -656,51 +673,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       _exitSelectMode();
       return;
     }
-    final confirmed = await showCenterDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: Text(
-          t(ref, 'batch_delete_confirm', [ids.length]),
-          style: const TextStyle(
-            fontFamily: 'Space Mono',
-            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-            color: AppColors.text,
-            fontSize: 15,
-          ),
-        ),
-        actions: [
-          Row(
-            children: [
-              Expanded(
-                child: TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: Text(
-                    t(ref, 'cancel'),
-                    style: const TextStyle(
-                      fontFamily: 'Space Mono',
-                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                      color: AppColors.muted,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.danger,
-                    foregroundColor: AppColors.bg,
-                  ),
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: Text(t(ref, 'confirm')),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
+    final confirmed = await showConfirmSheet(
+      context,
+      title: t(ref, 'batch_delete_confirm', [ids.length]),
+      desc: t(ref, 'delete_confirm_desc'),
+      cancelText: t(ref, 'cancel'),
+      confirmText: t(ref, 'confirm'),
+    ).confirmed;
     if (confirmed != true || !mounted) return;
     final err = await ref
         .read(galleryControllerProvider.notifier)
@@ -720,51 +699,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       _exitSelectMode();
       return;
     }
-    final confirmed = await showCenterDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: Text(
-          t(ref, 'batch_restore_confirm', [ids.length]),
-          style: const TextStyle(
-            fontFamily: 'Space Mono',
-            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-            color: AppColors.text,
-            fontSize: 15,
-          ),
-        ),
-        actions: [
-          Row(
-            children: [
-              Expanded(
-                child: TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: Text(
-                    t(ref, 'cancel'),
-                    style: const TextStyle(
-                      fontFamily: 'Space Mono',
-                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                      color: AppColors.muted,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.accent,
-                    foregroundColor: AppColors.bg,
-                  ),
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: Text(t(ref, 'confirm')),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
+    final confirmed = await showConfirmSheet(
+      context,
+      title: t(ref, 'batch_restore_confirm', [ids.length]),
+      cancelText: t(ref, 'cancel'),
+      confirmText: t(ref, 'confirm'),
+      confirmColor: AppColors.accent,
+    ).confirmed;
     if (confirmed != true || !mounted) return;
     final err = await ref
         .read(galleryControllerProvider.notifier)
@@ -781,60 +722,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       _exitSelectMode();
       return;
     }
-    final confirmed = await showCenterDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: Text(
-          t(ref, 'delete_permanently'),
-          style: const TextStyle(
-            fontFamily: 'Space Mono',
-            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-            color: AppColors.text,
-            fontSize: 15,
-          ),
-        ),
-        content: Text(
-          t(ref, 'batch_delete_permanent_confirm', [ids.length]),
-          style: const TextStyle(
-            fontFamily: 'Space Mono',
-            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-            color: AppColors.muted,
-            fontSize: 13,
-          ),
-        ),
-        actions: [
-          Row(
-            children: [
-              Expanded(
-                child: TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: Text(
-                    t(ref, 'cancel'),
-                    style: const TextStyle(
-                      fontFamily: 'Space Mono',
-                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                      color: AppColors.muted,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.danger,
-                    foregroundColor: AppColors.bg,
-                  ),
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: Text(t(ref, 'confirm')),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
+    final confirmed = await showConfirmSheet(
+      context,
+      title: t(ref, 'delete_permanently'),
+      desc: t(ref, 'batch_delete_permanent_confirm', [ids.length]),
+      cancelText: t(ref, 'cancel'),
+      confirmText: t(ref, 'confirm'),
+    ).confirmed;
     if (confirmed != true || !mounted) return;
     final err = await ref
         .read(galleryControllerProvider.notifier)
@@ -872,6 +766,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     final err = await ref
         .read(galleryControllerProvider.notifier)
         .setFavorites(ids, false);
+    if (!mounted) return;
+    // 操作完成退出多选（对齐 _runBatchFavorite/删除/恢复；此前缺失 →
+    // 取消收藏后勾选态残留）。
+    _exitSelectMode();
     toast(
       context,
       err == null ? t(ref, 'unfavorited') : t(ref, 'favorite_failed'),

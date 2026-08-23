@@ -259,6 +259,7 @@ const Map<String, String> stringsEn = {
   // ───────── P1a · 回收站对话框 ─────────
   'delete_permanently': 'Delete permanently',
   'delete_permanently_desc': 'This cannot be undone.',
+  'delete_confirm_desc': 'You can restore it from trash.',
   'restore_desc': 'Restore to its original album.',
   'confirm': 'Confirm',
   'trash_deleted_label': 'Deleted',
