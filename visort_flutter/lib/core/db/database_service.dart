@@ -20,7 +20,9 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// 数据库版本史(与 docs/SQLITE_ROADMAP.md §3 一一对应):
 ///   v1 (P1): bucket_snapshot / bucket_photo —— 相册桶快照,替代 visort_snap_* prefs
-const int kDbVersion = 1;
+///   v2:     hdr_cache —— HDR 检测结果磁盘缓存(Kotlin 进程内 hdrCache 的
+///           落盘层,mtime 校验同语义;冷启动二次进桶零文件 IO)
+const int kDbVersion = 2;
 
 final databaseServiceProvider =
     Provider<DatabaseService>((ref) => DatabaseService());
@@ -67,8 +69,16 @@ class DatabaseService {
 
   static Future<void> _onUpgrade(
       sqflite.Database db, int oldVersion, int newVersion) async {
-    // v1 起步,暂无升级路径。P2 起在此追加:
-    //   if (oldVersion < 2) { await db.execute('CREATE TABLE sort_session ...'); ... }
+    // v1 → v2: HDR 检测磁盘缓存(真机上已存在的 v1 库走此路径)。
+    if (oldVersion < 2) {
+      await db.execute('''
+        CREATE TABLE hdr_cache (
+          id               TEXT PRIMARY KEY,
+          date_modified_ms INTEGER NOT NULL,
+          is_hdr           INTEGER NOT NULL
+        ) WITHOUT ROWID
+      ''');
+    }
   }
 
   /// 建当前版本的全部表(测试的内存库复用同一 schema,保证不漂移)。
@@ -103,6 +113,14 @@ class DatabaseService {
         height          INTEGER NOT NULL DEFAULT 0,
         is_hdr          INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (bucket_id, id)
+      ) WITHOUT ROWID
+    ''');
+    // ── v2: HDR 检测缓存 ──
+    await db.execute('''
+      CREATE TABLE hdr_cache (
+        id               TEXT PRIMARY KEY,
+        date_modified_ms INTEGER NOT NULL,
+        is_hdr           INTEGER NOT NULL
       ) WITHOUT ROWID
     ''');
   }

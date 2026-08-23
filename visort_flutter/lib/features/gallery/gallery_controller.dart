@@ -20,6 +20,7 @@ import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/config/profiles_service.dart';
 import 'package:visort_flutter/core/db/database_service.dart';
 import 'package:visort_flutter/core/db/gallery_snapshot_store.dart';
+import 'package:visort_flutter/core/db/hdr_cache_store.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/fs/mediastore_events.dart';
@@ -184,6 +185,13 @@ class GalleryController extends Notifier<GalleryState> {
   /// 旧方案(SharedPreferences 整桶 JSON)已废弃,见 gallery_snapshot_store.dart。
   late final GallerySnapshotStore _snapshotStore;
 
+  /// HDR 检测磁盘 store(v2:hdr_cache 表,Kotlin 进程内缓存的落盘层)。
+  late final HdrCacheStore _hdrStore;
+
+  /// HDR 补测分批大小:一批 ≈ 数十 ms(60 张 × 64KB 头读),到货即回填——
+  /// 首屏徽标不等全桶长尾(对齐 Kotlin detectHdrs 注释的分页语义)。
+  static const _hdrBatchSize = 60;
+
   /// 视图加载序号：enterBucket/enterFavorites/enterTrash 每次 +1，
   /// 异步返回时比对，旧请求结果直接丢弃（防止切桶/切视图竞态覆盖）。
   int _loadToken = 0;
@@ -199,6 +207,7 @@ class GalleryController extends Notifier<GalleryState> {
     final config = ref.read(configProvider);
     _snapshotStore = GallerySnapshotStore(
         ref.read(databaseServiceProvider).database);
+    _hdrStore = HdrCacheStore(ref.read(databaseServiceProvider).database);
     // 订阅 MediaStore 变更：图库增删时静默刷新当前视图。
     // 通过 provider 取流，便于测试 override（绕过 EventChannel）。
     // 非安卓端 EventChannel 无 handler，订阅 onError 静默忽略。
@@ -367,42 +376,89 @@ class GalleryController extends Notifier<GalleryState> {
     unawaited(_backfillHdr(bucketId, token, page.images));
   }
 
-  /// HDR 后台补测：scanImages 不做文件 IO（曾内联 64KB 头读，全 JPEG
-  /// 大相册一把梭页几十秒，真机 Camera 相册卡死实证），徽标数据经独立
-  /// channel 批量检测，到货后 copyWith 回填列表。Kotlin hdrCache 保证
-  /// 重复进桶/二次启动零文件 IO（缓存命中）。
+  /// HDR 后台补测:scanImages 不做文件 IO(曾内联 64KB 头读,全 JPEG
+  /// 大相册一把梭页几十秒,真机 Camera 相册卡死实证),徽标数据经独立
+  /// channel 批量检测,到货后 copyWith 回填列表。
+  ///
+  /// 三级流水(hdr_cache 落盘后):
+  ///   1. SQLite hdr_cache 命中(id+mtime 匹配)→ 零文件 IO 直出——
+  ///      冷启动二次进桶徽标零延迟,且跨桶/收藏/回收站视图共享;
+  ///   2. miss 按批([_hdrBatchSize])调 Kotlin detectHdrs,每批到货即回填
+  ///      ——首屏徽标不等全桶长尾(列表原序 = 可见区在前,前几批先回);
+  ///   3. 每批结果(true/false 都)写回 hdr_cache,下次全走 1。
+  /// Kotlin hdrCache(进程内)保留为一级缓存,两级语义一致。
   Future<void> _backfillHdr(
     String bucketId,
     int token,
     List<MsImageInfo> photos,
   ) async {
-    final jpegs = photos.where((p) => p.mime == 'image/jpeg').toList();
-    if (jpegs.isEmpty) return;
-    try {
-      final hdrs = await _channel.detectHdrs(
-        jpegs.map((p) => p.id).toList(),
-        jpegs.map((p) => p.dateModifiedMs).toList(),
-      );
-      if (token != _loadToken || state.bucketId != bucketId) return;
-      // 全 false 不重建（无谓的全网格 rebuild）。
-      final hdrIds = <String>{
-        for (var i = 0; i < jpegs.length; i++)
-          if (hdrs[i]) jpegs[i].id,
-      };
-      if (hdrIds.isEmpty) return;
-      final updated = [
-        for (final p in state.photos)
-          if (hdrIds.contains(p.id)) p.copyWith(isHdr: true) else p,
-      ];
-      state = state.copyWith(photos: updated);
-      _putSnapshot(
-        bucketId,
-        _BucketSnapshot(updated, state.nextCursor,
-            state.effectivePhotoSortBy, state.photoSortAsc),
-      );
-    } catch (_) {
-      // 补测失败静默：badge 缺失可接受，不阻塞网格。
+    // 快照直出路径可能已带 true(上次测过)——已标的不重测。
+    final toCheck = [
+      for (final p in photos)
+        if (p.mime == 'image/jpeg' && !p.isHdr) p,
+    ];
+    if (toCheck.isEmpty) return;
+
+    // 1) 磁盘缓存命中直出(store 内部吞错,失败 = 空 Map 全走补测)。
+    final cached = await _hdrStore.lookup({
+      for (final p in toCheck) p.id: p.dateModifiedMs,
+    });
+    if (token != _loadToken || state.bucketId != bucketId) return;
+    final cachedTrue = <String>{
+      for (final e in cached.entries)
+        if (e.value) e.key,
+    };
+    if (cachedTrue.isNotEmpty) {
+      _applyHdrFlags(bucketId, cachedTrue);
     }
+
+    // 2) miss 分批补测,每批到货即回填。
+    final miss = [
+      for (final p in toCheck)
+        if (!cached.containsKey(p.id)) p,
+    ];
+    for (var i = 0; i < miss.length; i += _hdrBatchSize) {
+      final batch = miss.skip(i).take(_hdrBatchSize).toList(growable: false);
+      try {
+        final hdrs = await _channel.detectHdrs(
+          batch.map((p) => p.id).toList(growable: false),
+          batch.map((p) => p.dateModifiedMs).toList(growable: false),
+        );
+        if (token != _loadToken || state.bucketId != bucketId) return;
+        final trueIds = <String>{
+          for (var j = 0; j < batch.length; j++)
+            if (hdrs[j]) batch[j].id,
+        };
+        // 3) 写回缓存(true/false 都写——false 也免下次重测)。
+        unawaited(_hdrStore.putAll({
+          for (var j = 0; j < batch.length; j++)
+            batch[j].id: (batch[j].dateModifiedMs, hdrs[j]),
+        }));
+        if (trueIds.isNotEmpty) {
+          _applyHdrFlags(bucketId, trueIds);
+        }
+      } catch (_) {
+        // 补测失败静默:badge 缺失可接受,不阻塞网格。
+      }
+    }
+  }
+
+  /// 回填一组 HDR 标记:copyWith 列表 + 状态 + 快照更新。
+  /// 缓存直出与各补测批次共用;已是 true 的不触发 rebuild。
+  void _applyHdrFlags(String bucketId, Set<String> hdrIds) {
+    final alreadyAll = state.photos
+        .every((p) => !hdrIds.contains(p.id) || p.isHdr);
+    if (alreadyAll) return;
+    final updated = [
+      for (final p in state.photos)
+        if (hdrIds.contains(p.id) && !p.isHdr) p.copyWith(isHdr: true) else p,
+    ];
+    state = state.copyWith(photos: updated);
+    _putSnapshot(
+      bucketId,
+      _BucketSnapshot(updated, state.nextCursor,
+          state.effectivePhotoSortBy, state.photoSortAsc),
+    );
   }
 
   /// 桶快照 LRU：最多保留 8 桶，超出删最早写入的。

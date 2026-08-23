@@ -63,7 +63,14 @@ CREATE TABLE bucket_photo (
 ) WITHOUT ROWID;
 ```
 
-### P2(v2)分类通路
+### v2(计划外插入)HDR 检测缓存
+
+相册徽标提速:Kotlin 进程内 `hdrCache` 的落盘层,冷启动二次进桶零文件 IO,
+跨桶/收藏/回收站视图共享。`hdr_cache(id PK, date_modified_ms, is_hdr)`,
+mtime 校验同 Kotlin 语义;补测改 60 张/批渐进回填(首屏不等全桶长尾)。
+后续阶段版本号顺延:P2→v3、P3→v4、P4→v5。
+
+### P2(v3)分类通路
 
 ```sql
 CREATE TABLE sort_session (
@@ -93,7 +100,7 @@ CREATE TABLE sort_decision (
 ) WITHOUT ROWID;
 ```
 
-### P3(v3)
+### P3(v4)
 
 ```sql
 CREATE TABLE run_log (
@@ -105,7 +112,7 @@ CREATE TABLE run_log (
 );
 ```
 
-### P4(v4,仅桌面)
+### P4(v5,仅桌面)
 
 ```sql
 CREATE TABLE scan_cache (
