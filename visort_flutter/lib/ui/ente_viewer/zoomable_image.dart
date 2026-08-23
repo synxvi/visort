@@ -467,29 +467,27 @@ class _ZoomableImageState extends State<ZoomableImage> {
 
   Future<void> _updateViewWithFinalImage(ImageProvider imageProvider) async {
     // 仅【真放大态】（用户主动 zoomedIn）才做 ente 式尺寸修正保持视角；
-    // 其他态（initial/误标 zoomedOut）直接复位两控制器。
+    // 其余态静默把 scaleState 归位 initial（setInvisibly 无通知、零副作用）。
     //
-    // 必须复位的原因：起始 provider 是方形裁剪缩略图（cell/large 均
-    // squareCrop），core 按方形 contain 写回过很大的绝对 scale（竖屏约
-    // 屏高/300≈8）且 photo_view 把初始 contain 误标 zoomedOut（非
-    // initial → _isZooming 误 true）。若不复位：
-    //   - 残留 scale × 等比 childSize = 巨图；
-    //   - 或走 _updatePhotoViewController 的宽比修正（隐含按宽适配，方形
-    //     contain 实为按高适配）= 换算错数倍仍巨图（真机实证：第二次删除
-    //     补位、原图未缓存的下一张放大数倍）。
-    // 复位后 PhotoView key 重建（ValueKey(_loadedFinalImage)），新 core 按
-    // initial 重算 contain(等比) = 正确初始视图。
-    final realZoomed =
-        _scaleStateController.scaleState == PhotoViewScaleState.zoomedIn;
-    if (realZoomed) {
+    // 归位原因：起始 provider 是方形裁剪缩略图（cell/large 均 squareCrop），
+    // core 按方形 contain 写回过很大的绝对 scale（竖屏约屏高/300≈8），且
+    // _blindScaleListener 把初始 contain 误标 zoomedOut。该残留若带到
+    // PhotoView key 重建（ValueKey(_loadedFinalImage)）之后：新 core 的
+    // markNeedsScaleRecalc 被 isScaleStateZooming（含 zoomedOut）抑制 →
+    // 沿用方形时代绝对 scale × 等比 childSize = 巨图（删除补位、原图未
+    // 缓存的下一张真机实证）。归位 initial 让新 core 按 initial 重算
+    // contain(等比)。
+    // ⚠️ 不可用 _scaleStateController.reset()/控制器 reset()：reset 是普通
+    // 通知，会同步触发 _blindScaleStateListener → setScaleInvisibly(旧值)
+    // 与 scaleStateChangedCallback 链，首开慢图（precache 未完成、有方形
+    // 过渡）实证引入显示放大回归。
+    if (_scaleStateController.scaleState == PhotoViewScaleState.zoomedIn) {
       await _updatePhotoViewController(
         previewImageProvider: _imageProvider,
         finalImageProvider: imageProvider,
       );
     } else {
-      _photoViewController.reset();
-      _scaleStateController.reset();
-      _initialScale = null;
+      _scaleStateController.setInvisibly(PhotoViewScaleState.initial);
     }
     if (!mounted) return;
     setState(() {
@@ -507,9 +505,12 @@ class _ZoomableImageState extends State<ZoomableImage> {
     required ImageProvider? previewImageProvider,
     required ImageProvider finalImageProvider,
   }) async {
+    // 真放大态判据用 zoomedIn 而非 _isZooming：后者被 photo_view 把初始
+    // contain 误标的 zoomedOut 污染（zoomedOut≠initial → _isZooming=true），
+    // 而本修正公式隐含按宽适配，方形 contain 实为按高适配 → 换算错数倍。
     final bool shouldFixPosition =
         previewImageProvider != null &&
-        _isZooming &&
+        _scaleStateController.scaleState == PhotoViewScaleState.zoomedIn &&
         _photoViewController.scale != null;
     if (!shouldFixPosition) return;
     final prevImageInfo = await _resolveImageInfo(previewImageProvider);
