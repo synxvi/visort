@@ -570,6 +570,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
               ],
             );
             return ValueListenableBuilder(
+              // 按 file.id 建 key：删除补位时列表移位，element 跟着【图】走
+              // 而非"同 index 复用换血"——换图场景（didUpdateWidget 换
+              // photo + childSize/scale 竞态）整体消失，补位页的缩放/加载
+              // 链全程连续（真机实证方→扁/竖→扁补位均无大小跳变）。
+              key: ValueKey('vp_${file.id}'),
               valueListenable: _selectedIndexNotifier,
               builder: (context, selectedIndex, _) =>
                   HeroMode(enabled: index == selectedIndex, child: page),

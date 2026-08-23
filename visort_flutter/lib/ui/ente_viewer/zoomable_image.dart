@@ -136,7 +136,22 @@ class _ZoomableImageState extends State<ZoomableImage> {
   @override
   void didUpdateWidget(covariant ZoomableImage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.photo.id == widget.photo.id) return;
+    if (oldWidget.photo.id == widget.photo.id) {
+      // 同图（PageView item 按 file.id 建 key，补位移位时 element 跟图走）：
+      // 仅 pageIndex 可能变化——双击路由表须跟着挪，否则顶层双击分发到错页。
+      final oldIdx = oldWidget.pageIndex;
+      final newIdx = widget.pageIndex;
+      if (oldIdx != newIdx) {
+        final handlers = _inherited?.doubleTapHandlers;
+        if (handlers != null && oldIdx != null) {
+          handlers.remove(oldIdx);
+        }
+        if (handlers != null && newIdx != null) {
+          handlers[newIdx] = _handleTopDoubleTap;
+        }
+      }
+      return;
+    }
     // 删除补位：PageView 同 index 复用本 state 但 photo 已换——必须整体
     // 重置三级加载链与缩放，否则沿用旧 provider = 主图停留被删那张。
     // 起始 provider 按 ImageCache 分级取最高可用级：补位图（原下一张）
