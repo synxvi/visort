@@ -95,4 +95,5 @@ sealed class MsError(val code: String, message: String) : Exception(message) {
     object TrashUnsupported : MsError("TRASH_UNSUPPORTED", "回收站需要 Android 10+")
     object TrashCancelled : MsError("TRASH_CANCELLED", "用户取消移入回收站")
     object RestoreCancelled : MsError("RESTORE_CANCELLED", "用户取消恢复")
+    object NameExists : MsError("NAME_EXISTS", "同名文件已存在")
 }

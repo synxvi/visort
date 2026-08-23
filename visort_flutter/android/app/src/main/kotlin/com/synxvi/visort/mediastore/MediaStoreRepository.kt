@@ -1290,6 +1290,155 @@ class MediaStoreRepository(private val context: Context) {
         return success
     }
 
+    // ──────────── 重命名（改 DISPLAY_NAME）────────────
+
+    /// 同目录下是否已存在同名文件（大小写不敏感，排除自身，排除回收站项——
+    /// 默认 query 不含 trashed）。重命名预检用（aves rename dialog 同款校验）。
+    fun nameExistsInDir(id: String, newName: String): Boolean {
+        val longId = id.toLongOrNull() ?: return false
+        val srcUri = ContentUris.withAppendedId(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
+        )
+        // 源文件所在目录（RELATIVE_PATH）
+        val relPath = try {
+            contentResolver.query(
+                srcUri, arrayOf(MediaStore.Images.Media.RELATIVE_PATH), null, null, null
+            )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        } catch (e: Exception) {
+            Log.w(TAG, "nameExistsInDir 查目录异常: ${e.message}"); null
+        } ?: return false
+        val selection =
+            "${MediaStore.Images.Media.RELATIVE_PATH} = ? AND LOWER(${MediaStore.Images.Media.DISPLAY_NAME}) = ? AND ${MediaStore.Images.Media._ID} != ?"
+        return try {
+            contentResolver.query(
+                collection,
+                arrayOf(MediaStore.Images.Media._ID),
+                selection,
+                arrayOf(relPath, newName.lowercase(), longId.toString()),
+                null
+            )?.use { it.count > 0 } ?: false
+        } catch (e: Exception) {
+            Log.w(TAG, "nameExistsInDir 查同名异常: ${e.message}")
+            false
+        }
+    }
+
+    /// 单张重命名（update DISPLAY_NAME，MediaStore 自动同步重命名底层文件，
+    /// _ID 不变 → Dart 侧 uri/缓存仍有效，仅 name 变化）。
+    /// 与 moveToRelativePath 同款 Done/NeedsConsent 双分支：自有文件直接
+    /// update 成功；他人文件走 createWriteRequest 授权后重试。
+    fun renameTo(id: String, newName: String): MoveResult {
+        if (id.isEmpty() || newName.isEmpty()) return MoveResult.Done(0)
+        val longId = id.toLongOrNull() ?: return MoveResult.Done(0)
+        val itemUri = ContentUris.withAppendedId(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
+        )
+        val doUpdate = {
+            try {
+                val cv = android.content.ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, newName)
+                }
+                if (contentResolver.update(itemUri, cv, null, null) > 0) 1 else 0
+            } catch (e: Exception) {
+                Log.w(TAG, "renameTo update 异常: ${e.message}"); 0
+            }
+        }
+        val success = doUpdate()
+        if (success > 0) {
+            Log.i(TAG, "renameTo 直接成功: $id → $newName")
+            return MoveResult.Done(success)
+        }
+        // 他人文件 → createWriteRequest 授权（MANAGE_MEDIA 下免弹窗直通）
+        return try {
+            val sender = buildWriteRequest(listOf(id))
+            if (sender != null) MoveResult.NeedsConsent(sender) else MoveResult.Done(0)
+        } catch (e: Exception) {
+            Log.w(TAG, "renameTo buildWriteRequest 异常: ${e.message}")
+            MoveResult.Done(0)
+        }
+    }
+
+    /// 授权通过后真正执行重命名（onActivityResult 回调里重试）。返回 1 成功。
+    fun doRename(id: String, newName: String): Int {
+        val longId = id.toLongOrNull() ?: return 0
+        val itemUri = ContentUris.withAppendedId(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
+        )
+        return try {
+            val cv = android.content.ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, newName)
+            }
+            val rows = contentResolver.update(itemUri, cv, null, null)
+            Log.i(TAG, "doRename item $id: $rows 行 → $newName")
+            if (rows > 0) 1 else 0
+        } catch (e: Exception) {
+            Log.w(TAG, "doRename item $id 异常: ${e.message}")
+            0
+        }
+    }
+
+    // ──────────── 复制到相册（insert 新条目 + 流拷贝）────────────
+
+    /// 批量复制到指定 RELATIVE_PATH。返回成功数。
+    /// 权限模型与 move 不同：读源（READ_MEDIA_IMAGES 已覆盖全部图）+ 写自己
+    /// insert 的新条目（owner 是本 app）→ 无需授权弹窗。
+    /// 同名冲突：MediaStore insert 自动加 " (1)" 后缀（aves RENAME 冲突策略）。
+    /// 新条目 DATE_ADDED 为当前时间（copy 语义即新文件）。
+    fun copyToRelativePath(ids: List<String>, relativePath: String): Int {
+        if (ids.isEmpty() || relativePath.isEmpty()) return 0
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return 0 // RELATIVE_PATH/IS_PENDING 都要 Q+
+
+        val normalizedPath = if (relativePath.endsWith("/")) relativePath else "$relativePath/"
+        var success = 0
+        for (id in ids) {
+            val longId = id.toLongOrNull() ?: continue
+            val srcUri = ContentUris.withAppendedId(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
+            )
+            try {
+                // 源元数据（DISPLAY_NAME / MIME_TYPE）
+                val src = contentResolver.query(
+                    srcUri,
+                    arrayOf(MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.MIME_TYPE),
+                    null, null, null
+                )?.use { c ->
+                    if (c.moveToFirst()) (c.getString(0) ?: "") to (c.getString(1) ?: "image/jpeg") else null
+                } ?: continue
+                val (srcName, srcMime) = src
+                if (srcName.isEmpty()) continue
+                val values = android.content.ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, srcName)
+                    put(MediaStore.Images.Media.MIME_TYPE, srcMime)
+                    put(MediaStore.Images.Media.RELATIVE_PATH, normalizedPath)
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                val dstUri = contentResolver.insert(collection, values) ?: continue
+                var copied = false
+                contentResolver.openInputStream(srcUri)?.use { input ->
+                    contentResolver.openOutputStream(dstUri)?.use { output ->
+                        input.copyTo(output)
+                        copied = true
+                    }
+                }
+                if (copied) {
+                    // 发布条目（IS_PENDING=0 后 MediaStore 扫描入库、进相册）
+                    val done = android.content.ContentValues().apply {
+                        put(MediaStore.Images.Media.IS_PENDING, 0)
+                    }
+                    contentResolver.update(dstUri, done, null, null)
+                    success++
+                } else {
+                    // 拷贝失败：清理 pending 占位条目，不留残尸
+                    contentResolver.delete(dstUri, null, null)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "copyToRelativePath item $id 异常: ${e.message}")
+            }
+        }
+        Log.i(TAG, "copyToRelativePath 完成: $success/${ids.size} → $normalizedPath")
+        return success
+    }
+
     /// 构造授权请求的 IntentSender。
     /// 策略：尝试 update（用真实 RELATIVE_PATH），捕获 SecurityException 获取授权 intentSender。
     /// 授权通过后，Plugin 会重新调 doMoveToRelativePath 执行移动。

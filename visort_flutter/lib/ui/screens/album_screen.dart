@@ -11,6 +11,8 @@
 // 注意：本文件已拆分——PhotoViewer 见 photo_viewer.dart，详情抽屉见
 // photo_details_sheet.dart，共享辅助见 album_common.dart。
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
@@ -22,9 +24,13 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/ui/router_android.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
+import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
+import 'package:visort_flutter/shared/widgets/rename_dialog.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
+
+import 'album_picker_screen.dart';
 
 import 'package:visort_flutter/ui/ente_viewer/gallery.dart' show Gallery;
 import 'package:visort_flutter/ui/ente_viewer/gallery_groups.dart';
@@ -82,6 +88,14 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   // ── 批量选择模式：长按 cell 进入，勾选后底部操作栏执行批量操作 ──
   bool _selectMode = false;
   final Set<String> _selectedIds = {};
+
+  // ── 勾选态右上 ⋮ 菜单（复制/移动/重命名入口，首页 ⋮ 同款非模态浮层）──
+  final GlobalKey _menuBtnKey = GlobalKey();
+  NonModalMenuController? _menuCtl;
+
+  /// 滚动脉冲信号（菜单展开中网格滚动 → 自动收回）。
+  final ValueNotifier<bool> _isScrolling = ValueNotifier(false);
+  Timer? _scrollIdleTimer;
 
   /// ente Gallery 选择态（勾选渲染用）；_selectedIds 保持真源，双向同步。
   final SelectedFiles _selection = SelectedFiles();
@@ -220,18 +234,31 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     _scrollCtrl.dispose();
     _timelineScrollCtrl.removeListener(_onTimelineScroll);
     _timelineScrollCtrl.dispose();
+    _scrollIdleTimer?.cancel();
+    _isScrolling.dispose();
     super.dispose();
   }
 
   void _onScroll() {
     if (!_scrollCtrl.hasClients) return;
+    _notifyScrollPulse();
     _maybeLoadMore(_scrollCtrl.position);
   }
 
   /// 日期视图滚动：接近底部触发 loadMore（独立 controller）。
   void _onTimelineScroll() {
     if (!_timelineScrollCtrl.hasClients) return;
+    _notifyScrollPulse();
     _maybeLoadMore(_timelineScrollCtrl.position);
+  }
+
+  /// 滚动脉冲：置 true 后 400ms 无新滚动回落 false（菜单据此收回）。
+  void _notifyScrollPulse() {
+    _isScrolling.value = true;
+    _scrollIdleTimer?.cancel();
+    _scrollIdleTimer = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) _isScrolling.value = false;
+    });
   }
 
   /// 接近底部触发 loadMore。全量加载后 nextCursor=null，loadMore 内部直接 return，
@@ -308,11 +335,23 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                       _syncSelection();
                     }),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    tooltip: t(ref, 'batch_cancel'),
-                    onPressed: _exitSelectMode,
-                  ),
+                  // 勾选态右上：普通相册/收藏视图换 ⋮ 选项菜单（首页 ⋮ 同款），
+                  // 复制到相册/移至相册/重命名入口；系统返回手势已可退出勾选态，
+                  // 不再放「取消」叉号。回收站视图保留叉号——回收站项复制/移动/
+                  // 重命名均无意义，菜单无项可放。
+                  if (widget.trashedOnly)
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      tooltip: t(ref, 'batch_cancel'),
+                      onPressed: _exitSelectMode,
+                    )
+                  else
+                    IconButton(
+                      key: _menuBtnKey,
+                      icon: const Icon(Icons.more_vert, color: AppColors.text),
+                      tooltip: t(ref, 'gallery_manage'),
+                      onPressed: _showBatchMenu,
+                    ),
                 ]
               : [
                   // 与首页顶栏一致的排版：SortToggle 右移 14 贴近右侧按钮
@@ -774,6 +813,172 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       context,
       err == null ? t(ref, 'unfavorited') : t(ref, 'favorite_failed'),
     );
+  }
+
+  // ─────────────── 勾选态 ⋮ 菜单：复制/移动/重命名 ───────────────
+
+  /// 勾选态右上 ⋮ 菜单（首页 overflow 菜单同款非模态浮层）。
+  /// 重命名仅单选可用（多选批量重命名需要模板页，暂不提供）。
+  void _showBatchMenu() {
+    // toggle：菜单已展开则收回（与首页 _showOverflowMenu 同款）。
+    if (_menuCtl != null && !_menuCtl!.isClosed) {
+      _menuCtl!.close();
+      return;
+    }
+    const menuWidth = 184.0;
+    _menuCtl = showNonModalMenu(
+      context: context,
+      anchorKey: _menuBtnKey,
+      menuWidth: menuWidth,
+      isScrolling: _isScrolling,
+      menuBuilder: (ctx) => Material(
+        color: AppColors.surfaceElevated,
+        elevation: 3,
+        borderRadius: BorderRadius.circular(12),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _menuItem(
+              ctx,
+              Icons.content_copy,
+              t(ref, 'copy_to_album'),
+              onTap: () {
+                _menuCtl?.close();
+                _batchCopyToAlbum();
+              },
+            ),
+            _menuItem(
+              ctx,
+              Icons.drive_file_move_outlined,
+              t(ref, 'move_to_album'),
+              onTap: () {
+                _menuCtl?.close();
+                _batchMoveToAlbum();
+              },
+            ),
+            _menuItem(
+              ctx,
+              Icons.drive_file_rename_outline,
+              t(ref, 'rename'),
+              // 多选时置灰（单文件操作；批量重命名需要模板页，暂不提供）
+              enabled: _selectedIds.length == 1,
+              onTap: () {
+                _menuCtl?.close();
+                _batchRename();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 菜单单项（首页 _buildMenuItem 同款：图标 + 文本，48 高）。
+  Widget _menuItem(
+    BuildContext ctx,
+    IconData icon,
+    String label, {
+    required VoidCallback onTap,
+    bool enabled = true,
+  }) {
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      child: SizedBox(
+        height: 48,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Icon(
+                icon,
+                color: enabled ? AppColors.text : AppColors.muted,
+                size: 20,
+              ),
+              const SizedBox(width: 12),
+              Text(
+                label,
+                style: TextStyle(
+                  fontFamily: 'Space Mono',
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  color: enabled ? AppColors.text : AppColors.muted,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// controller 返回的错误串 → i18n 显示：已知 key（'move_failed' 等）直接
+  /// 翻译，异常串（意外错误）回退到通用失败文案。
+  String _errText(String err, String fallbackKey) =>
+      err.contains(' ') ? t(ref, fallbackKey) : t(ref, err);
+
+  /// 批量复制到相册：相册选择页选目标 → insert 新条目 + 流拷贝（零弹窗）。
+  Future<void> _batchCopyToAlbum() async {
+    final ids = _currentSelectedIds();
+    if (ids.isEmpty) return;
+    final bucket = await pushAlbumPicker(context, titleKey: 'copy_to_album');
+    if (bucket == null || !mounted) return;
+    final err = await ref
+        .read(galleryControllerProvider.notifier)
+        .copyPhotosToAlbum(ids, bucket.id);
+    if (!mounted) return;
+    if (err != null) {
+      toast(context, _errText(err, 'copy_failed'));
+      return;
+    }
+    // 原图不动（列表不移除），退出勾选态即可。
+    _exitSelectMode();
+    toast(context, t(ref, 'copied'));
+  }
+
+  /// 批量移至相册：相册选择页选目标 → 改 RELATIVE_PATH（系统弹窗/ManageMedia
+  /// 免弹）。成功后本地移除（同批量删除的 UI 表现）。
+  Future<void> _batchMoveToAlbum() async {
+    final ids = _currentSelectedIds();
+    if (ids.isEmpty) return;
+    final bucket = await pushAlbumPicker(context, titleKey: 'move_to_album');
+    if (bucket == null || !mounted) return;
+    final err = await ref
+        .read(galleryControllerProvider.notifier)
+        .movePhotosToAlbum(ids, bucket.id);
+    if (!mounted) return;
+    if (err != null) {
+      toast(context, _errText(err, 'move_failed'));
+      return;
+    }
+    _exitSelectMode();
+    toast(context, t(ref, 'moved_toast'));
+  }
+
+  /// 重命名当前唯一选中项（对话框 + DISPLAY_NAME 更新）。
+  Future<void> _batchRename() async {
+    if (_selectedIds.length != 1) return;
+    final photos = ref.read(galleryControllerProvider).photos;
+    MsImageInfo? photo;
+    for (final p in photos) {
+      if (p.id == _selectedIds.first) {
+        photo = p;
+        break;
+      }
+    }
+    if (photo == null) return;
+    final newName = await showRenameDialog(context, ref, photo: photo);
+    if (newName == null || !mounted) return;
+    final err = await ref
+        .read(galleryControllerProvider.notifier)
+        .renamePhoto(photo.id, newName);
+    if (!mounted) return;
+    if (err != null) {
+      toast(context, _errText(err, 'rename_failed'));
+      return;
+    }
+    _exitSelectMode();
+    toast(context, t(ref, 'renamed'));
   }
 
   /// viewer 翻页：飞行层返回动画跟随当前照片——更新飞行层图 + 滚动网格到

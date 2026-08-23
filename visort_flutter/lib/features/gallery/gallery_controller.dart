@@ -830,6 +830,70 @@ class GalleryController extends Notifier<GalleryState> {
     }
   }
 
+  // ───────────────────────── 复制 / 移至相册 / 重命名 ─────────────────────────
+
+  /// 批量移至指定相册（getBucketRelativePath 解析目标 → requestMove 改
+  /// RELATIVE_PATH）。成功后本地移除 + 清缓存 + 重查相册列表。
+  /// 返回 null 成功；'move_failed' / 'move_cancelled' 失败。
+  Future<String?> movePhotosToAlbum(List<String> ids, String bucketId) async {
+    if (ids.isEmpty) return null;
+    try {
+      final rel = await _channel.getBucketRelativePath(bucketId);
+      if (rel == null || rel.isEmpty) return 'move_failed';
+      final n = await _channel.requestMove(ids, rel);
+      if (n <= 0) return 'move_cancelled';
+      for (final id in ids) {
+        evictImageCache(id);
+      }
+      // 先同步桶数（需 photos 定位所属相册），再移除本地列表。
+      _applyBucketDeltaBatch(ids, countDelta: -1);
+      state = state.copyWith(
+        photos: state.photos.where((p) => !ids.contains(p.id)).toList(),
+      );
+      await loadBuckets();
+      return null;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  /// 批量复制到指定相册（insert 新条目 + 流拷贝，零弹窗；同名自动加 " (1)"）。
+  /// 原图不动（本地列表不移除），重查相册列表刷新目标桶 count。
+  /// 返回 null 成功；'copy_failed' 失败。
+  Future<String?> copyPhotosToAlbum(List<String> ids, String bucketId) async {
+    if (ids.isEmpty) return null;
+    try {
+      final rel = await _channel.getBucketRelativePath(bucketId);
+      if (rel == null || rel.isEmpty) return 'copy_failed';
+      final n = await _channel.requestCopy(ids, rel);
+      if (n <= 0) return 'copy_failed';
+      await loadBuckets();
+      return null;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  /// 重命名单张（update DISPLAY_NAME）。同名抛 MsException(nameExists)
+  /// 由调用方转 toast；成功后本地回填 name（_ID 不变，uri/缩略图缓存仍有效）。
+  Future<String?> renamePhoto(String id, String newName) async {
+    try {
+      final n = await _channel.requestRename(id, newName);
+      if (n <= 0) return 'rename_cancelled';
+      state = state.copyWith(
+        photos: state.photos
+            .map((p) => p.id == id ? p.copyWith(name: newName) : p)
+            .toList(),
+      );
+      return null;
+    } on MsException catch (e) {
+      // 同名冲突等类型化错误：原样透传 code 名，UI 层直接当 i18n key
+      return e.code.name;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
   /// 批量删除/恢复后本地同步首页相册列表（按桶聚合 count 增减、删封面时
   /// 从剩余照片推进到下一张）。必须在移除 state.photos 之前调用。
   void _applyBucketDeltaBatch(List<String> ids, {required int countDelta}) {

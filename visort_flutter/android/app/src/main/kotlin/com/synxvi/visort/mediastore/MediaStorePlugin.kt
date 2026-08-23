@@ -60,6 +60,7 @@ private const val REQUEST_PERMISSION = 0x5045 // "PE"
 private const val REQUEST_FAVORITE = 0x4641 // "FA"
 private const val REQUEST_TRASH = 0x5452 // "TR"
 private const val REQUEST_RESTORE = 0x5253 // "RS"
+private const val REQUEST_RENAME = 0x524E // "RN"
 
 class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     PluginRegistry.ActivityResultListener,
@@ -88,6 +89,11 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     private var pendingMoveResult: Result? = null
     private var pendingMoveIds: List<String> = emptyList()
     private var pendingMoveRelativePath: String = ""
+
+    /// 待处理的重命名请求（他人文件授权弹窗异步）
+    private var pendingRenameResult: Result? = null
+    private var pendingRenameId: String = ""
+    private var pendingRenameNewName: String = ""
 
     /// 待处理的权限请求
     private var pendingPermissionResult: Result? = null
@@ -169,6 +175,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         repository = null
         pendingDeleteResult = null
         pendingPermissionResult = null
+        pendingRenameResult = null
     }
 
     // ──────────── ActivityResult 回调（删除弹窗） ────────────
@@ -236,6 +243,24 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 }
                 return true
             }
+            REQUEST_RENAME -> {
+                val pending = pendingRenameResult ?: return true
+                val id = pendingRenameId
+                val newName = pendingRenameNewName
+                pendingRenameResult = null
+                pendingRenameId = ""
+                pendingRenameNewName = ""
+
+                if (resultCode == Activity.RESULT_OK) {
+                    // 授权通过，执行真正的 rename（同 move 的二次执行模式）
+                    val repo = repository
+                    val successCount = if (repo != null) repo.doRename(id, newName) else 0
+                    pending.success(successCount)
+                } else {
+                    pending.success(0) // 用户取消
+                }
+                return true
+            }
         }
         return false
     }
@@ -270,6 +295,9 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             "requestDelete" -> handleRequestDelete(call, result)
             "getBucketRelativePath" -> handleGetBucketRelativePath(call, result)
             "requestMove" -> handleRequestMove(call, result)
+            "requestRename" -> handleRequestRename(call, result)
+            "requestCopy" -> handleRequestCopy(call, result)
+            "nameExists" -> handleNameExists(call, result)
             "requestFavorite" -> handleRequestFavorite(call, result)
             "requestTrash" -> handleRequestTrash(call, result)
             "requestRestore" -> handleRequestRestore(call, result)
@@ -791,6 +819,85 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             }
         } catch (e: Exception) {
             result.error(MsError.QueryFailed("requestMove 异常: ${e.message}").code, e.message, null)
+        }
+    }
+
+    /// 重命名单张（update DISPLAY_NAME）。先预检同目录同名 → NAME_EXISTS；
+    /// 他人文件走 createWriteRequest 授权（同 move 双分支）。
+    private fun handleRequestRename(call: MethodCall, result: Result) {
+        val act = activity ?: run {
+            result.error(MsError.InvalidArg("Activity 未绑定").code, null, null); return
+        }
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        val id = call.argument<String>("id") ?: ""
+        val newName = call.argument<String>("newName") ?: ""
+        if (id.isEmpty() || newName.isEmpty()) {
+            result.success(0); return
+        }
+        if (pendingRenameResult != null) {
+            result.error(MsError.InvalidArg("已有重命名请求进行中").code, null, null); return
+        }
+
+        try {
+            // 预检：同目录同名（排除自身）→ 直接报错，弹窗前拦住
+            if (repo.nameExistsInDir(id, newName)) {
+                result.error(MsError.NameExists.code, MsError.NameExists.message, null)
+                return
+            }
+            when (val rr = repo.renameTo(id, newName)) {
+                is MediaStoreRepository.MoveResult.Done -> result.success(rr.successCount)
+                is MediaStoreRepository.MoveResult.NeedsConsent -> {
+                    pendingRenameResult = result
+                    pendingRenameId = id
+                    pendingRenameNewName = newName
+                    act.startIntentSenderForResult(rr.intentSender, REQUEST_RENAME, null, 0, 0, 0)
+                }
+            }
+        } catch (e: Exception) {
+            result.error(MsError.QueryFailed("requestRename 异常: ${e.message}").code, e.message, null)
+        }
+    }
+
+    /// 批量复制到目标 RELATIVE_PATH（insert 新条目 + 流拷贝，零弹窗）。
+    /// 文件 IO 放 ioExecutor，不阻塞主线程（大文件拷贝可秒级）。
+    private fun handleRequestCopy(call: MethodCall, result: Result) {
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        @Suppress("UNCHECKED_CAST")
+        val ids = (call.argument<List<String>>("ids") ?: emptyList())
+        val relativePath = call.argument<String>("relativePath") ?: ""
+        if (ids.isEmpty() || relativePath.isEmpty()) {
+            result.success(0); return
+        }
+        ioExecutor.execute {
+            try {
+                val success = repo.copyToRelativePath(ids, relativePath)
+                mainHandler.post { result.success(success) }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("requestCopy 异常: ${e.message}").code, e.message, null)
+                }
+            }
+        }
+    }
+
+    /// 重命名对话框实时校验：同目录同名查询（Dart 侧禁用 Apply 按钮）。
+    private fun handleNameExists(call: MethodCall, result: Result) {
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        val id = call.argument<String>("id") ?: ""
+        val newName = call.argument<String>("newName") ?: ""
+        ioExecutor.execute {
+            val exists = try {
+                repo.nameExistsInDir(id, newName)
+            } catch (e: Exception) {
+                false
+            }
+            mainHandler.post { result.success(exists) }
         }
     }
 }

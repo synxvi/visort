@@ -25,6 +25,7 @@ enum MsErrorCode {
   queryFailed,
   invalidArg,
   deleteCancelled,
+  nameExists,
   unknown;
 
   static MsErrorCode fromString(String? code) => switch (code) {
@@ -32,6 +33,7 @@ enum MsErrorCode {
         'QUERY_FAILED' => MsErrorCode.queryFailed,
         'INVALID_ARG' => MsErrorCode.invalidArg,
         'DELETE_CANCELLED' => MsErrorCode.deleteCancelled,
+        'NAME_EXISTS' => MsErrorCode.nameExists,
         _ => MsErrorCode.unknown,
       };
 }
@@ -147,10 +149,10 @@ class MsImageInfo {
         isHdr: j['isHdr'] as bool? ?? false,
       );
 
-  /// HDR 后台补测回填用（controller 回填 isHdr 后重建列表）。
-  MsImageInfo copyWith({bool? isHdr}) => MsImageInfo(
+  /// HDR 后台补测回填 / 重命名后本地回填用。
+  MsImageInfo copyWith({bool? isHdr, String? name}) => MsImageInfo(
         id: id,
-        name: name,
+        name: name ?? this.name,
         size: size,
         mime: mime,
         bucketId: bucketId,
@@ -518,6 +520,43 @@ class MediaStoreChannel {
     try {
       return await _channel.invokeMethod<int>(
               'requestMove', {'ids': ids, 'relativePath': relativePath}) ??
+          0;
+    } on PlatformException catch (e) {
+      throw _convertError(e);
+    }
+  }
+
+  /// 重命名单张（update DISPLAY_NAME，MediaStore 同步重命名底层文件，
+  /// _ID 不变）。同名冲突抛 [MsException]（code=nameExists）。
+  /// 他人文件走 createWriteRequest 授权；返回 1 成功，0 取消/失败。
+  Future<int> requestRename(String id, String newName) async {
+    try {
+      return await _channel.invokeMethod<int>(
+              'requestRename', {'id': id, 'newName': newName}) ??
+          0;
+    } on PlatformException catch (e) {
+      throw _convertError(e);
+    }
+  }
+
+  /// 重命名预检：同目录是否已存在同名（排除自身）。对话框实时校验用。
+  Future<bool> nameExists(String id, String newName) async {
+    try {
+      return await _channel.invokeMethod<bool>(
+              'nameExists', {'id': id, 'newName': newName}) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 批量复制到目标 RELATIVE_PATH（insert 新条目 + 流拷贝）。
+  /// 零弹窗（读源有 READ_MEDIA_IMAGES，写的是自己 insert 的条目）；
+  /// 同名冲突系统自动加 " (1)" 后缀。返回成功数。
+  Future<int> requestCopy(List<String> ids, String relativePath) async {
+    try {
+      return await _channel.invokeMethod<int>(
+              'requestCopy', {'ids': ids, 'relativePath': relativePath}) ??
           0;
     } on PlatformException catch (e) {
       throw _convertError(e);

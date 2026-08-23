@@ -34,8 +34,10 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/middle_ellipsis_text.dart';
+import 'package:visort_flutter/shared/widgets/rename_dialog.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
+import 'package:visort_flutter/ui/screens/album_picker_screen.dart';
 
 import 'detail_page_state.dart';
 import 'fast_scroll_physics.dart';
@@ -821,8 +823,17 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                   ),
                                   onPressed: _toggleFavoriteCurrent,
                                 ),
+                              // 垃圾桶挪到收藏右边（原先在最右；腾出原位放 ⋮）
+                              IconButton(
+                                icon: const Icon(
+                                  Icons.delete_outline,
+                                  color: AppColors.danger,
+                                ),
+                                tooltip: t(ref, 'delete_photo'),
+                                onPressed: _deleteCurrent,
+                              ),
                               const Spacer(),
-                              // 回收站项：删除按钮左侧显示删除日期
+                              // 回收站项：恢复按钮左侧显示删除日期
                               if (file.isTrashed && file.dateTrashedMs > 0)
                                 Padding(
                                   padding: const EdgeInsets.only(right: 6),
@@ -830,7 +841,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                     ms: file.dateTrashedMs,
                                   ),
                                 ),
-                              // 回收站恢复按钮（删除按钮左侧）
+                              // 回收站恢复按钮
                               if (file.isTrashed)
                                 IconButton(
                                   icon: const Icon(
@@ -840,14 +851,101 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                   tooltip: t(ref, 'action_restore'),
                                   onPressed: _restoreCurrent,
                                 ),
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.delete_outline,
-                                  color: AppColors.danger,
+                              // 原删除位 ⋮ 选项菜单：对当前图 复制/移动/重命名。
+                              // 回收站项这三项均无意义，不显示（与收藏按钮同规则）。
+                              // PopupMenuButton 自动向上弹出（NonModalMenu 仅向下，
+                              // 底栏按钮下方是屏幕外）。
+                              if (!file.isTrashed)
+                                PopupMenuButton<String>(
+                                  icon: const Icon(
+                                    Icons.more_vert,
+                                    color: AppColors.text,
+                                  ),
+                                  tooltip: t(ref, 'gallery_manage'),
+                                  color: AppColors.surfaceElevated,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  position: PopupMenuPosition.over,
+                                  onSelected: (v) {
+                                    switch (v) {
+                                      case 'copy':
+                                        _copyMoveCurrent(copy: true);
+                                      case 'move':
+                                        _copyMoveCurrent(copy: false);
+                                      case 'rename':
+                                        _renameCurrent();
+                                    }
+                                  },
+                                  itemBuilder: (ctx) => [
+                                    PopupMenuItem(
+                                      value: 'copy',
+                                      child: Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.content_copy,
+                                            size: 20,
+                                            color: AppColors.text,
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Text(
+                                            t(ref, 'copy_to_album'),
+                                            style: const TextStyle(
+                                              fontFamily: 'Space Mono',
+                                              fontFamilyFallback:
+                                                  AppFonts.cjkFallback,
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    PopupMenuItem(
+                                      value: 'move',
+                                      child: Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.drive_file_move_outlined,
+                                            size: 20,
+                                            color: AppColors.text,
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Text(
+                                            t(ref, 'move_to_album'),
+                                            style: const TextStyle(
+                                              fontFamily: 'Space Mono',
+                                              fontFamilyFallback:
+                                                  AppFonts.cjkFallback,
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    PopupMenuItem(
+                                      value: 'rename',
+                                      child: Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.drive_file_rename_outline,
+                                            size: 20,
+                                            color: AppColors.text,
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Text(
+                                            t(ref, 'rename'),
+                                            style: const TextStyle(
+                                              fontFamily: 'Space Mono',
+                                              fontFamilyFallback:
+                                                  AppFonts.cjkFallback,
+                                              fontSize: 14,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                tooltip: t(ref, 'delete_photo'),
-                                onPressed: _deleteCurrent,
-                              ),
                             ],
                           ),
                         ),
@@ -1205,6 +1303,64 @@ class _DetailPageState extends ConsumerState<DetailPage>
       return;
     }
     _removeCurrentAndAdvance(t(ref, 'restored'));
+  }
+
+  // ─────────────── ⋮ 菜单：复制/移动/重命名（当前图） ───────────────
+
+  /// 复制/移动当前图到选定相册。copy 原图不动只 toast；move 走删除同款
+  /// 移除+补位（_removeCurrentAndAdvance）。
+  Future<void> _copyMoveCurrent({required bool copy}) async {
+    final current = _selectedFile;
+    if (current == null) return;
+    final bucket = await pushAlbumPicker(
+      context,
+      titleKey: copy ? 'copy_to_album' : 'move_to_album',
+    );
+    if (bucket == null || !mounted) return;
+    final controller = ref.read(galleryControllerProvider.notifier);
+    final err = copy
+        ? await controller.copyPhotosToAlbum([current.id], bucket.id)
+        : await controller.movePhotosToAlbum([current.id], bucket.id);
+    if (!mounted) return;
+    if (err != null) {
+      // 已知 key（copy_failed/move_failed/move_cancelled…）直接翻译，
+      // 异常串回退通用失败文案。
+      final key = err.contains(' ')
+          ? (copy ? 'copy_failed' : 'move_failed')
+          : err;
+      toast(context, t(ref, key));
+      return;
+    }
+    if (copy) {
+      toast(context, t(ref, 'copied'));
+    } else {
+      _removeCurrentAndAdvance(t(ref, 'moved_toast'));
+    }
+  }
+
+  /// 重命名当前图（对话框 → DISPLAY_NAME 更新 → 本地回填名称）。
+  Future<void> _renameCurrent() async {
+    final current = _selectedFile;
+    if (current == null) return;
+    final newName = await showRenameDialog(context, ref, photo: current);
+    if (newName == null || !mounted) return;
+    final err = await ref
+        .read(galleryControllerProvider.notifier)
+        .renamePhoto(current.id, newName);
+    if (!mounted) return;
+    if (err != null) {
+      final key = err.contains(' ') ? 'rename_failed' : err;
+      toast(context, t(ref, key));
+      return;
+    }
+    // 本地回填（顶栏文件名 + 缩略图条数据同步；_ID 不变 uri 仍有效）
+    setState(() {
+      final i = _files.indexWhere((f) => f.id == current.id);
+      if (i >= 0) _files[i] = _files[i].copyWith(name: newName);
+      final j = _thumbFiles.indexWhere((f) => f.id == current.id);
+      if (j >= 0) _thumbFiles[j] = _thumbFiles[j].copyWith(name: newName);
+    });
+    toast(context, t(ref, 'renamed'));
   }
 
   /// 删除/恢复成功后从列表移除当前项并跳到下一张（或末张），刷新栏位计数。

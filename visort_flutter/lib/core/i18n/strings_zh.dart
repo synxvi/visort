@@ -249,6 +249,20 @@ const Map<String, String> stringsZh = {
   // ───────── 通用 · 相册管理 ─────────
   'gallery_manage': '相册管理',
 
+  // ───────── 复制 / 移至相册 / 重命名（aves 对标）─────────
+  'copy_to_album': '复制到相册',
+  'move_to_album': '移至相册',
+  'rename': '重命名',
+  'rename_dialog_label': '新名称',
+  'renamed': '已重命名',
+  'rename_failed': '重命名失败',
+  'name_exists': '该名称已存在',
+  'rename_cancelled': '已取消重命名',
+  'copied': '已复制',
+  'copy_failed': '复制失败',
+  'moved_toast': '已移动',
+  'move_cancelled': '已取消移动',
+
   // ───────── P1a · 回收站对话框 ─────────
   'delete_permanently': '彻底删除',
   'delete_permanently_desc': '删除后无法恢复。',

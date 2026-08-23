@@ -256,6 +256,20 @@ const Map<String, String> stringsEn = {
   // ───────── 通用 · 相册管理 ─────────
   'gallery_manage': 'Gallery',
 
+  // ───────── 复制 / 移至相册 / 重命名（aves 对标）─────────
+  'copy_to_album': 'Copy to album',
+  'move_to_album': 'Move to album',
+  'rename': 'Rename',
+  'rename_dialog_label': 'New name',
+  'renamed': 'Renamed',
+  'rename_failed': 'Rename failed',
+  'name_exists': 'Name already exists',
+  'rename_cancelled': 'Rename cancelled',
+  'copied': 'Copied',
+  'copy_failed': 'Copy failed',
+  'moved_toast': 'Moved',
+  'move_cancelled': 'Move cancelled',
+
   // ───────── P1a · 回收站对话框 ─────────
   'delete_permanently': 'Delete permanently',
   'delete_permanently_desc': 'This cannot be undone.',
