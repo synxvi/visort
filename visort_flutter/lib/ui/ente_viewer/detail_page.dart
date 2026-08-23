@@ -510,6 +510,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
         // 子组件，防御性过滤）。
         onNotification: (n) {
           if (n.depth != 0) return false;
+          // 删除补位的程序滚动（animateToPage/jumpToPage）不显示页缘黑缝：
+          // 黑缝为用户翻页区分相邻两图而设，程序滚动的 Start/Update/End
+          // 序列会在动画结束时以 150ms 淡出一道黑边 = 切换结束时图片
+          // 两侧轻微闪烁（真机实证）。
+          if (_deletingInProgress) return false;
           final scrolling = n is! ScrollEndNotification;
           if (scrolling != _pageGapVisible) {
             setState(() => _pageGapVisible = scrolling);

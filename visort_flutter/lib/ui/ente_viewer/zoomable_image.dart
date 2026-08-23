@@ -149,6 +149,17 @@ class _ZoomableImageState extends State<ZoomableImage> {
     _initialScale = null;
     _photoViewController.reset();
     _scaleStateController.reset();
+    // 补位换图：_isZooming 是本 State 字段，控制器 reset 不会经
+    // scaleStateChangedCallback 带回回调（setInvisibly/reset 均不通知）——
+    // 被删图若处于放大态，残留 true 会锁 PageView 翻页（shouldDisableScroll）
+    // 并禁用上下滑手势。与 initState postFrame 的初始上报对齐，同步复位。
+    if (_isZooming) {
+      _isZooming = false;
+      widget.shouldDisableScroll?.call(false);
+      final state = _inherited;
+      state?.isZoomedNotifier.value = false;
+      state?.zoomTransformNotifier.value = ZoomTransform.identity;
+    }
   }
 
   @override
@@ -455,10 +466,31 @@ class _ZoomableImageState extends State<ZoomableImage> {
   }
 
   Future<void> _updateViewWithFinalImage(ImageProvider imageProvider) async {
-    await _updatePhotoViewController(
-      previewImageProvider: _imageProvider,
-      finalImageProvider: imageProvider,
-    );
+    // 仅【真放大态】（用户主动 zoomedIn）才做 ente 式尺寸修正保持视角；
+    // 其他态（initial/误标 zoomedOut）直接复位两控制器。
+    //
+    // 必须复位的原因：起始 provider 是方形裁剪缩略图（cell/large 均
+    // squareCrop），core 按方形 contain 写回过很大的绝对 scale（竖屏约
+    // 屏高/300≈8）且 photo_view 把初始 contain 误标 zoomedOut（非
+    // initial → _isZooming 误 true）。若不复位：
+    //   - 残留 scale × 等比 childSize = 巨图；
+    //   - 或走 _updatePhotoViewController 的宽比修正（隐含按宽适配，方形
+    //     contain 实为按高适配）= 换算错数倍仍巨图（真机实证：第二次删除
+    //     补位、原图未缓存的下一张放大数倍）。
+    // 复位后 PhotoView key 重建（ValueKey(_loadedFinalImage)），新 core 按
+    // initial 重算 contain(等比) = 正确初始视图。
+    final realZoomed =
+        _scaleStateController.scaleState == PhotoViewScaleState.zoomedIn;
+    if (realZoomed) {
+      await _updatePhotoViewController(
+        previewImageProvider: _imageProvider,
+        finalImageProvider: imageProvider,
+      );
+    } else {
+      _photoViewController.reset();
+      _scaleStateController.reset();
+      _initialScale = null;
+    }
     if (!mounted) return;
     setState(() {
       _imageProvider = imageProvider;
