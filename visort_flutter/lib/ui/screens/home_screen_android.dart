@@ -103,10 +103,21 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     WidgetsBinding.instance.addPostFrameCallback((_) => _initAndLoad());
     // P2 会话恢复探测:杀进程后有未完成整理会话则显示横条。
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkResumableSession());
+    // P2:从 sort/review 等返回 Home(手势 pop 不重建本页)时重探横条——
+    // 决策已直写落盘,pop 回来当帧就该长出「继续上次整理」。
+    currentRouteName.addListener(_onRouteChanged);
+  }
+
+  /// 路由回到 Home 时重探横条(全局 RouteNameObserver 驱动)。
+  void _onRouteChanged() {
+    if (currentRouteName.value == AppRoutes.home) {
+      _checkResumableSession();
+    }
   }
 
   @override
   void dispose() {
+    currentRouteName.removeListener(_onRouteChanged);
     WidgetsBinding.instance.removeObserver(this);
     _persistTimer?.cancel();
     _parentCtrl.dispose();

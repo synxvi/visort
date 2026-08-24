@@ -52,6 +52,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ? config.lastDestParent
             : _defaultDestParent());
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkResumableSession());
+    // P2:从 sort/review 返回 Home(pop 不重建本页)时重探横条。
+    currentRouteName.addListener(_onRouteChanged);
+  }
+
+  /// 路由回到 Home 时重探横条(全局 RouteNameObserver 驱动)。
+  void _onRouteChanged() {
+    if (currentRouteName.value == AppRoutes.home) {
+      _checkResumableSession();
+    }
   }
 
   /// 探测持久化会话。显示条件 = **库里有已决策的会话**(同安卓 Home:
@@ -135,6 +144,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   void dispose() {
+    currentRouteName.removeListener(_onRouteChanged);
     _sourceCtrl.dispose();
     _destCtrl.dispose();
     super.dispose();
