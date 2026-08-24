@@ -25,7 +25,10 @@ import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/scan/scan_controller.dart';
+import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
+import 'package:visort_flutter/shared/widgets/resume_banner.dart';
+import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/router.dart';
@@ -87,6 +90,9 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   /// 当前非模态菜单控制器（收回用）
   NonModalMenuController? _menuCtl;
 
+  /// 是否有可恢复的整理会话(Home 顶部横条)。
+  bool _resumeAvailable = false;
+
   @override
   void initState() {
     super.initState();
@@ -95,6 +101,8 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       if (mounted) setState(() {});
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _initAndLoad());
+    // P2 会话恢复探测:杀进程后有未完成整理会话则显示横条。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkResumableSession());
   }
 
   @override
@@ -273,6 +281,27 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   }
 
   Future<void> _startScan() async {
+    // P2:有未完成会话先问恢复。Start 的默认语义是重扫覆写——不问就直接
+    // 覆写会让"中断后点开始续整理"的主诉路径丢决策(每次都从第一张来)。
+    final summary = await ref
+        .read(sessionControllerProvider.notifier)
+        .persistedSummary();
+    if (summary != null && summary.total > 0) {
+      final resume = await _askResumePersisted(summary);
+      if (!mounted || resume == null) return; // 关掉弹窗 = 取消本次 Start
+      if (resume) {
+        final ok = await ref
+            .read(sessionControllerProvider.notifier)
+            .restoreLastSession();
+        if (!mounted || !ok) return;
+        setState(() => _resumeAvailable = false);
+        await Navigator.of(context).pushNamed('/sort');
+        await _checkResumableSession();
+        return;
+      }
+      // false → 用户明确选择重新开始,继续走重扫覆写。
+    }
+    if (!mounted) return; // 恢复探测/弹窗是 async gap,原流程用 context 前先守卫
     if (_sourceBucketIds.isEmpty) {
       toast(context, t(ref, 'no_album_selected'));
       return;
@@ -548,6 +577,9 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // P2 会话恢复横条:杀进程后未完成的整理一键续上。
+                if (_resumeAvailable)
+                  ResumeSessionBanner(onResume: _resumeLastSession),
                 // 模式切换 segmented control
                 _buildModeSelector(),
                 // 顶栏↔源相册分隔线：固定显示。模式选择器自身 bottom:10 已提供到分隔线
@@ -585,6 +617,71 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         ),
       ),
     );
+  }
+
+  // ───────────────────────── P2 会话恢复 ─────────────────────────
+
+  /// Start 前恢复询问弹窗。
+  /// true=继续上次;false=重新开始;null=关掉弹窗(取消本次 Start)。
+  Future<bool?> _askResumePersisted(
+      ({int total, int decided, int currentIndex}) s) {
+    return showCenterDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text(
+          t(ref, 'resume_found_title'),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: AppFonts.cjkFallback,
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: AppColors.text,
+          ),
+        ),
+        content: Text(
+          '${t(ref, 'resume_found_body_a')}${s.total}'
+          '${t(ref, 'resume_found_body_b')}${s.decided}'
+          '${t(ref, 'resume_found_body_c')}',
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: AppFonts.cjkFallback,
+            fontSize: 13,
+            color: AppColors.muted,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(t(ref, 'resume_restart')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(t(ref, 'resume_continue')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 探测持久化会话(DB 头行存在)。恢复流结束后重调:Run 完成 reset 清库
+  /// → 横条消失;中途返回 → 会话仍在,横条保持。
+  Future<void> _checkResumableSession() async {
+    final has = await ref
+        .read(sessionControllerProvider.notifier)
+        .hasPersistedSession();
+    if (mounted) setState(() => _resumeAvailable = has);
+  }
+
+  /// 恢复上次会话并进 sort;pop 回来后重探横条显隐。
+  Future<void> _resumeLastSession() async {
+    final ok = await ref
+        .read(sessionControllerProvider.notifier)
+        .restoreLastSession();
+    if (!mounted || !ok) return;
+    setState(() => _resumeAvailable = false);
+    await Navigator.of(context).pushNamed('/sort');
+    await _checkResumableSession();
   }
 
   /// 切换模式:触发内容抽屉滑动(_slideForward 定向)。

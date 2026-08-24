@@ -12,7 +12,6 @@
 //   delete      : {action:delete}
 //   skip        : {action:skip}
 
-import 'dart:collection';
 
 import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/config/profiles_service.dart' show FolderDescriptor;
@@ -103,8 +102,9 @@ class SessionState {
   final List<FolderDescriptor> folders;
 
   /// 决策字典：图片相对路径 → Decision。
-  /// 用 LinkedHashMap 保持插入顺序，撤销时删除最后一个。
-  final LinkedHashMap<String, Decision>? decisions;
+  /// 构造侧保证 LinkedHashMap 语义(map literal 默认实现)保持插入顺序，
+  /// 撤销时删除最后一个。类型放宽为 Map 便于字面量构造/SQLite 恢复重建。
+  final Map<String, Decision>? decisions;
 
   bool get isEmpty => images.isEmpty;
   int get totalCount => images.length;
@@ -132,7 +132,7 @@ class SessionState {
     String? destinationParent,
     List<FolderTemplate>? folderTemplates,
     List<FolderDescriptor>? folders,
-    LinkedHashMap<String, Decision>? decisions,
+    Map<String, Decision>? decisions,
   }) {
     return SessionState(
       sourceDir: sourceDir ?? this.sourceDir,

@@ -156,6 +156,13 @@ const Map<String, String> stringsZh = {
   // ───────── Sort ─────────
   'move_to': '移动到 →',
   'root_dir': '根目录',
+  'resume_session': '继续上次整理',
+  'resume_found_title': '发现未完成的整理',
+  'resume_found_body_a': '共 ',
+  'resume_found_body_b': ' 张,已决策 ',
+  'resume_found_body_c': ' 张。继续上次进度,还是重新开始?',
+  'resume_continue': '继续上次',
+  'resume_restart': '重新开始',
   'undo': '撤销',
   'delete_btn': '删除',
   'skip': '跳过',

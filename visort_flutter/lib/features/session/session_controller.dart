@@ -10,11 +10,12 @@
 //
 // __root__ 标签: Python 存中文"根目录"，这里存占位常量，UI 层翻译显示
 
-import 'dart:collection';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/config/profiles_service.dart';
+import 'package:visort_flutter/core/db/database_service.dart';
+import 'package:visort_flutter/core/db/session_store.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
 import 'package:visort_flutter/features/session/session_models.dart';
 
@@ -25,15 +26,32 @@ const kRootLabel = '@root@';
 ///
 /// 注意：扫描（scan）由 ScanController 负责，它会调用本控制器的 initFromScan。
 /// 这样分离是因为扫描涉及 fs + profiles 协作，属于独立的 IO 流程。
+///
+/// P2 起决策/索引经 [SessionStore] 直写 SQLite(单行 upsert/UPDATE,微秒级,
+/// 免防抖零丢失窗口);DB 不可用时 store noop,退化为纯内存(现状行为)。
+/// seq 由内存 [_seqById] 分配:新 key 递增、重 decide 保持原值——与内存
+/// LinkedHashMap「重复 put 保持首插位」语义严格对齐,恢复后 undo 不变味。
 class SessionController extends Notifier<SessionState> {
   final ProfilesService _profilesService;
 
   SessionController(this._profilesService);
 
+  /// 持久化 store(build 时经 Notifier ref 建;DB 降级时全 noop)。
+  late final SessionStore _store;
+
+  /// 决策插入序:image_id → seq。undo 删行、重 decide 保序全靠它。
+  final Map<String, int> _seqById = {};
+
+  /// 下一个新决策的 seq(恢复时初始化为 max+1)。
+  int _decisionSeq = 0;
+
   @override
-  SessionState build() => const SessionState(
-        decisions: null, // 延迟到首次 scan 才初始化
-      );
+  SessionState build() {
+    _store = SessionStore(ref.read(databaseServiceProvider).database);
+    return const SessionState(
+      decisions: null, // 延迟到首次 scan 才初始化
+    );
+  }
 
   // ───────────────────────── 扫描后初始化 ─────────────────────────
 
@@ -59,8 +77,12 @@ class SessionController extends Notifier<SessionState> {
       currentIndex: 0,
       folderTemplates: folderTemplates,
       folders: folders,
-      decisions: LinkedHashMap<String, Decision>(),
+      decisions: {},
     );
+    // 新扫描整体覆写旧会话(单活跃模型);序号计数归零。
+    _seqById.clear();
+    _decisionSeq = 0;
+    _store.saveNewSession(state);
   }
 
   // ───────────────────────── 文件夹路径重算 ─────────────────────────
@@ -84,7 +106,7 @@ class SessionController extends Notifier<SessionState> {
   /// [action] = move/delete/skip
   /// [destKey] 仅 move 需要：文件夹 key 或 kRootDestKey
   DecideResult decide(DecisionAction action, {String? destKey}) {
-    final decisions = state.decisions ?? LinkedHashMap<String, Decision>(); // ignore: prefer_collection_literals
+    final decisions = state.decisions ?? <String, Decision>{};
     final img = state.currentImage;
     if (img == null) {
       return DecideResult(nextIndex: state.currentIndex, done: true);
@@ -125,6 +147,12 @@ class SessionController extends Notifier<SessionState> {
       currentIndex: nextIndex,
       decisions: decisions,
     );
+    // 持久化:重 decide 保持原 seq(LinkedHashMap 首插位语义);索引随写。
+    final existing = _seqById[img.id];
+    final seq = existing ?? _decisionSeq++;
+    _seqById[img.id] = seq;
+    _store.upsertDecision(img.id, decision, seq);
+    _store.updateCurrentIndex(nextIndex);
     return DecideResult(nextIndex: nextIndex, done: done);
   }
 
@@ -150,6 +178,9 @@ class SessionController extends Notifier<SessionState> {
       currentIndex: newIndex,
       decisions: decisions,
     );
+    _seqById.remove(lastKey);
+    _store.deleteDecision(lastKey);
+    _store.updateCurrentIndex(newIndex);
     return true;
   }
 
@@ -159,11 +190,42 @@ class SessionController extends Notifier<SessionState> {
   void goToIndex(int index) {
     if (index < 0 || index >= state.images.length) return;
     state = state.copyWith(currentIndex: index);
+    _store.updateCurrentIndex(index);
   }
 
   /// 重置 session（RUN 执行后或重新扫描前）
   void reset() {
     state = const SessionState();
+    _seqById.clear();
+    _decisionSeq = 0;
+    _store.clear();
+  }
+
+  // ───────────────────────── 会话恢复(P2) ─────────────────────────
+
+  /// 是否有可恢复的持久化会话(Home 横条探测用)。
+  Future<bool> hasPersistedSession() => _store.hasActive();
+
+  /// 持久化会话摘要(Start 前恢复弹窗:总张数/已决策/进行到);无会话 null。
+  Future<({int total, int decided, int currentIndex})?>
+      persistedSummary() async {
+    final r = await _store.summary();
+    if (r == null) return null;
+    // 快照头行可能过期(如 decision 行手工修正),口径以行数为准兜底。
+    return (total: r.total, decided: r.decided, currentIndex: r.currentIndex);
+  }
+
+  /// 恢复上次会话(杀进程后)。成功则 state 就位、seq 计数重建,
+  /// 返回 true;无会话/数据异常返回 false(Home 不显示横条)。
+  Future<bool> restoreLastSession() async {
+    final r = await _store.loadActive();
+    if (r == null) return false;
+    state = r.state;
+    _seqById
+      ..clear()
+      ..addAll(r.seqById);
+    _decisionSeq = r.nextSeq;
+    return true;
   }
 
   // ───────────────────────── 便捷访问 ─────────────────────────

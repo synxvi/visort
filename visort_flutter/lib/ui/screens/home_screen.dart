@@ -19,6 +19,8 @@ import 'package:visort_flutter/features/scan/scan_controller.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/features/home/home_controller.dart';
 import 'package:visort_flutter/shared/widgets/profile_dropdown.dart';
+import 'package:visort_flutter/shared/widgets/resume_banner.dart';
+import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/router.dart';
 import 'package:visort_flutter/ui/screens/action_keys_editor.dart';
@@ -37,6 +39,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _recursive = true;
   bool _scanning = false;
 
+  /// 是否有可恢复的整理会话(P2,顶部横条)。
+  bool _resumeAvailable = false;
+
   @override
   void initState() {
     super.initState();
@@ -46,11 +51,74 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         text: config.lastDestParent.isNotEmpty
             ? config.lastDestParent
             : _defaultDestParent());
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final has = await ref
+          .read(sessionControllerProvider.notifier)
+          .hasPersistedSession();
+      if (mounted) setState(() => _resumeAvailable = has);
+    });
+  }
+
+  /// 恢复上次会话并进 sort;回来后重探(Run 完成 → 横条消失)。
+  Future<void> _resumeLastSession() async {
+    final ok = await ref
+        .read(sessionControllerProvider.notifier)
+        .restoreLastSession();
+    if (!mounted || !ok) return;
+    setState(() => _resumeAvailable = false);
+    await Navigator.of(context).pushNamed('/sort');
+    final has = await ref
+        .read(sessionControllerProvider.notifier)
+        .hasPersistedSession();
+    if (mounted) setState(() => _resumeAvailable = has);
   }
 
   String _defaultDestParent() {
     // 对应 Python DEFAULT_DEST_PARENT = ~/Pictures
     return '';
+  }
+
+  /// Start 前恢复询问弹窗(安卓 Home 同款)。
+  /// true=继续上次;false=重新开始;null=关掉弹窗(取消本次 Start)。
+  Future<bool?> _askResumePersisted(
+      ({int total, int decided, int currentIndex}) s) {
+    return showCenterDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text(
+          t(ref, 'resume_found_title'),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: AppFonts.cjkFallback,
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: AppColors.text,
+          ),
+        ),
+        content: Text(
+          '${t(ref, 'resume_found_body_a')}${s.total}'
+          '${t(ref, 'resume_found_body_b')}${s.decided}'
+          '${t(ref, 'resume_found_body_c')}',
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: AppFonts.cjkFallback,
+            fontSize: 13,
+            color: AppColors.muted,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(t(ref, 'resume_restart')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(t(ref, 'resume_continue')),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -125,6 +193,28 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _startScan() async {
+    // P2:有未完成会话先问恢复(与安卓 Home 同款,避免 Start 重扫覆写丢决策)。
+    final summary = await ref
+        .read(sessionControllerProvider.notifier)
+        .persistedSummary();
+    if (summary != null && summary.total > 0) {
+      final resume = await _askResumePersisted(summary);
+      if (!mounted || resume == null) return;
+      if (resume) {
+        final ok = await ref
+            .read(sessionControllerProvider.notifier)
+            .restoreLastSession();
+        if (!mounted || !ok) return;
+        setState(() => _resumeAvailable = false);
+        await Navigator.of(context).pushNamed(AppRoutes.sort);
+        final has = await ref
+            .read(sessionControllerProvider.notifier)
+            .hasPersistedSession();
+        if (mounted) setState(() => _resumeAvailable = has);
+        return;
+      }
+    }
+    if (!mounted) return; // 恢复探测/弹窗是 async gap,原流程用 context 前先守卫
     final source = _sourceCtrl.text.trim();
     final dest = _destCtrl.text.trim();
     if (source.isEmpty) {
@@ -180,8 +270,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             final isWide = width > 900;
             return SingleChildScrollView(
               padding: const EdgeInsets.all(24),
-              child: isWide
-                  ? Row(
+              // P2 会话恢复横条置顶(通栏,宽窄布局都在内容上方)。
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_resumeAvailable)
+                    ResumeSessionBanner(onResume: _resumeLastSession),
+                  if (isWide)
+                    Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(child: _buildLeftColumn(profile)),
@@ -189,13 +285,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         Expanded(child: _buildRightColumn(profile)),
                       ],
                     )
-                  : Column(
+                  else
+                    Column(
                       children: [
                         _buildLeftColumn(profile),
                         const SizedBox(height: 32),
                         _buildRightColumn(profile),
                       ],
                     ),
+                ],
+              ),
             );
           }),
           if (_scanning)

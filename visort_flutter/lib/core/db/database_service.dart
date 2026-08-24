@@ -22,7 +22,9 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 ///   v1 (P1): bucket_snapshot / bucket_photo —— 相册桶快照,替代 visort_snap_* prefs
 ///   v2:     hdr_cache —— HDR 检测结果磁盘缓存(Kotlin 进程内 hdrCache 的
 ///           落盘层,mtime 校验同语义;冷启动二次进桶零文件 IO)
-const int kDbVersion = 2;
+///   v3 (P2): sort_session / sort_image / sort_decision —— 整理会话持久化
+///           (决策/索引/扫描结果,进程死亡不丢;单活跃会话 id 恒为 1)
+const int kDbVersion = 3;
 
 final databaseServiceProvider =
     Provider<DatabaseService>((ref) => DatabaseService());
@@ -79,6 +81,10 @@ class DatabaseService {
         ) WITHOUT ROWID
       ''');
     }
+    // v2 → v3: 整理会话三表(P2)。
+    if (oldVersion < 3) {
+      await _createSortTables(db);
+    }
   }
 
   /// 建当前版本的全部表(测试的内存库复用同一 schema,保证不漂移)。
@@ -121,6 +127,50 @@ class DatabaseService {
         id               TEXT PRIMARY KEY,
         date_modified_ms INTEGER NOT NULL,
         is_hdr           INTEGER NOT NULL
+      ) WITHOUT ROWID
+    ''');
+    // ── v3 (P2): 整理会话 ──
+    await _createSortTables(db);
+  }
+
+  /// v3 会话三表(onCreate 与 onUpgrade 共用,保证 schema 一致)。
+  ///
+  /// session 行 id 恒为 1(单活跃会话:新扫描整体覆写旧的);image_id 桌面=
+  /// 相对路径、安卓=MediaStore _ID(跨重启稳定);decision.seq 为决策插入序
+  /// (恢复时按 seq 重建 LinkedHashMap,undo 弹末位)。
+  static Future<void> _createSortTables(sqflite.Database db) async {
+    await db.execute('''
+      CREATE TABLE sort_session (
+        id                INTEGER PRIMARY KEY,
+        created_at        INTEGER NOT NULL,
+        source_dir        TEXT NOT NULL,
+        destination_parent TEXT NOT NULL,
+        current_index     INTEGER NOT NULL,
+        folder_templates  TEXT NOT NULL,
+        folders           TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE sort_image (
+        session_id  INTEGER NOT NULL,
+        image_id    TEXT NOT NULL,
+        seq         INTEGER NOT NULL,
+        root        TEXT NOT NULL,
+        extension   TEXT NOT NULL,
+        display_name TEXT,
+        PRIMARY KEY (session_id, image_id)
+      ) WITHOUT ROWID
+    ''');
+    await db.execute('''
+      CREATE TABLE sort_decision (
+        session_id INTEGER NOT NULL,
+        image_id   TEXT NOT NULL,
+        seq        INTEGER NOT NULL,
+        action     TEXT NOT NULL,
+        dest_key   TEXT,
+        dest_label TEXT,
+        dest_path  TEXT,
+        PRIMARY KEY (session_id, image_id)
       ) WITHOUT ROWID
     ''');
   }

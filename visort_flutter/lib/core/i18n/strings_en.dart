@@ -162,6 +162,13 @@ const Map<String, String> stringsEn = {
   // ───────── Sort ─────────
   'move_to': 'Move to →',
   'root_dir': 'Root',
+  'resume_session': 'Resume last session',
+  'resume_found_title': 'Unfinished session found',
+  'resume_found_body_a': 'Total ',
+  'resume_found_body_b': ' images, ',
+  'resume_found_body_c': ' decided. Continue, or start over?',
+  'resume_continue': 'Continue',
+  'resume_restart': 'Start over',
   'undo': 'Undo',
   'delete_btn': 'Delete',
   'skip': 'Skip',
