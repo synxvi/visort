@@ -17,11 +17,9 @@ import 'package:visort_flutter/shared/widgets/kbd_badge.dart';
 import 'package:visort_flutter/shared/widgets/middle_ellipsis_text.dart';
 import 'package:visort_flutter/ui/router.dart';
 
-/// 返回 Sort 屏：先把游标回退到最后一张图（破坏 session 完成态），再 pop。
-///
-/// sort 屏在 [SessionState.isComplete] 时渲染空白过渡页（见 sort_screen.dart），
-/// 从审核界面裸 pop 会落到那个空白页 → 黑屏。安卓系统返回/手势、AppBar 返回
-/// 箭头、底部"返回"按钮三条返回路径共用本函数，保证行为一致。
+/// 「返回」按钮 → 回 Sort 屏继续整理：先把游标回退到最后一张图（破坏
+/// session 完成态）再 pop——sort 屏在 [SessionState.isComplete] 时渲染空白
+/// 过渡页（见 sort_screen.dart），裸 pop 会落到那个空白页 → 黑屏。
 void _continueSortAndPop(BuildContext context, WidgetRef ref) {
   final s = ref.read(sessionControllerProvider);
   if (s.totalCount > 0) {
@@ -30,24 +28,31 @@ void _continueSortAndPop(BuildContext context, WidgetRef ref) {
   Navigator.pop(context);
 }
 
+/// 系统返回/手势、AppBar 返回箭头 → 直接回首页。session 保持完成态
+/// （不回退游标）：首页「继续」或「开始」的恢复对话框会落回本审核屏
+/// （P2 的 isComplete 恢复直达 review 语义），决策不丢。
+void _goHomeAndPop(BuildContext context) {
+  Navigator.popUntil(context, (r) => r.isFirst);
+}
+
 class ReviewScreen extends ConsumerWidget {
   const ReviewScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final stats = ref.watch(reviewStatsProvider);
-    // 拦截系统返回（安卓物理/手势返回）：必须先回退游标破坏完成态，否则裸 pop
-    // 回到 sort 屏的空白过渡页 → 黑屏。三路返回统一走 _continueSortAndPop。
+    // 拦截系统返回（安卓物理/手势返回）→ 回首页（与 AppBar 箭头一致）；
+    // 「返回」按钮才回 sort 继续整理（见 _continueSortAndPop）。
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _continueSortAndPop(context, ref);
+        if (!didPop) _goHomeAndPop(context);
       },
       child: Scaffold(
         appBar: AppBar(
           leading: IconButton(
             icon: const Icon(Icons.arrow_back),
-            onPressed: () => _continueSortAndPop(context, ref),
+            onPressed: () => _goHomeAndPop(context),
           ),
           // "审核变更"标题在右侧，与返回箭头同高（标准 toolbar 垂直居中）
           actions: [

@@ -5,7 +5,7 @@
 //   - scanImages      → 按 bucket id 列表查询
 //   - readMeta/readBytes → 按 _ID 查询
 //   - move            → 打标签语义（不真移动，返回成功）
-//   - deleteBatch     → createDeleteRequest 系统弹窗批量删除
+//   - deleteBatch     → createTrashRequest 系统弹窗批量移入回收站（可恢复）
 //
 // ImageRef 编码：
 //   - root         = IMAGES_AUTHORITY 常量（content://media/external/images/media）
@@ -146,12 +146,9 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
 
   @override
   Future<bool> delete(ImageRef ref) async {
-    // 单个删除（run_controller 实际走 deleteBatch 批量）
+    // 单个删除 → 移入回收站（与 deleteBatch 同语义；run_controller 实际走批量）
     try {
-      final count = await _channel.requestDelete([ref.relativePath]);
-      return count > 0;
-    } on MsDeleteCancelledException {
-      return false;
+      return await _channel.requestTrash([ref.relativePath]);
     } catch (_) {
       return false;
     }
@@ -159,15 +156,15 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
 
   @override
   Future<Set<String>> deleteBatch(List<String> ids, String root) async {
-    // 批量删除（createDeleteRequest 一次系统弹窗）
+    // 批量删除 → 移入回收站（createTrashRequest 一次系统弹窗）。
+    // sort 决策的「删除」走标准 trash：IS_TRASHED=1，应用回收站可见、可恢复
+    // （对齐批量删除的文案与行为）。旧走 createDeleteRequest——真删语义，
+    // 且 ColorOS 把它做成自家私有回收站，应用内回收站查不到。
+    // 弹窗确认即全部入站（返回全集）；取消/失败抛异常 → 空集，Run 记 delete_failed。
     if (ids.isEmpty) return const {};
     try {
-      final count = await _channel.requestDelete(ids);
-      // requestDelete 返回成功数；系统弹窗确认后全部删除（返回 ids.size）
-      // 若用户取消，抛 MsDeleteCancelledException（被 catch 返回空集）
-      return count == ids.length ? ids.toSet() : <String>{};
-    } on MsDeleteCancelledException {
-      return const {};
+      final ok = await _channel.requestTrash(ids);
+      return ok ? ids.toSet() : const <String>{};
     } catch (_) {
       return const {};
     }
