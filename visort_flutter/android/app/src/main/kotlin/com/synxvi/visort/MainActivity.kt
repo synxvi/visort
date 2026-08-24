@@ -54,6 +54,8 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         // 注册 MediaStore MethodChannel + EventChannel plugin（visort/mediastore）
         flutterEngine.plugins.add(MediaStorePlugin())
+        // 注册壁纸 plugin（visort/wallpaper：大图查看器「设为壁纸」）
+        flutterEngine.plugins.add(com.synxvi.visort.wallpaper.WallpaperPlugin())
         // SAF plugin 已移除（MediaStore 取代）。非媒体文件场景如需恢复，需重新引入 saf 包。
         // 「回桌面」通道：首页（根路由）右滑返回时 Dart 调 moveTaskToBack，
         // 等效 Home 键（task 保留后台，不 finish——finish 会从最近任务移除应用）。

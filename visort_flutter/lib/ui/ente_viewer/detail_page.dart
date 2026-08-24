@@ -29,6 +29,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
+import 'package:visort_flutter/core/fs/wallpaper_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart' show configProvider, t;
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
@@ -1317,6 +1318,15 @@ class _DetailPageState extends ConsumerState<DetailPage>
                 _renameCurrent();
               },
             ),
+            _viewerMenuItem(
+              ctx,
+              Icons.wallpaper,
+              t(ref, 'set_wallpaper'),
+              onTap: () {
+                _viewerMenuCtl?.close();
+                _setAsWallpaper();
+              },
+            ),
           ],
         ),
       ),
@@ -1336,6 +1346,96 @@ class _DetailPageState extends ConsumerState<DetailPage>
         height: 48,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Icon(icon, color: AppColors.text, size: 20),
+              const SizedBox(width: 12),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontFamily: 'Space Mono',
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  color: AppColors.text,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 设当前图为壁纸（对标 ColorOS 系统相册「设为壁纸」）。
+  ///
+  /// 交互：center dialog 三选（主屏/锁屏/两者）→ 原生侧 BitmapRegionDecoder
+  /// 居中裁剪到屏尺寸 → WallpaperManager.setStream（考古细节见
+  /// WallpaperPlugin.kt 文件头）。系统相册的可拖动调整页 v1 未搬——
+  /// 裁剪固定 CenterCrop（与其调整页初始态一致）。
+  Future<void> _setAsWallpaper() async {
+    final current = _selectedFile;
+    if (current == null) return;
+    final WallpaperTarget? target = await showCenterDialog<WallpaperTarget>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text(
+          t(ref, 'set_wallpaper'),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+            color: AppColors.text,
+            fontSize: 15,
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final (icon, label, value) in [
+              (
+                Icons.smartphone,
+                t(ref, 'wallpaper_target_system'),
+                WallpaperTarget.system
+              ),
+              (
+                Icons.lock_outline,
+                t(ref, 'wallpaper_target_lock'),
+                WallpaperTarget.lock
+              ),
+              (
+                Icons.playlist_add_check,
+                t(ref, 'wallpaper_target_both'),
+                WallpaperTarget.both
+              ),
+            ])
+              _wallpaperTargetOption(ctx, icon, label, value),
+          ],
+        ),
+      ),
+    );
+    if (target == null || !mounted) return;
+    try {
+      await setWallpaper(current.id, target);
+      if (mounted) toast(context, t(ref, 'wallpaper_set'));
+    } on WallpaperException {
+      if (mounted) toast(context, t(ref, 'wallpaper_set_failed'));
+    }
+  }
+
+  /// 壁纸目标选项（_viewerMenuItem 同款视觉：图标 + 文本，48 高）。
+  Widget _wallpaperTargetOption(
+    BuildContext ctx,
+    IconData icon,
+    String label,
+    WallpaperTarget value,
+  ) {
+    return InkWell(
+      onTap: () => Navigator.pop(ctx, value),
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox(
+        height: 48,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
           child: Row(
             children: [
               Icon(icon, color: AppColors.text, size: 20),

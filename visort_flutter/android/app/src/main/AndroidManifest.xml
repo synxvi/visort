@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.MANAGE_MEDIA" />
     <!-- 配合 MANAGE_MEDIA，使 createWriteRequest 免弹窗 -->
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
+    <!-- 设置壁纸（普通权限，声明即生效；对标系统相册 SetAsWallpaper） -->
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
 
     <!-- 预测返回（predictive back）策略：
          该 flag 必须为 true：Android 16 的 WindowOnBackInvokedDispatcher$Checker 会拒绝
