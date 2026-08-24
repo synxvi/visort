@@ -27,7 +27,7 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/scan/scan_controller.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
-import 'package:visort_flutter/shared/widgets/resume_banner.dart';
+import 'package:visort_flutter/shared/widgets/resume_button.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
@@ -592,20 +592,6 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // P2 会话恢复横条:杀进程后未完成的整理一键续上;
-                // 左右滑动清除中断记录(动画由 Dismissible 承担,
-                // AnimatedSize 让出现/非滑除路径的消失平滑过渡)。
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.easeOutCubic,
-                  alignment: Alignment.topCenter,
-                  child: _resumeAvailable
-                      ? ResumeSessionBanner(
-                          onResume: _resumeLastSession,
-                          onDismiss: _onDismissResumeBanner,
-                        )
-                      : const SizedBox(width: double.infinity),
-                ),
                 // 模式切换 segmented control
                 _buildModeSelector(),
                 // 顶栏↔源相册分隔线：固定显示。模式选择器自身 bottom:10 已提供到分隔线
@@ -1587,6 +1573,18 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
               ),
             ),
             const SizedBox(width: 12),
+            // P2「继续」按钮:有可恢复记录(已决策会话)时出现在开始左侧;
+            // 任意方向拖动推远松手即清除记录(飞出+淡出,见 ResumeButton)。
+            // 无入场/收位动画——出现即到位(用户定稿),消失由按钮自身
+            // 飞出动画承接后瞬时收位。
+            if (_resumeAvailable) ...[
+              ResumeButton(
+                onResume: _resumeLastSession,
+                onDismiss: _onDismissResumeBanner,
+                freeDrag: true,
+              ),
+              const SizedBox(width: 12),
+            ],
             FilledButton(
               style: FilledButton.styleFrom(
                 backgroundColor: AppColors.accent,

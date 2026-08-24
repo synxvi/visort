@@ -19,7 +19,7 @@ import 'package:visort_flutter/features/scan/scan_controller.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/features/home/home_controller.dart';
 import 'package:visort_flutter/shared/widgets/profile_dropdown.dart';
-import 'package:visort_flutter/shared/widgets/resume_banner.dart';
+import 'package:visort_flutter/shared/widgets/resume_button.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/router.dart';
@@ -297,18 +297,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // P2 会话恢复横条(左右滑动清除,AnimatedSize 平滑显隐)。
-                  AnimatedSize(
-                    duration: const Duration(milliseconds: 200),
-                    curve: Curves.easeOutCubic,
-                    alignment: Alignment.topCenter,
-                    child: _resumeAvailable
-                        ? ResumeSessionBanner(
-                            onResume: _resumeLastSession,
-                            onDismiss: _onDismissResumeBanner,
-                          )
-                        : const SizedBox(width: double.infinity),
-                  ),
                   if (isWide)
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -446,12 +434,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Widget _buildStartButton() {
-    return SizedBox(
-      width: double.infinity,
-      child: FilledButton(
-        onPressed: _scanning ? null : _startScan,
-        child: Text(t(ref, 'start')),
-      ),
+    return Row(
+      children: [
+        // P2「继续」按钮:有可恢复记录时出现在开始左侧(桌面仅水平拖清除);
+        // 无入场动画,出现即到位。
+        if (_resumeAvailable) ...[
+          ResumeButton(
+            onResume: _resumeLastSession,
+            onDismiss: _onDismissResumeBanner,
+          ),
+          const SizedBox(width: 12),
+        ],
+        Expanded(
+          child: FilledButton(
+            onPressed: _scanning ? null : _startScan,
+            child: Text(t(ref, 'start')),
+          ),
+        ),
+      ],
     );
   }
 
