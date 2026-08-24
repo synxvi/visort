@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/features/session/session_models.dart';
+import 'package:visort_flutter/ui/router.dart';
 
 /// 包装 Sort 屏幕，注入键盘快捷键。
 /// 文件夹 key 是动态的（用户配置），所以用 onKey 回调逐键判断。
@@ -44,6 +45,14 @@ class _WindowsKeyboardHandlerState
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    // 0. ESC → 中断整理直接返回首页(与 AppBar 返回箭头同语义清栈;
+    //    会话已持久化,Home 顶部「继续」可恢复)
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      Navigator.pushNamedAndRemoveUntil(
+          context, AppRoutes.home, (_) => false);
+      return KeyEventResult.handled;
+    }
 
     final session = ref.read(sessionControllerProvider);
     final controller = ref.read(sessionControllerProvider.notifier);

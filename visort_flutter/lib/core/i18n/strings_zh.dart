@@ -41,7 +41,7 @@ const Map<String, String> stringsZh = {
 
   // ───────── Home · 文件夹编辑器 ─────────
   'target_subdirs_suffix': ' · 目标子目录',
-  'add_folder': '新增文件夹',
+  'add_folder': '新增子目录',
   'dest_preview': '目标文件夹预览',
   'hotkey': '快捷键',
   'folder_name': '文件夹名称',
@@ -65,6 +65,8 @@ const Map<String, String> stringsZh = {
   'skip_key': '跳过键',
   'key_bound': '「{0}」已绑定给功能「{1}」，请使用其他键',
   'key_used_folder': '「{0}」已被文件夹「{1}」使用，请使用其他键',
+  'key_dup_action': '「{0}」与其他快捷键冲突',
+  'key_used_action': '「{0}」已被操作快捷键使用',
   'key_reserved': '「{0}」已被功能键占用，不可使用',
   'key_used_folder2': '「{0}」已被文件夹「{1}」使用',
 
@@ -100,6 +102,7 @@ const Map<String, String> stringsZh = {
   'grant_permission': '授予权限',
   'retry': '重试',
   'cancel': '取消',
+  'ok': '确认',
 
   // ───────── Home (Android 双模式分类) ─────────
   'mode_to_album': '相册间',
@@ -292,5 +295,6 @@ const Map<String, String> stringsZh = {
   // 日期分组/详情面板
   'date_today': '今天',
   'date_yesterday': '昨天',
+  'keep_one_folder': '至少保留一个目标子目录',
   'storage_phone': '手机存储',
 };

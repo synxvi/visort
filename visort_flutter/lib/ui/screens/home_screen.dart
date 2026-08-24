@@ -278,8 +278,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final profile = config.activeProfileData;
     return Scaffold(
       appBar: AppBar(
-        // 语言切换已移入「设置」（settings_section_general）。
+        // 语言下拉入口（桌面专属）：默认语言由 main() 首启按系统语言落定
+        // （中文→zh，其余→en 兜底），此处提供手动切换，与设置页共用 setLanguage。
         title: _buildLogo(),
+        actions: [
+          // 右缘 16 与 title(logo)距左 16 对称；下压对齐：小字号按钮在
+          // AppBar 居中区里略偏上，垫 3px 让其文字底边与 22px logo 底边
+          // 处于同一水平线。
+          Padding(
+            padding: const EdgeInsets.only(right: 16, bottom: 3),
+            child: _buildLangToggle(),
+          ),
+        ],
       ),
       body: Stack(
         children: [
@@ -336,6 +346,120 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 fontSize: 22)),
       ],
     );
+  }
+
+  // ───────────── AppBar 右上角语言下拉 ─────────────
+  // 样式对齐设置页 _PickerRow 的值态：muted 小字 + ▾；菜单复用
+  // showSpringPopupFromAnchor（弹簧菜单，当前项 ✓）。
+
+  Widget _buildLangToggle() {
+    final lang = ref.watch(currentLanguageProvider);
+    // Builder 取按钮自身 context：菜单锚点必须相对按钮定位（用 state 的
+    // context 会拿到整个 Scaffold 的 RenderBox，坐标算到屏幕外、菜单
+    // 弹在不可见位置——首版「点不开」的根因）。
+    return Builder(builder: (btnCtx) {
+      return InkWell(
+        borderRadius: BorderRadius.circular(6),
+        onTap: () => _openLangMenu(btnCtx),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(lang == 'zh' ? '中文' : 'EN',
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontFamily: 'Space Mono', height: 1.2,
+                    fontFamilyFallback: AppFonts.cjkFallback,
+                    fontSize: 12,
+                  )),
+              const Icon(Icons.keyboard_arrow_down,
+                  color: AppColors.muted, size: 16),
+            ],
+          ),
+        ),
+      );
+    });
+  }
+
+  Future<void> _openLangMenu(BuildContext anchorContext) async {
+    final box = anchorContext.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final pos = box.localToGlobal(Offset.zero);
+    final lang = ref.read(currentLanguageProvider);
+    const options = [('zh', '中文'), ('en', 'English')];
+    // 菜单宽度按内容测量（与设置页同算法）：padding×2 + 勾选位 + 间距 + 最宽文字。
+    const style = TextStyle(
+      fontFamily: 'Space Mono', height: 1.2,
+      fontFamilyFallback: AppFonts.cjkFallback,
+      fontSize: 14,
+    );
+    final scaler = MediaQuery.textScalerOf(context);
+    double maxText = 0;
+    for (final o in options) {
+      final tp = TextPainter(
+        text: TextSpan(text: o.$2, style: style),
+        textScaler: scaler,
+        textDirection: TextDirection.ltr,
+      )..layout();
+      if (tp.width > maxText) maxText = tp.width;
+    }
+    final menuWidth = 14 * 2 + 16 + 8 + maxText + 2;
+    final menuTop = pos.dy + box.size.height + 4;
+    final menuLeft = pos.dx + box.size.width - 6 - menuWidth; // 右缘对齐按钮文字右缘
+    final selected = await showSpringPopupFromAnchor<String>(
+      context: context,
+      barrierLabel: 'lang',
+      // 支点 = ▾ 中心（按钮右缘 - padding6 - ▾半宽8），菜单顶边。
+      anchorGlobalDx: pos.dx + box.size.width - 14,
+      anchorGlobalDy: menuTop,
+      menuLeft: menuLeft,
+      menuTop: menuTop,
+      menuWidth: menuWidth,
+      menuBuilder: (ctx) => Material(
+        color: AppColors.surfaceElevated,
+        elevation: 4,
+        borderRadius: BorderRadius.circular(8),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          // stretch：行拉满菜单宽——否则窄选项（如「中文」比 English 窄）
+          // 的 hover 背景只盖自身内容宽，不满行。
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final o in options)
+              InkWell(
+                onTap: () => Navigator.of(ctx).pop(o.$1),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 11),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 16,
+                        child: o.$1 == lang
+                            ? const Icon(Icons.check,
+                                size: 16, color: AppColors.accent)
+                            : null,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(o.$2,
+                          style: const TextStyle(
+                            color: AppColors.text,
+                            fontFamily: 'Space Mono', height: 1.2,
+                            fontFamilyFallback: AppFonts.cjkFallback,
+                            fontSize: 14,
+                          )),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (selected != null) setLanguage(ref, selected);
   }
 
   // ───────────── 左列：目录 + Profile + 编辑器 ─────────────
@@ -500,15 +624,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           content: TextField(
             controller: ctrl,
             autofocus: true,
+            // 回车 = OK(与确认按钮同值提交)
+            onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
             decoration: const InputDecoration(),
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel')),
+                child: Text(t(ref, 'cancel'))),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-              child: const Text('OK'),
+              child: Text(t(ref, 'ok')),
             ),
           ],
         );
@@ -539,11 +665,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
+              child: Text(t(ref, 'cancel'))),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
+            child: Text(t(ref, 'delete_btn')),
           ),
         ],
       ),

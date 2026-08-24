@@ -187,7 +187,7 @@ class _DropdownOverlayState extends State<_DropdownOverlay>
               color: Colors.transparent,
               child: Container(
                 width: widget.width,
-                constraints: const BoxConstraints(maxHeight: 320),
+                constraints: const BoxConstraints(maxHeight: 240),
                 decoration: BoxDecoration(
                   color: AppColors.surface,
                   border: Border.all(color: AppColors.border),

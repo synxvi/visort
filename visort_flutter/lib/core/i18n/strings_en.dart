@@ -41,7 +41,7 @@ const Map<String, String> stringsEn = {
 
   // ───────── Home · 文件夹编辑器 ─────────
   'target_subdirs_suffix': ' · Target Sub-folders',
-  'add_folder': 'Add Folder',
+  'add_folder': 'Add Subfolder',
   'dest_preview': 'DESTINATION PREVIEW',
   'hotkey': 'Hotkey',
   'folder_name': 'Folder name',
@@ -65,6 +65,8 @@ const Map<String, String> stringsEn = {
   'skip_key': 'Skip key',
   'key_bound': '"{0}" is bound to "{1}", use another key',
   'key_used_folder': '"{0}" is used by folder "{1}"',
+  'key_dup_action': '"{0}" conflicts with another shortcut',
+  'key_used_action': '"{0}" is used by an action shortcut',
   'key_reserved': '"{0}" is reserved, cannot use',
   'key_used_folder2': '"{0}" is already used by folder "{1}"',
 
@@ -102,6 +104,7 @@ const Map<String, String> stringsEn = {
   'grant_permission': 'Grant Permission',
   'retry': 'Retry',
   'cancel': 'Cancel',
+  'ok': 'OK',
 
   // ───────── Home (Android 双模式分类) ─────────
   'mode_to_album': 'Between Albums',
@@ -299,5 +302,6 @@ const Map<String, String> stringsEn = {
   // 日期分组/详情面板
   'date_today': 'Today',
   'date_yesterday': 'Yesterday',
+  'keep_one_folder': 'Keep at least one destination subfolder',
   'storage_phone': 'Phone storage',
 };

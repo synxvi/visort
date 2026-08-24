@@ -34,9 +34,14 @@ class HomeController {
     return null;
   }
 
-  /// 新建 profile。失败返回错误 i18n key
+  /// 新建 profile。失败返回错误 i18n key；初始目标子目录 label 按当前
+  /// 语言取「通用 / General」，快捷键恒为默认 Z/X/C。
   Future<String?> createProfile(String name) async {
-    final r = _service.createProfile(_config, name);
+    final r = _service.createProfile(
+      _config,
+      name,
+      defaultFolderLabel: t(_ref, 'default_label'),
+    );
     if (r.error != null) return r.error;
     await _persist(r.config);
     return null;

@@ -152,8 +152,13 @@ void main() {
       expect(r.error, isNull);
       expect(config.profiles, contains('Work'));
       expect(config.activeProfile, 'Work');
-      // 新建用默认 action_keys
+      // 新建用默认 action_keys（Z/X/C）
       expect(config.profiles['Work']!.actionKeys.delete, 'X');
+      // 全新初始状态：不复制当前 profile——目标子目录仅一条默认模板
+      final folders = config.profiles['Work']!.folders;
+      expect(folders.length, 1);
+      expect(folders.single.key, 'A');
+      expect(folders.single.label, 'General');
     });
 
     test('禁止删除最后一个 profile', () {

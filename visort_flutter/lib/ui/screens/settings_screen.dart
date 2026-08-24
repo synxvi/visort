@@ -248,6 +248,8 @@ class _PickerRow<T> extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          // stretch：行拉满菜单宽——窄选项的 hover 背景不满行（同语言菜单）。
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             for (final o in options)
               InkWell(

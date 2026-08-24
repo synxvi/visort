@@ -93,23 +93,23 @@ class ProfilesService {
     return config.copyWith(activeProfile: name);
   }
 
-  /// 新建 Profile。重名返回错误；新建 Profile 使用默认快捷键。
-  ProfileOpResult createProfile(AppConfig config, String name) {
+  /// 新建 Profile。重名返回错误；全新初始状态：仅一条默认目标子目录
+  /// （key A，label 由调用方按当前语言传入）+ 默认快捷键 Z/X/C，
+  /// 不复制当前 Profile 的任何内容。
+  ProfileOpResult createProfile(AppConfig config, String name,
+      {String defaultFolderLabel = 'General'}) {
     if (name.isEmpty) {
       return (config: config, error: 'profile_name_empty');
     }
     if (config.profiles.containsKey(name)) {
       return (config: config, error: 'profile_name_exists');
     }
-    // 新建 Profile 复用当前激活 Profile 的文件夹结构，但用默认快捷键。
-    final base = config.activeProfileData;
     final updated = config.copyWith(
       profiles: {
         ...config.profiles,
         name: Profile(
-          folders: base.folders,
+          folders: [FolderTemplate(key: 'A', label: defaultFolderLabel)],
           actionKeys: _defaultActionKeys,
-          classifyMode: base.classifyMode,
         ),
       },
       activeProfile: name,
