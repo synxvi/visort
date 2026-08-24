@@ -62,6 +62,15 @@ android {
             isUniversalApk = true
         }
     }
+
+    // 打包层剔除 sqlite3_flutter_libs 捆绑的原生库（安卓走系统 SQLite，
+    // 详见文件底部说明）。该库由插件子项目自行解析依赖，
+    // configurations.exclude 管不到（实测不生效），故在 merge 阶段剔除。
+    packaging {
+        jniLibs {
+            excludes += "lib/**/libsqlite3.so"
+        }
+    }
 }
 
 // kotlinOptions 已废弃（Kotlin 2.3 移除路径），迁移 compilerOptions DSL。
@@ -82,3 +91,8 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("com.drewnoakes:metadata-extractor:2.19.0")
 }
+
+// 安卓端 SQLite 走 sqflite method-channel → 系统 SQLite(android.database)，
+// sqlite3_flutter_libs 捆绑的 libsqlite3.so 只服务桌面 ffi 路径，在安卓是
+// 死重（arm64 1.7MB / v7a 1.6MB 未压缩）。插件注册代码极小照常保留；
+// Windows 端不走安卓打包，不受影响。剔除动作见上方 packaging.jniLibs。

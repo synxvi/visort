@@ -24,7 +24,8 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 ///           落盘层,mtime 校验同语义;冷启动二次进桶零文件 IO)
 ///   v3 (P2): sort_session / sort_image / sort_decision —— 整理会话持久化
 ///           (决策/索引/扫描结果,进程死亡不丢;单活跃会话 id 恒为 1)
-const int kDbVersion = 3;
+///   v4 (P3): run_log —— Run 执行历史审计(RunController.run 结束写摘要行)
+const int kDbVersion = 4;
 
 final databaseServiceProvider =
     Provider<DatabaseService>((ref) => DatabaseService());
@@ -91,6 +92,10 @@ class DatabaseService {
     if (oldVersion < 3) {
       await _createSortTables(db);
     }
+    // v3 → v4: Run 执行历史(P3)。
+    if (oldVersion < 4) {
+      await _createRunLogTable(db);
+    }
   }
 
   /// 建当前版本的全部表(测试的内存库复用同一 schema,保证不漂移)。
@@ -137,6 +142,8 @@ class DatabaseService {
     ''');
     // ── v3 (P2): 整理会话 ──
     await _createSortTables(db);
+    // ── v4 (P3): Run 历史 ──
+    await _createRunLogTable(db);
   }
 
   /// v3 会话三表(onCreate 与 onUpgrade 共用,保证 schema 一致)。
@@ -178,6 +185,23 @@ class DatabaseService {
         dest_path  TEXT,
         PRIMARY KEY (session_id, image_id)
       ) WITHOUT ROWID
+    ''');
+  }
+
+  /// v4 Run 历史表(onCreate 与 onUpgrade 共用)。
+  /// session_id 可空:单活跃会话模型下恒写 1,会话被新扫描覆写/清理后
+  /// 日志行仅存摘要语义(计数 + errors),不悬挂关联查询。
+  static Future<void> _createRunLogTable(sqflite.Database db) async {
+    await db.execute('''
+      CREATE TABLE run_log (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id  INTEGER,
+        finished_at INTEGER NOT NULL,
+        moved       INTEGER NOT NULL,
+        deleted     INTEGER NOT NULL,
+        skipped     INTEGER NOT NULL,
+        errors      TEXT
+      )
     ''');
   }
 }

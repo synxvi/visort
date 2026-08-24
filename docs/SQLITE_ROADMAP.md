@@ -41,6 +41,11 @@
 单库 `getApplicationSupportDirectory()/visort.db`,手写 `onCreate/onUpgrade`
 版本迁移——每阶段升一版,练出真实迁移路径。
 
+> 附带优化(安卓):`app/build.gradle.kts` 以 `packaging.jniLibs.excludes` 剔除
+> sqlite3_flutter_libs 捆绑的 libsqlite3.so(安卓走系统 SQLite,该库是桌面 ffi
+> 专用死重,arm64 -1.75MB)。注意 `configurations.exclude` 对 Flutter 插件子项目
+> 不生效(插件自行解析依赖),必须走打包层。
+
 ### P1(v1)相册通路
 
 ```sql
@@ -151,9 +156,10 @@ CREATE TABLE scan_cache (
 - 恢复 UX:启动检测到未完成会话 → Home 顶部"恢复上次整理"横条(非弹窗),
   新扫描覆盖旧会话;同时只保留一个活跃 session。
 
-### P3 Run 历史(半天)
+### P3 Run 历史(半天)✅ 已完成(DB v4)
 
 - `RunController.run` 结束写 run_log;UI 入口后议(默认只写表)。
+- 实现:`RunLogStore.insert/recent/clear`,空决策不记账,写失败不影响 Run。
 
 ### P4 桌面扫描缓存(半天,优先级最低)
 

@@ -7,7 +7,11 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqflite/sqflite.dart' as sqflite;
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:visort_flutter/core/config/profiles_service.dart';
+import 'package:visort_flutter/core/db/database_service.dart';
+import 'package:visort_flutter/core/db/run_log_store.dart';
 import 'package:visort_flutter/core/fs/file_system_repository.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
 import 'package:visort_flutter/features/run/run_controller.dart';
@@ -84,7 +88,7 @@ void main() {
       ImageRef(root: r'D:\src', relativePath: rel, extension: '.jpg');
 
   /// 构造一个 session：3 张图，decisions 为 move/delete/skip 各一
-  SessionState _buildSession(LinkedHashMap<String, Decision> decisions) {
+  SessionState _buildSession(Map<String, Decision> decisions) {
     final images = [_img('a.jpg'), _img('b.jpg'), _img('c.jpg')];
     final folders = [
       FolderDescriptor(key: 'A', label: 'General', path: r'D:\Dest\General'),
@@ -180,5 +184,39 @@ void main() {
     expect(events.length, 1);
     expect(events.single.done, true);
     expect(events.single.results!.moved, isEmpty);
+  });
+
+  test('run 结束写 run_log(P3 审计,计数与 RunResults 对齐)', () async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    sqflite.databaseFactory = databaseFactoryFfi;
+    final db = await sqflite.databaseFactory.openDatabase(
+      inMemoryDatabasePath,
+      options: sqflite.OpenDatabaseOptions(
+        version: kDbVersion,
+        onCreate: (d, _) => DatabaseService.createAll(d),
+      ),
+    );
+    final store = RunLogStore(Future.value(db));
+    final logged = RunController(fs, store);
+
+    fs.existing
+      ..add(r'D:\src/a.jpg')
+      ..add(r'D:\src/b.jpg')
+      ..add(r'D:\src/c.jpg');
+    final decisions = <String, Decision>{}; // 字面量实现即 LinkedHashMap,保插入序
+    decisions['a.jpg'] =
+        Decision.move(destKey: 'A', destLabel: 'General', destPath: r'D:\Dest\General');
+    decisions['b.jpg'] = Decision.delete();
+    decisions['c.jpg'] = Decision.skip();
+
+    await logged.run(_buildSession(decisions)).toList();
+
+    final rows = await store.recent();
+    expect(rows.length, 1);
+    expect(rows.first.moved, 1);
+    expect(rows.first.deleted, 1);
+    expect(rows.first.skipped, 1);
+    expect(rows.first.errors, isEmpty);
+    await db.close();
   });
 }

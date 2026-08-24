@@ -19,6 +19,8 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:visort_flutter/core/db/database_service.dart';
+import 'package:visort_flutter/core/db/run_log_store.dart';
 import 'package:visort_flutter/core/fs/file_system_repository.dart';
 import 'package:visort_flutter/core/fs/fs_provider.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
@@ -51,9 +53,12 @@ class RunResults {
 }
 
 class RunController {
-  RunController(this._fs);
+  RunController(this._fs, [this._runLog]);
 
   final FileSystemRepository _fs;
+
+  /// Run 历史落库(P3);null = 不记录(纯内存测试/降级)。
+  final RunLogStore? _runLog;
 
   /// 执行 RUN。返回进度 Stream。
   /// UI 用 StreamBuilder 订阅，结束事件含 results。
@@ -176,15 +181,23 @@ class RunController {
       }
     }
 
-    yield RunProgress(
-      done: true,
-      results: RunResults(
-        moved: moved,
-        deleted: deleted,
-        skipped: skipped,
-        errors: errors,
-      ),
+    final results = RunResults(
+      moved: moved,
+      deleted: deleted,
+      skipped: skipped,
+      errors: errors,
     );
+
+    // Run 历史审计(P3):结束事件前落一行摘要。写库失败被 store 吞掉,
+    // 绝不影响结果下发;空决策的提前 return 不经过此处,不记账。
+    await _runLog?.insert(
+      moved: results.moved.length,
+      deleted: results.deleted.length,
+      skipped: results.skipped.length,
+      errors: results.errors,
+    );
+
+    yield RunProgress(done: true, results: results);
   }
 
   /// 解析目标目录（三级回退，app.py:736-747）
@@ -211,5 +224,8 @@ class RunController {
 }
 
 final runControllerProvider = Provider<RunController>((ref) {
-  return RunController(ref.watch(fileSystemRepositoryProvider));
+  return RunController(
+    ref.watch(fileSystemRepositoryProvider),
+    RunLogStore(ref.watch(databaseServiceProvider).database),
+  );
 });
