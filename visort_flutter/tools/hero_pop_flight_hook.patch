@@ -1,0 +1,37 @@
+diff --git a/packages/flutter/lib/src/widgets/heroes.dart b/packages/flutter/lib/src/widgets/heroes.dart
+index d4951873d7f..e779a7d8d97 100644
+--- a/packages/flutter/lib/src/widgets/heroes.dart
++++ b/packages/flutter/lib/src/widgets/heroes.dart
+@@ -843,9 +843,16 @@ class HeroController extends NavigatorObserver {
+ 
+   /// Used to create [RectTween]s that interpolate the position of heroes in flight.
+   ///
+-  /// If null, the controller uses a linear [RectTween].
++  /// If null, the controller uses a linear [Tween<Rect>].
+   final CreateRectTween? createRectTween;
+ 
++  /// VISORT SDK patch（原 3.44 补丁复刻，flutter upgrade 会丢，重打见
++  /// visort 仓库 visort_flutter/tools/hero_pop_flight_hook.patch）：
++  /// pop flight 启动钩子——pop 方向 flight overlay 已同步插入 overlay
++  /// 最上后调用。app 侧（ente detail_page）用它同帧 remove+insert 重插
++  /// chrome 栏，保持栏在飞行层之上，消除返回时图片盖栏的首帧闪烁。
++  static void Function()? onPopFlightStarted;
++
+   // All of the heroes that are currently in the overlay and in motion.
+   // Indexed by the hero tag.
+   final Map<Object, _HeroFlight> _flights = <Object, _HeroFlight>{};
+@@ -1067,6 +1074,14 @@ class HeroController extends NavigatorObserver {
+     for (final _HeroState toHero in toHeroes.values) {
+       toHero.endFlight();
+     }
++
++    // VISORT SDK patch（原 3.44 补丁复刻）：pop 方向的 flight overlay 已
++    // 在上面的 for 循环中同步插入 overlay 最上——此处通知 app 同帧重插
++    // chrome 栏（保持在飞行层之上）。push 方向无需通知（栏由 postFrame
++    // 插入，天然晚于 flight）。
++    if (flightType == HeroFlightDirection.pop) {
++      onPopFlightStarted?.call();
++    }
+   }
+ 
+   void _handleFlightEnded(_HeroFlight flight) {
