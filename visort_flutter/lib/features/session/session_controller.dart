@@ -228,6 +228,10 @@ class SessionController extends Notifier<SessionState> {
     return true;
   }
 
+  /// 丢弃持久化会话(横条滑除)。不动内存活动会话——清的只是「中断记录」;
+  /// 之后的正常扫描/Run 照旧(新扫描覆写,Run 后清库)。
+  Future<void> discardPersistedSession() => _store.clear();
+
   // ───────────────────────── 便捷访问 ─────────────────────────
 
   /// 当前图片是否已有决策

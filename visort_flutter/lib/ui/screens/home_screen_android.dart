@@ -286,7 +286,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     final summary = await ref
         .read(sessionControllerProvider.notifier)
         .persistedSummary();
-    if (summary != null && summary.total > 0) {
+    if (summary != null && summary.decided > 0) {
       final resume = await _askResumePersisted(summary);
       if (!mounted || resume == null) return; // 关掉弹窗 = 取消本次 Start
       if (resume) {
@@ -581,9 +581,20 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // P2 会话恢复横条:杀进程后未完成的整理一键续上。
-                if (_resumeAvailable)
-                  ResumeSessionBanner(onResume: _resumeLastSession),
+                // P2 会话恢复横条:杀进程后未完成的整理一键续上;
+                // 左右滑动清除中断记录(动画由 Dismissible 承担,
+                // AnimatedSize 让出现/非滑除路径的消失平滑过渡)。
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.topCenter,
+                  child: _resumeAvailable
+                      ? ResumeSessionBanner(
+                          onResume: _resumeLastSession,
+                          onDismiss: _onDismissResumeBanner,
+                        )
+                      : const SizedBox(width: double.infinity),
+                ),
                 // 模式切换 segmented control
                 _buildModeSelector(),
                 // 顶栏↔源相册分隔线：固定显示。模式选择器自身 bottom:10 已提供到分隔线
@@ -668,13 +679,22 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     );
   }
 
-  /// 探测持久化会话(DB 头行存在)。恢复流结束后重调:Run 完成 reset 清库
-  /// → 横条消失;中途返回 → 会话仍在,横条保持。
+  /// 探测持久化会话。显示条件 = **库里有已决策的会话**——只要整理过,
+  /// 无论内存是否还有活动会话(新开始返回/恢复后返回)都显示,方便
+  /// 一键续上;0 决策(刚扫描没动/刚"重新开始"覆写)无中断价值,不显示。
+  /// 清除只有两条路:用户点「重新开始」(新扫描覆写,决策归零)或滑动横条。
   Future<void> _checkResumableSession() async {
-    final has = await ref
+    final s = await ref
         .read(sessionControllerProvider.notifier)
-        .hasPersistedSession();
-    if (mounted) setState(() => _resumeAvailable = has);
+        .persistedSummary();
+    if (!mounted) return;
+    setState(() => _resumeAvailable = s != null && s.decided > 0);
+  }
+
+  /// 横条滑除:丢弃持久化会话(Dismissible 已播完滑出+收起动画)。
+  void _onDismissResumeBanner() {
+    ref.read(sessionControllerProvider.notifier).discardPersistedSession();
+    setState(() => _resumeAvailable = false);
   }
 
   /// 恢复上次会话并落屏;pop 回来后重探横条显隐。

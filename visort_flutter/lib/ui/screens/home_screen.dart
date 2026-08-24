@@ -51,15 +51,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         text: config.lastDestParent.isNotEmpty
             ? config.lastDestParent
             : _defaultDestParent());
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final has = await ref
-          .read(sessionControllerProvider.notifier)
-          .hasPersistedSession();
-      if (mounted) setState(() => _resumeAvailable = has);
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkResumableSession());
   }
 
-  /// 恢复上次会话并进 sort;回来后重探(Run 完成 → 横条消失)。
+  /// 探测持久化会话。显示条件 = **库里有已决策的会话**(同安卓 Home:
+  /// 整理过就显示;清除只有「重新开始」覆写与滑动横条两条路)。
+  Future<void> _checkResumableSession() async {
+    final s = await ref
+        .read(sessionControllerProvider.notifier)
+        .persistedSummary();
+    if (!mounted) return;
+    setState(() => _resumeAvailable = s != null && s.decided > 0);
+  }
+
+  /// 横条滑除:丢弃持久化会话。
+  void _onDismissResumeBanner() {
+    ref.read(sessionControllerProvider.notifier).discardPersistedSession();
+    setState(() => _resumeAvailable = false);
+  }
+
+  /// 恢复上次会话并落屏;pop 回来后重探横条显隐。
   Future<void> _resumeLastSession() async {
     final ok = await ref
         .read(sessionControllerProvider.notifier)
@@ -71,10 +82,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final target =
         ref.read(sessionControllerProvider).isComplete ? '/review' : '/sort';
     await Navigator.of(context).pushNamed(target);
-    final has = await ref
-        .read(sessionControllerProvider.notifier)
-        .hasPersistedSession();
-    if (mounted) setState(() => _resumeAvailable = has);
+    await _checkResumableSession();
   }
 
   String _defaultDestParent() {
@@ -201,7 +209,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final summary = await ref
         .read(sessionControllerProvider.notifier)
         .persistedSummary();
-    if (summary != null && summary.total > 0) {
+    if (summary != null && summary.decided > 0) {
       final resume = await _askResumePersisted(summary);
       if (!mounted || resume == null) return;
       if (resume) {
@@ -215,10 +223,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ? AppRoutes.review
             : AppRoutes.sort;
         await Navigator.of(context).pushNamed(target);
-        final has = await ref
-            .read(sessionControllerProvider.notifier)
-            .hasPersistedSession();
-        if (mounted) setState(() => _resumeAvailable = has);
+        await _checkResumableSession();
         return;
       }
     }
@@ -282,8 +287,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (_resumeAvailable)
-                    ResumeSessionBanner(onResume: _resumeLastSession),
+                  // P2 会话恢复横条(左右滑动清除,AnimatedSize 平滑显隐)。
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.topCenter,
+                    child: _resumeAvailable
+                        ? ResumeSessionBanner(
+                            onResume: _resumeLastSession,
+                            onDismiss: _onDismissResumeBanner,
+                          )
+                        : const SizedBox(width: double.infinity),
+                  ),
                   if (isWide)
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
