@@ -50,8 +50,18 @@ class SortScreen extends ConsumerWidget {
       return const Scaffold(body: SizedBox.shrink());
     }
 
-    // 完成态：不再渲染"审核变更"中间页，留一帧空白作跳转过渡
+    // 完成态：不再渲染"审核变更"中间页，留一帧空白作跳转过渡。
+    // 恢复场景(P2)补跳:会话在 Review 屏被杀后恢复进来即完成态,
+    // ref.listen 听不到"变完成"(无状态变化)——首帧主动 push Review,
+    // 否则永远停在空白屏(真机实测黑屏,返回才回 Home)。
+    // isCurrent 去重:正常完成路径 listen 已先 push Review(本路由非栈顶),
+    // 此时不再重复压栈。
     if (session.isComplete) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        final isTop = ModalRoute.of(context)?.isCurrent ?? false;
+        if (isTop) Navigator.pushNamed(context, AppRoutes.review);
+      });
       return const Scaffold(body: SizedBox.shrink());
     }
 

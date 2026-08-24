@@ -295,7 +295,11 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             .restoreLastSession();
         if (!mounted || !ok) return;
         setState(() => _resumeAvailable = false);
-        await Navigator.of(context).pushNamed('/sort');
+        // 完成态会话(在 Review 屏被杀)直达 Review;进 sort 会因「无当前图」
+        // 黑屏(其自动跳 Review 只挂在决策完成回调上,恢复路径不经过)。
+        final target =
+            ref.read(sessionControllerProvider).isComplete ? '/review' : '/sort';
+        await Navigator.of(context).pushNamed(target);
         await _checkResumableSession();
         return;
       }
@@ -673,14 +677,17 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     if (mounted) setState(() => _resumeAvailable = has);
   }
 
-  /// 恢复上次会话并进 sort;pop 回来后重探横条显隐。
+  /// 恢复上次会话并落屏;pop 回来后重探横条显隐。
+  /// 完成态会话直达 Review(在 Review 屏被杀的场景),黑屏规避见上。
   Future<void> _resumeLastSession() async {
     final ok = await ref
         .read(sessionControllerProvider.notifier)
         .restoreLastSession();
     if (!mounted || !ok) return;
     setState(() => _resumeAvailable = false);
-    await Navigator.of(context).pushNamed('/sort');
+    final target =
+        ref.read(sessionControllerProvider).isComplete ? '/review' : '/sort';
+    await Navigator.of(context).pushNamed(target);
     await _checkResumableSession();
   }
 

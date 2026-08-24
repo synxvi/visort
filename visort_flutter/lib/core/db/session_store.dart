@@ -15,6 +15,7 @@
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:sqflite/sqflite.dart' as sqflite;
 import 'package:visort_flutter/core/config/models.dart' show FolderTemplate;
 import 'package:visort_flutter/core/config/profiles_service.dart'
@@ -53,7 +54,10 @@ class SessionStore {
   Future<void> saveNewSession(SessionState s) async {
     try {
       final db = await _db;
-      if (db == null) return;
+      if (db == null) {
+        debugPrint('[SessionStore] saveNewSession: db is NULL (degraded)');
+        return;
+      }
       await db.transaction((txn) async {
         await _clearAll(txn);
         await txn.insert('sort_session', {
@@ -93,8 +97,9 @@ class SessionStore {
           await decBatch.commit(noResult: true);
         }
       });
-    } catch (_) {
+    } catch (e, st) {
       // 写失败 = 会话退化为纯内存(现状行为),不阻塞整理。
+      debugPrint('[SessionStore] saveNewSession FAILED: $e\n$st');
     }
   }
 
@@ -102,10 +107,15 @@ class SessionStore {
   Future<void> upsertDecision(String imageId, Decision d, int seq) async {
     try {
       final db = await _db;
-      if (db == null) return;
+      if (db == null) {
+        debugPrint('[SessionStore] upsertDecision: db is NULL (degraded)');
+        return;
+      }
       await db.insert('sort_decision', _decisionRow(_sessionId, imageId, seq, d),
           conflictAlgorithm: sqflite.ConflictAlgorithm.replace);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[SessionStore] upsertDecision FAILED: $e');
+    }
   }
 
   /// 撤销:删该图决策行。

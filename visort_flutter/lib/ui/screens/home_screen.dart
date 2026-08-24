@@ -66,7 +66,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         .restoreLastSession();
     if (!mounted || !ok) return;
     setState(() => _resumeAvailable = false);
-    await Navigator.of(context).pushNamed('/sort');
+    // 完成态会话(在 Review 屏被杀)直达 Review;进 sort 会因「无当前图」
+    // 黑屏(其自动跳 Review 只挂在决策完成回调上,恢复路径不经过)。
+    final target =
+        ref.read(sessionControllerProvider).isComplete ? '/review' : '/sort';
+    await Navigator.of(context).pushNamed(target);
     final has = await ref
         .read(sessionControllerProvider.notifier)
         .hasPersistedSession();
@@ -206,7 +210,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             .restoreLastSession();
         if (!mounted || !ok) return;
         setState(() => _resumeAvailable = false);
-        await Navigator.of(context).pushNamed(AppRoutes.sort);
+        // 完成态直达 Review(同 _resumeLastSession,黑屏规避)。
+        final target = ref.read(sessionControllerProvider).isComplete
+            ? AppRoutes.review
+            : AppRoutes.sort;
+        await Navigator.of(context).pushNamed(target);
         final has = await ref
             .read(sessionControllerProvider.notifier)
             .hasPersistedSession();

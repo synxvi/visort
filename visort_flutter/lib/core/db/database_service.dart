@@ -31,12 +31,18 @@ final databaseServiceProvider =
 
 class DatabaseService {
   sqflite.Database? _db;
-  bool _initAttempted = false;
+
+  /// 初始化 Future(幂等锚点):首次调用启动 _open,后续所有调用共享
+  /// 同一个 Future——无论 main 的预热与 store 构造谁先谁后,大家等的是
+  /// 同一次初始化。曾用「_initAttempted 标志」版:进行中时后来者立即
+  /// 返回(拿到 null),store 把 null Future 永久快照——冷启动首帧构造
+  /// 的 store 全废(会话决策不落盘),真机"读时好写时坏"的根因。
+  Future<void>? _initFuture;
 
   /// 打开数据库并跑到最新版本。幂等;main() 启动预热调用,失败静默降级。
-  Future<void> init() async {
-    if (_initAttempted) return;
-    _initAttempted = true;
+  Future<void> init() => _initFuture ??= _open();
+
+  Future<void> _open() async {
     try {
       // 桌面端 ffi:Win/Linux 无系统 SQLite,原生库随 app 捆绑。
       // 安卓不动 factory——默认 method-channel 走系统 SQLite。
@@ -57,10 +63,10 @@ class DatabaseService {
     }
   }
 
-  /// 当前数据库句柄;未初始化/初始化失败时先补一次 init 再返回(可能为 null)。
+  /// 当前数据库句柄;等待共享初始化完成后返回(失败降级为 null)。
   /// store 侧统一 `await db` 后判空跳过,不抛异常。
   Future<sqflite.Database?> get database async {
-    if (!_initAttempted) await init();
+    await init();
     return _db;
   }
 
