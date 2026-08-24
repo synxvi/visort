@@ -42,19 +42,15 @@ class SettingsScreen extends ConsumerWidget {
           _SectionHeader(t(ref, 'settings_section_general')),
           _SettingsCard(
             children: [
-              // 语言三态：system 跟随设备（中文→zh，未知→en 兜底，见
-              // resolveLanguage）；手动选择后固定。原首页 logo / sort 屏
-              // 的中英切换按钮已移除，统一收口到此处。
+              // 语言两态：中文 / English。无「跟随系统」——首启时 main()
+              // 已按系统语言决断一次并落定（zh 或 en，见 main.dart），此后
+              // 只靠用户手动切换。原首页 logo / sort 屏的中英切换按钮已移除，
+              // 统一收口到此处。
               _PickerRow<String>(
                 label: t(ref, 'lang_setting'),
-                value: config.language,
-                valueLabel: switch (config.language) {
-                  'zh' => '中文',
-                  'en' => 'English',
-                  _ => t(ref, 'lang_system'),
-                },
-                options: [
-                  ('system', t(ref, 'lang_system')),
+                value: config.language == 'zh' ? 'zh' : 'en',
+                valueLabel: config.language == 'zh' ? '中文' : 'English',
+                options: const [
                   ('zh', '中文'),
                   ('en', 'English'),
                 ],

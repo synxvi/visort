@@ -45,7 +45,14 @@ Future<void> main() async {
   final container = ProviderContainer();
   try {
     final service = container.read(profilesServiceProvider);
-    final config = await service.load();
+    var config = await service.load();
+    // 首启语言落定:'system' 是出厂默认,仅在首启决断一次(设备中文→zh,
+    // 其余→en 兜底)并写回持久化。此后 config.language 恒为 zh/en,设置页
+    // 的语言选项也只提供这两态(不再有「跟随系统」)。
+    if (config.language == 'system') {
+      config = config.copyWith(language: resolveLanguage('system'));
+      await service.save(config);
+    }
     container.read(configProvider.notifier).state = config;
   } catch (_) {
     // 加载失败用默认配置

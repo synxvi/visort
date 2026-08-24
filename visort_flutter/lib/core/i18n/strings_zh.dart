@@ -280,7 +280,6 @@ const Map<String, String> stringsZh = {
   // ───────── 设置 ─────────
   'settings_section_general': '通用',
   'lang_setting': '语言',
-  'lang_system': '跟随系统',
   'settings_section_home': '首页',
   'settings_section_album': '相册',
   'settings_title': '设置',

@@ -287,7 +287,6 @@ const Map<String, String> stringsEn = {
   // ───────── 设置 ─────────
   'settings_section_general': 'General',
   'lang_setting': 'Language',
-  'lang_system': 'System default',
   'settings_section_home': 'Home',
   'settings_section_album': 'Album',
   'settings_title': 'Settings',

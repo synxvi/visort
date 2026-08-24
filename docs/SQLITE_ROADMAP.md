@@ -161,7 +161,19 @@ CREATE TABLE scan_cache (
 - `RunController.run` 结束写 run_log;UI 入口后议(默认只写表)。
 - 实现:`RunLogStore.insert/recent/clear`,空决策不记账,写失败不影响 Run。
 
-### P4 桌面扫描缓存(半天,优先级最低)
+### P4 桌面扫描缓存(半天,优先级最低)⬜ 未开始(Windows 专属)
+
+> **Windows 端待办清单**(2026-08-24 记,SQLite 主线安卓侧已收尾):
+> 1. P4 桌面扫描缓存本身:`DesktopFileSystem.scanImages` 按 (mtime,size) 增量,
+>    目录变更全量重建;大目录冷启动提速是唯一动机,不急可长期搁置。
+> 2. **桌面设置页入口缺失(功能回归)**:语言切换已从桌面 AppBar 移入设置页,
+>    但桌面 Home 没有任何进设置的入口(安卓有 ⋮ 菜单)——语言/网格列数在
+>    桌面端当前无法修改。需给桌面 AppBar 加设置图标入口。
+> 3. 桌面端 UI 回归:本轮改动(设置页语言项、全选 toggle、审核屏返回语义、
+>    删除链路)均未在 Windows 构建上验证,合回 main 前跑一轮
+>    `flutter build windows` + 冒烟。
+
+
 
 - `DesktopFileSystem.scanImages` 按 (mtime, size) 增量;目录变更全量重建。
 
