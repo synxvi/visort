@@ -5,7 +5,8 @@
 //   主体：GridView 3 列缩略图网格，滚动到底加载更多（keyset 分页）
 //   点击缩略图 → 全屏大图浏览器（PageView 左右滑 + InteractiveViewer 缩放 + 删除按钮）
 //
-// 删除：复用 galleryController.deletePhoto（requestDelete + 缓存清理 + 本地移除）。
+// 删除：查看器普通视图走 trashPhoto（移入回收站）、回收站视图走 deletePhoto
+// （彻底删除）；网格勾选批量走 trashPhotos / deletePhotos。
 // 大图浏览器与分页联动：滚动接近末尾时触发 loadMore，viewer 一路滑到底。
 //
 // 注意：本文件已拆分——PhotoViewer 见 photo_viewer.dart，详情抽屉见

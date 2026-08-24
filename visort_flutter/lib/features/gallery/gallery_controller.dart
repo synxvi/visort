@@ -4,7 +4,7 @@
 //   - 列出所有相册（bucket）并按用户排序偏好展示
 //   - 进入某相册后扫描其图片（keyset 分页，游标法）
 //   - 内存中对 bucket 排序（不重新查询 MediaStore）；相册内列表用 SQL 原序
-//   - 单张删除（requestTrash 移入回收站 + 本地移除 + imageCache 清理）
+//   - 单张彻底删除（requestDelete + exists 二次确认；回收站查看器调用）
 //   - 排序偏好持久化到 AppConfig（跨 profile 全局）
 //   - 订阅 MediaStore ContentObserver 变更，静默刷新列表
 //
@@ -736,15 +736,23 @@ class GalleryController extends Notifier<GalleryState> {
     );
   }
 
-  /// 删除单张图片 = 移入回收站（与批量删除及「删除后可在回收站中恢复」文案
-  /// 一致）。成功后从内存列表移除并清理缩略图缓存。返回 null 表示成功。
+  /// 彻底删除单张图片（唯一调用方：照片查看器在回收站视图的「彻底删除」；
+  /// 普通视图的删除走 trashPhoto 移入回收站）。成功后从内存列表移除并清理
+  /// 缩略图缓存。返回 null 表示成功，否则返回错误信息。
   ///
-  /// 走 requestTrash 系统弹窗，用户确认即整体成功，无需二次确认——旧的
-  /// exists 防御确认是真删语义的（trash 后文件仍在，必误报 delete_failed）。
+  /// 注意：不可盲目信任 requestDelete 的返回值——部分 ROM（如 ColorOS）即使
+  /// AppOps 报告 MANAGE_MEDIA 已授权，实际 contentResolver.delete 仍会失败，
+  /// 但 Kotlin 端旧逻辑会返回 0（误报）。故此处用 exists(id) 二次确认文件是否
+  /// 真的消失，只有确认删除才更新本地 state，避免"缩略图消失但返回又出现"。
   Future<String?> deletePhoto(String id) async {
     try {
-      await _channel.requestTrash([id]);
-      // 清理该图的所有缓存（缩略图 + 全图）
+      await _channel.requestDelete([id]);
+      // 二次确认：文件是否真的被删除（防御 ROM 误报）
+      if (await _channel.exists(id)) {
+        // 文件仍在 → 删除未生效，不更新本地 state
+        return 'delete_failed';
+      }
+      // 确认删除成功：清理该图的所有缓存（缩略图 + 全图）
       evictImageCache(id);
       // 本地同步首页相册列表（count-1 + 封面推进）——删除可发生在回收站
       // 视图（bucketId 为 null），用 state.photos 里该照片定位相册。
