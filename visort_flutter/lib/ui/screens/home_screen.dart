@@ -278,14 +278,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final profile = config.activeProfileData;
     return Scaffold(
       appBar: AppBar(
+        // 语言切换已移入「设置」（settings_section_general）。
         title: _buildLogo(),
-        actions: [
-          TextButton(
-            onPressed: () => setLanguage(
-                ref, ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh'),
-            child: Text(ref.read(currentLanguageProvider) == 'zh' ? '中文' : 'EN'),
-          ),
-        ],
       ),
       body: Stack(
         children: [

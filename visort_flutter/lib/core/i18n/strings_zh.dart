@@ -3,7 +3,6 @@
 const Map<String, String> stringsZh = {
   // ───────── 通用 / 顶栏 ─────────
   'app_title': '图片整理工具 v1.2',
-  'lang_toggle': 'EN',
 
   // ───────── Home · 目录输入 ─────────
   'source_dir': '源目录',
@@ -279,6 +278,9 @@ const Map<String, String> stringsZh = {
   'trash_deleted_label': '删除于',
 
   // ───────── 设置 ─────────
+  'settings_section_general': '通用',
+  'lang_setting': '语言',
+  'lang_system': '跟随系统',
   'settings_section_home': '首页',
   'settings_section_album': '相册',
   'settings_title': '设置',

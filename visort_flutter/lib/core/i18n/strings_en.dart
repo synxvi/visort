@@ -3,7 +3,6 @@
 const Map<String, String> stringsEn = {
   // ───────── 通用 / 顶栏 ─────────
   'app_title': 'Image Organizer v1.2',
-  'lang_toggle': '中文',
 
   // ───────── Home · 目录输入 ─────────
   'source_dir': 'SOURCE DIRECTORY',
@@ -286,6 +285,9 @@ const Map<String, String> stringsEn = {
   'trash_deleted_label': 'Deleted',
 
   // ───────── 设置 ─────────
+  'settings_section_general': 'General',
+  'lang_setting': 'Language',
+  'lang_system': 'System default',
   'settings_section_home': 'Home',
   'settings_section_album': 'Album',
   'settings_title': 'Settings',

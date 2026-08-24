@@ -38,6 +38,30 @@ class SettingsScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.only(top: 8, bottom: 24),
         children: [
+          // ── 通用 ──
+          _SectionHeader(t(ref, 'settings_section_general')),
+          _SettingsCard(
+            children: [
+              // 语言三态：system 跟随设备（中文→zh，未知→en 兜底，见
+              // resolveLanguage）；手动选择后固定。原首页 logo / sort 屏
+              // 的中英切换按钮已移除，统一收口到此处。
+              _PickerRow<String>(
+                label: t(ref, 'lang_setting'),
+                value: config.language,
+                valueLabel: switch (config.language) {
+                  'zh' => '中文',
+                  'en' => 'English',
+                  _ => t(ref, 'lang_system'),
+                },
+                options: [
+                  ('system', t(ref, 'lang_system')),
+                  ('zh', '中文'),
+                  ('en', 'English'),
+                ],
+                onSelected: (v) => setLanguage(ref, v),
+              ),
+            ],
+          ),
           // ── 首页 ──
           _SectionHeader(t(ref, 'settings_section_home')),
           _SettingsCard(

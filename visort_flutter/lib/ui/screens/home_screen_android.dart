@@ -546,14 +546,8 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         appBar: AppBar(
           backgroundColor: AppColors.surface,
           foregroundColor: AppColors.text,
-          title: InkWell(
-            onTap: () => setLanguage(
-              ref,
-              ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh',
-            ),
-            borderRadius: BorderRadius.circular(8),
-            child: const _Logo(),
-          ),
+          // logo 纯展示——语言切换已移入「设置」（settings_section_general）。
+          title: const _Logo(),
           actions: [
             // 相册排序（源/目标 section 共用同一排序状态 albumSortBy/Asc）：
             // 从 section 标题整合到 AppBar，置于 ⋮ 左侧。section 内重复的 SortToggle 已移除。

@@ -83,15 +83,7 @@ class SortScreen extends ConsumerWidget {
                     context, AppRoutes.home, (_) => false),
               ),
               title: const _Logo(),
-              actions: [
-                TextButton(
-                  onPressed: () => setLanguage(ref,
-                      ref.read(currentLanguageProvider) == 'zh' ? 'en' : 'zh'),
-                  child: Text(ref.read(currentLanguageProvider) == 'zh'
-                      ? '中文'
-                      : 'EN'),
-                ),
-              ],
+              // 语言切换已移入「设置」（settings_section_general）。
             ),
       body: useAndroidLayout
           ? _buildAndroidLayout(session)
