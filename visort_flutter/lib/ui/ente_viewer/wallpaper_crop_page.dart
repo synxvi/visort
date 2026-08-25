@@ -372,7 +372,7 @@ class _WallpaperCropPageState extends ConsumerState<WallpaperCropPage> {
         builder: (ctx, setState) => AlertDialog(
           backgroundColor: AppColors.surface,
           title: Text(
-            '${t(ref, 'set_wallpaper')} V2',
+            t(ref, 'set_wallpaper'),
             style: const TextStyle(
               fontFamily: 'Space Mono',
               fontFamilyFallback: ['Noto Sans Mono CJK SC'],
