@@ -28,6 +28,7 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/scan/scan_controller.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
+import 'package:visort_flutter/shared/widgets/visort_logo.dart';
 import 'package:visort_flutter/shared/widgets/resume_button.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
@@ -592,7 +593,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           backgroundColor: AppColors.surface,
           foregroundColor: AppColors.text,
           // logo 纯展示——语言切换已移入「设置」（settings_section_general）。
-          title: const _Logo(),
+          title: const VisortLogo(),
           actions: [
             // 相册排序（源/目标 section 共用同一排序状态 albumSortBy/Asc）：
             // 从 section 标题整合到 AppBar，置于 ⋮ 左侧。section 内重复的 SortToggle 已移除。
@@ -2256,38 +2257,6 @@ class _CoverThumb extends StatelessWidget {
         ),
         ),
       ),
-    );
-  }
-}
-
-class _Logo extends StatelessWidget {
-  const _Logo();
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // V 用主题绿(accent),ISORT 白色 —— VISORT logo。
-        Text(
-          'V',
-          style: TextStyle(
-            fontFamily: 'Syne',
-            fontFamilyFallback: AppFonts.cjkFallback,
-            fontWeight: FontWeight.w800,
-            fontSize: 22,
-            color: AppColors.accent,
-          ),
-        ),
-        Text(
-          'ISORT',
-          style: TextStyle(
-            fontFamily: 'Syne',
-            fontFamilyFallback: AppFonts.cjkFallback,
-            fontWeight: FontWeight.w800,
-            fontSize: 22,
-          ),
-        ),
-      ],
     );
   }
 }

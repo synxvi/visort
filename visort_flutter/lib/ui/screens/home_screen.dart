@@ -18,6 +18,7 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/scan/scan_controller.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/features/home/home_controller.dart';
+import 'package:visort_flutter/shared/widgets/visort_logo.dart';
 import 'package:visort_flutter/shared/widgets/profile_dropdown.dart';
 import 'package:visort_flutter/shared/widgets/resume_button.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
@@ -280,7 +281,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       appBar: AppBar(
         // 语言下拉入口（桌面专属）：默认语言由 main() 首启按系统语言落定
         // （中文→zh，其余→en 兜底），此处提供手动切换，与设置页共用 setLanguage。
-        title: _buildLogo(),
+        title: const VisortLogo(),
         actions: [
           // 右缘 16 与 title(logo)距左 16 对称；下压对齐：小字号按钮在
           // AppBar 居中区里略偏上，垫 3px 让其文字底边与 22px logo 底边
@@ -326,25 +327,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             LoadingOverlayBuilder(message: t(ref, 'scanning')),
         ],
       ),
-    );
-  }
-
-  Widget _buildLogo() {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text('V',
-            style: TextStyle(
-                fontFamily: AppFonts.syne,
-                fontWeight: FontWeight.w800,
-                fontSize: 22,
-                color: AppColors.accent)),
-        Text('ISORT',
-            style: TextStyle(
-                fontFamily: AppFonts.syne,
-                fontWeight: FontWeight.w800,
-                fontSize: 22)),
-      ],
     );
   }
 

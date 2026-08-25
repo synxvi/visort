@@ -22,6 +22,7 @@ import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/features/session/session_models.dart';
 import 'package:visort_flutter/shared/widgets/kbd_badge.dart';
 import 'package:visort_flutter/shared/widgets/middle_ellipsis_text.dart';
+import 'package:visort_flutter/shared/widgets/visort_logo.dart';
 import 'package:visort_flutter/ui/adaptive/windows_keyboard_handler.dart';
 import 'package:visort_flutter/ui/router.dart';
 
@@ -82,7 +83,7 @@ class SortScreen extends ConsumerWidget {
                 onPressed: () => Navigator.pushNamedAndRemoveUntil(
                     context, AppRoutes.home, (_) => false),
               ),
-              title: const _Logo(),
+              title: const VisortLogo(),
               // 语言切换已移入「设置」（settings_section_general）。
             ),
       body: useAndroidLayout
@@ -912,30 +913,6 @@ class _AndroidActionChip extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _Logo extends StatelessWidget {
-  const _Logo();
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // V 用主题绿(accent),ISORT 白色 —— VISORT logo。
-        Text('V',
-            style: TextStyle(
-                fontFamily: 'Syne', fontFamilyFallback: AppFonts.cjkFallback,
-                fontWeight: FontWeight.w800,
-                fontSize: 22,
-                color: AppColors.accent)),
-        Text('ISORT',
-            style: TextStyle(
-                fontFamily: 'Syne', fontFamilyFallback: AppFonts.cjkFallback,
-                fontWeight: FontWeight.w800,
-                fontSize: 22)),
-      ],
     );
   }
 }
