@@ -606,9 +606,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
             );
           },
           onPageChanged: (index) {
-            debugPrint(
-              '[dbg] onPageChanged($index) driven=$_pagerDrivenByThumb suppress=$_suppressThumbScroll sel=${_selectedIndexNotifier.value}',
-            );
             if (_pagerDrivenByThumb) {
               // 缩略图条驱动主图:跨多页时中间页忽略,不回弹缩略图条;
               // 到达 target 复位 flag。
@@ -1034,9 +1031,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
   void _onThumbScrollEnd() {
     final ctrl = _thumbScrollCtrl;
     if (ctrl == null || !ctrl.hasClients || _thumbSyncing) return;
-    debugPrint(
-      '[dbg] onScrollEnd off=${ctrl.offset.toStringAsFixed(1)} center=${_thumbCenterIndex?.value} sel=${_selectedIndexNotifier.value}',
-    );
     final target = _thumbComputeCenter();
     final offset = _thumbOffsetForCenter(target);
     if ((ctrl.offset - offset).abs() > 0.5) {
@@ -1108,7 +1102,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
     final ctrl = _thumbScrollCtrl;
     if (ctrl == null || !ctrl.hasClients) return;
     if (_suppressThumbScroll) return;
-    debugPrint('[dbg] syncThumbTo($i) off=${ctrl.offset.toStringAsFixed(1)}');
     _thumbSyncing = true;
     _thumbCenterIndex?.value = i;
     ctrl

@@ -42,14 +42,14 @@ s_*.png
 .workbuddy/
 
 # Flutter
-sortr_flutter/.dart_tool/
-sortr_flutter/.flutter-plugins
-sortr_flutter/.flutter-plugins-dependencies
-sortr_flutter/.packages
-sortr_flutter/build/
+visort_flutter/.dart_tool/
+visort_flutter/.flutter-plugins
+visort_flutter/.flutter-plugins-dependencies
+visort_flutter/.packages
+visort_flutter/build/
 # 字体子集化的原始全集备份（16MB，不入库；由 tools/subset_fonts.py 重新生成）
 # 必须在 assets 之外，否则会被 pubspec 打进 APK
-sortr_flutter/.font-source/
+visort_flutter/.font-source/
 
 # 反编译产物（系统相册逆向，体积大，不入库；调研见 docs/IMAGE_DECODE_BENCHMARK.md）
 _reverse/

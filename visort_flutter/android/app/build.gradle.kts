@@ -1,9 +1,22 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // AGP 9 内置 Kotlin 编译（built-in Kotlin），不再 apply kotlin-android——
     // 旧 apply 会让 android{} 解析到 BaseAppModuleExtension（AGP 9 移除路径）。
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// 生产签名配置（android/key.properties，已 gitignore；keystore 在仓库外）。
+// 缺失时回落 debug 签名，保住本地 `flutter run --release` 工作流——
+// 但对外发版必须用固定 keystore：CI runner 的 debug key 每次不同，
+// 签名不固定则用户无法覆盖升级（INSTALL_FAILED_UPDATE_INCOMPATIBLE）。
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -31,11 +44,24 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // 有 key.properties 用生产签名；无则回落 debug（仅限本地调试用）。
+            signingConfig = if (keystorePropertiesFile.exists())
+                signingConfigs.getByName("release")
+            else
+                signingConfigs.getByName("debug")
 
             // R8 代码压缩 + 资源压缩。
             // 剔除未引用的 Java/Kotlin 代码与资源，减小 DEX 与 APK 体积，
@@ -81,6 +107,27 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+// per-ABI versionCode 偏移：splits 三个 APK 共用 flutter.versionCode 会全部
+// 相同（此前实测三个包 code 均为 1）。偏移保证互异且 arm64 ≥ 其他
+//（arm64 = N*10+1，v7a = N*10+2，universal = N*10）——同主版本下
+// arm64 < v7a 会让部分应用商店/升级逻辑选错包，此约定与官方多 APK 指南一致。
+// AGP 9 中 applicationVariants.all 已移除，须走 androidComponents API。
+androidComponents {
+    onVariants { variant ->
+        variant.outputs.forEach { output ->
+            val abi = output.filters.firstOrNull {
+                it.filterType == com.android.build.api.variant.FilterConfiguration.FilterType.ABI
+            }?.identifier
+            val offset = when (abi) {
+                "armeabi-v7a" -> 2
+                "arm64-v8a" -> 1
+                else -> 0 // universal
+            }
+            output.versionCode.set((flutter.versionCode ?: 1) * 10 + offset)
+        }
     }
 }
 
