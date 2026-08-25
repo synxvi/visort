@@ -482,7 +482,28 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       _menuCtl!.close();
       return;
     }
-    const menuWidth = 184.0;
+    // 菜单宽度按内容测量（大图 ⋮ 菜单同算法，见 detail_page._showViewerMenu）：
+    // padding 16×2 + 图标 20 + 间距 12 + 最宽文本 + 12 缓冲（TextPainter 实测
+    // 与渲染有 2~3px 误差）。原固定 184 偏宽，按内容收窄（中文约 132，较原宽
+    // 缩小约 1/3）；英文长标签（Favorites ≈ 152）仍完整不溢出。
+    const labelStyle = TextStyle(
+      fontFamily: 'Space Mono',
+      fontFamilyFallback: AppFonts.cjkFallback,
+      color: AppColors.text,
+      fontSize: 14,
+    );
+    final scaler = MediaQuery.textScalerOf(context);
+    const labelKeys = ['favorites_title', 'trash_title', 'settings_title'];
+    double maxText = 0;
+    for (final key in labelKeys) {
+      final tp = TextPainter(
+        text: TextSpan(text: t(ref, key), style: labelStyle),
+        textScaler: scaler,
+        textDirection: TextDirection.ltr,
+      )..layout();
+      if (tp.width > maxText) maxText = tp.width;
+    }
+    final menuWidth = 16 * 2 + 20 + 12 + maxText + 12;
     _menuCtl = showNonModalMenu(
       context: context,
       anchorKey: _menuBtnKey,
