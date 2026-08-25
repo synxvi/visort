@@ -1923,11 +1923,15 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
   /// 丢失。返回 true 表示已拦截（调用方应 return）。第二次点击（键盘已收）
   /// 才执行原操作。
   bool _interceptIfEditing() {
+    // 先无条件收键盘+清焦点链（onInterceptWhileEditing = _dismissAndFlush）：
+    // 系统返回键收起键盘时 TextField 仍持焦点（viewInsets 已归 0），只凭
+    // viewInsets>0 判断会漏——焦点链不清，进相册返回时输入框回焦、键盘自动
+    // 弹出（2026-08 实测）。无论键盘状态都先清，再按键盘是否展开决定拦截。
+    widget.onInterceptWhileEditing?.call();
     // 用 View 级 viewInsets（物理像素）而非 MediaQuery.viewInsetsOf：后者被
     // Scaffold 的 resizeToAvoidBottomInset 消费（removeViewInsets 传给 body），
     // 在 body 子树内恒为 0，无法据此判断键盘是否展开。
     if (View.of(context).viewInsets.bottom > 0) {
-      widget.onInterceptWhileEditing?.call();
       return true;
     }
     return false;
