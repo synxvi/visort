@@ -402,9 +402,22 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
               ),
             ),
           ),
-          _kv(t(ref, 'photo_created_at'), formatDateTime(info.dateAddedMs)),
-          _kv(t(ref, 'photo_modified_at'), formatDateTime(info.dateModifiedMs)),
-          if (orient != null) _kv(t(ref, 'meta_orientation'), orient),
+          // Table + IntrinsicColumnWidth:标签列宽=当前语言最长标签(中文
+          // 「修改时间」4 字 ≈48px,英文 "Orientation" ≈79px 自适应撑宽),
+          // 值紧跟其后 12px——不再用固定 110 让中文标签后留大段空白。
+          Table(
+            defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+            columnWidths: const {
+              0: IntrinsicColumnWidth(),
+              1: FlexColumnWidth(),
+            },
+            children: [
+              _kv(t(ref, 'photo_created_at'), formatDateTime(info.dateAddedMs)),
+              _kv(
+                  t(ref, 'photo_modified_at'), formatDateTime(info.dateModifiedMs)),
+              if (orient != null) _kv(t(ref, 'meta_orientation'), orient),
+            ],
+          ),
         ],
       ),
     );
@@ -447,42 +460,39 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
     ],
   );
 
-  /// key-value 行:左 muted 标签 / 右值(文件信息卡用)。
-  Widget _kv(String label, String value) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 6),
-    child: Row(
-      // 水平居中：label 与 value 垂直方向对齐（避免小字号差异导致错位）
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        SizedBox(
-          // 110 容纳英文 "Orientation"（11 字符 Space Mono 13px），避免尾字母换行
-          width: 110,
-          child: Text(
-            label,
-            style: const TextStyle(
-              color: AppColors.muted,
-              fontSize: 12,
-              fontFamily: 'Space Mono',
-              height: 1.2,
-              fontFamilyFallback: AppFonts.cjkFallback,
+  /// key-value 行(文件信息卡 Table 行):左 muted 标签 / 右值。
+  /// 标签列宽由 Table 的 IntrinsicColumnWidth 统一取最长标签(中英文各自
+  /// 自适应),值列以固定 12px 间距紧随——中英文下都不会出现大段空白或换行。
+  TableRow _kv(String label, String value) => TableRow(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontSize: 12,
+                fontFamily: 'Space Mono',
+                height: 1.2,
+                fontFamilyFallback: AppFonts.cjkFallback,
+              ),
             ),
           ),
-        ),
-        Expanded(
-          child: SelectableText(
-            value,
-            style: const TextStyle(
-              color: AppColors.text,
-              fontSize: 13,
-              fontFamily: 'Space Mono',
-              height: 1.2,
-              fontFamilyFallback: AppFonts.cjkFallback,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 0, 6),
+            child: SelectableText(
+              value,
+              style: const TextStyle(
+                color: AppColors.text,
+                fontSize: 13,
+                fontFamily: 'Space Mono',
+                height: 1.2,
+                fontFamilyFallback: AppFonts.cjkFallback,
+              ),
             ),
           ),
-        ),
-      ],
-    ),
-  );
+        ],
+      );
 }
 
 /// EXIF DateTime("2024:01:15 10:30:00") → 毫秒时间戳;解析失败返回 null。
