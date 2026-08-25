@@ -1113,17 +1113,80 @@ class MediaStoreRepository(private val context: Context) {
         return systemDeleteRequest(uris)
     }
 
-    /// 构造系统级删除弹窗（Android 11+ 真删 / Android 10 回收站 / 9- 直接删）。
+    /// Android 10 删除授权的待重放状态（见 systemDeleteRequest Q 分支）：
+    /// Q 的 RecoverableSecurityException 授权只授写权、不执行删除，需在
+    /// RESULT_OK 后由本端对 pending URI 重放 contentResolver.delete。
+    private var qDeletePendingUris: List<Uri> = emptyList()
+    private var qDeletePreCount = 0
+
+    /// 重放 Android 10 授权删除。返回累计成功数（授权前直删 + 授权后重删）；
+    /// 无 pending（非 Q 流程）返回 -1，调用方走 R+ 的原语义。
+    fun redoQDeleteIfPending(): Int {
+        if (qDeletePendingUris.isEmpty()) return -1
+        var deleted = qDeletePreCount
+        for (uri in qDeletePendingUris) {
+            try {
+                contentResolver.delete(uri, null, null)
+                deleted++
+            } catch (e: Exception) {
+                Log.w(TAG, "redoQDelete 失败 $uri: ${e.message}")
+            }
+        }
+        Log.i(TAG, "redoQDeleteIfPending: 授权重放完成, 总成功 $deleted")
+        qDeletePendingUris = emptyList()
+        qDeletePreCount = 0
+        return deleted
+    }
+
+    /// 清空 Q 删除待重放状态（用户取消授权弹窗时调用，防残留）。
+    fun clearQDeletePending() {
+        qDeletePendingUris = emptyList()
+        qDeletePreCount = 0
+    }
+
+    /// 构造系统级删除弹窗（Android 11+ 真删 / Android 10 直删+授权重放 / 9- 直接删）。
     /// 抽出以便 MANAGE_MEDIA 路径删除失败时复用 fallback。
+    /// Android 10 授权的待重放状态见 [qDeletePendingUris]（授权只授写权不执行删除）。
     private fun systemDeleteRequest(uris: List<Uri>): IntentSender? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // Android 11+：createDeleteRequest（批量，一次弹窗）
             Log.i(TAG, "systemDeleteRequest: Android R+ createDeleteRequest, uris=${uris.size}")
             MediaStore.createDeleteRequest(contentResolver, uris).intentSender
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Android 10：createTrashRequest 放回收站（deleteRequest 在 11+ 才有）
-            Log.i(TAG, "systemDeleteRequest: Android Q createTrashRequest(回收站), uris=${uris.size}")
-            MediaStore.createTrashRequest(contentResolver, uris, true).intentSender
+            // Android 10：createTrashRequest/createDeleteRequest 均为 API 30 方法，
+            // Q 上调用直接抛 NoSuchMethodError（是 Error，不被 catch(Exception)
+            // 捕获 → 进程崩溃）。处理方式照搬 buildWriteRequest 的 Q 授权模式
+            //（move 路径已真机验证）：
+            //   1) 自有文件直接 delete 成功；
+            //   2) 他人文件用空 values 集合 update 触发 RecoverableSecurityException
+            //      拿系统授权 IntentSender（一次弹窗）；授权通过后由
+            //      redoQDeleteIfPending() 重放删除（Plugin 在 RESULT_OK 回调里调）。
+            var deleted = 0
+            val needConsent = mutableListOf<Uri>()
+            for (uri in uris) {
+                try {
+                    contentResolver.delete(uri, null, null)
+                    deleted++
+                } catch (e: Exception) {
+                    Log.w(TAG, "Android Q 直接删除失败 $uri: ${e.message}")
+                    needConsent.add(uri)
+                }
+            }
+            Log.i(TAG, "systemDeleteRequest: Android Q 直删 $deleted/${uris.size}, 待授权=${needConsent.size}")
+            if (needConsent.isEmpty()) return null
+            qDeletePendingUris = needConsent
+            qDeletePreCount = deleted
+            return try {
+                // 空 values：只触发权限检查不实际修改（同 buildWriteRequest Q 分支）
+                val cv = android.content.ContentValues()
+                contentResolver.update(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv,
+                    "${MediaStore.Images.Media._ID} IN (${needConsent.joinToString(",")})", null
+                )
+                null // update 未抛 = 实际已有权限（needConsent 非空时理论上到不了这）
+            } catch (e: RecoverableSecurityException) {
+                e.userAction.actionIntent.intentSender
+            }
         } else {
             // Android 9 及以下：直接删（无弹窗）
             var deleted = 0

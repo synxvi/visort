@@ -5,7 +5,8 @@
 //   - scanImages      → 按 bucket id 列表查询
 //   - readMeta/readBytes → 按 _ID 查询
 //   - move            → 打标签语义（不真移动，返回成功）
-//   - deleteBatch     → createTrashRequest 系统弹窗批量移入回收站（可恢复）
+//   - deleteBatch     → createTrashRequest 系统弹窗批量移入回收站（可恢复）；
+//                      Android 10- 无系统回收站，降级 requestDelete 彻底删除
 //
 // ImageRef 编码：
 //   - root         = IMAGES_AUTHORITY 常量（content://media/external/images/media）
@@ -14,6 +15,7 @@
 import 'file_system_repository.dart';
 import 'image_ref.dart';
 import 'mediastore_channel.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:visort_flutter/core/config/models.dart';
 
 /// MediaStore Images 的 authority 常量（与 Kotlin IMAGES_AUTHORITY 对齐）
@@ -161,10 +163,23 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
     // （对齐批量删除的文案与行为）。旧走 createDeleteRequest——真删语义，
     // 且 ColorOS 把它做成自家私有回收站，应用内回收站查不到。
     // 弹窗确认即全部入站（返回全集）；取消/失败抛异常 → 空集，Run 记 delete_failed。
+    // Android 10 及以下无系统回收站（trash 是 R/11+ 特性）：降级走 requestDelete
+    // 彻底删除通道（Kotlin 侧 Q 分支为直删+授权重放）。仅在 TRASH_UNSUPPORTED
+    // 时降级——用户明确取消过回收站弹窗的（TRASH_CANCELLED）不再二次打扰。
     if (ids.isEmpty) return const {};
     try {
       final ok = await _channel.requestTrash(ids);
       return ok ? ids.toSet() : const <String>{};
+    } on PlatformException catch (e) {
+      if (e.code == 'TRASH_UNSUPPORTED') {
+        try {
+          final count = await _channel.requestDelete(ids);
+          return count == ids.length ? ids.toSet() : const <String>{};
+        } catch (_) {
+          return const {};
+        }
+      }
+      return const {};
     } catch (_) {
       return const {};
     }

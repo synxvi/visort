@@ -21,7 +21,11 @@ android {
         applicationId = "com.synxvi.visort"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // 显式钉 26（不用工具链默认 24）：scanImages/listBuckets 全链路的
+        // Bundle 版 contentResolver.query 是 API 26+ 方法，minSdk=24 会让
+        // Android 7.x 进相册即 NoSuchMethodError 崩溃。
+        // 与 docs/ANDROID_ROADMAP.md 共识 #11 的决策对齐（曾被默认值静默回退）。
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

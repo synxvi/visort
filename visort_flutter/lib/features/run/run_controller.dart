@@ -70,8 +70,14 @@ class RunController {
       return;
     }
 
-    // 构建 folder_map：当前 session 的 folders（key → path）
-    final folderMap = {for (final f in session.folders) f.key: f.path};
+    // 构建 folder_map：当前 session 的 folders（key → path）。
+    // 重复 key 保首插——与 SessionController.decide 的 firstWhere 语义对齐；
+    // 若用 map 字面量（后者覆盖前者），decide 记录的目标与 Run 实际移动
+    // 目标会在重复 key 时分叉（key 唯一性由 Home/编辑器保证，此处防御）。
+    final folderMap = <String, String>{};
+    for (final f in session.folders) {
+      folderMap.putIfAbsent(f.key, () => f.path);
+    }
     final destParent = session.destinationParent;
 
     final moved = <({String file, String to})>[];

@@ -116,6 +116,7 @@ const Map<String, String> stringsEn = {
   'sub_dirs': 'Target Subdirs',
   'no_target_album': 'Please select at least one target album.',
   'no_subdir': 'Please add at least one sub directory.',
+  'too_many_targets': 'Too many targets (max {0})',
   'folder_name_invalid_char': 'Folder name contains invalid characters',
   'folder_name_dup': 'Folder name already used',
   'source_count': 'Source {0}',

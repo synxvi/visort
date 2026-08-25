@@ -38,6 +38,13 @@ void _goHomeAndPop(BuildContext context) {
 class ReviewScreen extends ConsumerWidget {
   const ReviewScreen({super.key});
 
+  /// Run 防双击闸门：push /results 的转场（enteFadeRoute opaque:false）约
+  /// 200ms 内 Review 仍在 hit-test 树、按钮可再点，双击会 push 两次 →
+  /// 同批决策双执行（双系统弹窗 + 第二次全屏误导性错误）。Results pop
+  /// 返回时（pushNamed Future 完成）复位，允许下一轮 Run。
+  /// ReviewScreen 是无状态组件，闸门挂 static。
+  static final ValueNotifier<bool> _runGate = ValueNotifier<bool>(false);
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final stats = ref.watch(reviewStatsProvider);
@@ -132,22 +139,31 @@ class ReviewScreen extends ConsumerWidget {
                         child: Text(t(ref, 'back')),
                       ),
                       const Spacer(),
-                      FilledButton(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.accent,
-                          foregroundColor: AppColors.bg,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 14,
+                      // ValueListenableBuilder：闸门置位后立即禁用按钮
+                      //（转场期间本屏仍在树中、仍可命中点击）。
+                      ValueListenableBuilder<bool>(
+                        valueListenable: _runGate,
+                        builder: (context, runStarted, _) => FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.accent,
+                            foregroundColor: AppColors.bg,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 14,
+                            ),
                           ),
+                          onPressed: stats.total == 0 || runStarted
+                              ? null
+                              : () async {
+                                  _runGate.value = true;
+                                  await Navigator.pushNamed(
+                                    context,
+                                    AppRoutes.results,
+                                  );
+                                  _runGate.value = false;
+                                },
+                          child: Text(t(ref, 'run_apply')),
                         ),
-                        onPressed: stats.total == 0
-                            ? null
-                            : () => Navigator.pushNamed(
-                                context,
-                                AppRoutes.results,
-                              ),
-                        child: Text(t(ref, 'run_apply')),
                       ),
                     ],
                   ),

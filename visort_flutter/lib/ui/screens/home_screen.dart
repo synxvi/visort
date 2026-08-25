@@ -40,6 +40,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _recursive = true;
   bool _scanning = false;
 
+  /// Start 防并发闸门：persistedSummary/恢复弹窗的 async gap 期间 _scanning
+  /// 仍为 false、按钮可再点，双击会并发进入两次扫描（双 push sort）。
+  /// _scanning 置位后的窗口由其自身兜底（按钮禁用）。
+  bool _scanInFlight = false;
+
   /// 是否有可恢复的整理会话(P2,顶部横条)。
   bool _resumeAvailable = false;
 
@@ -215,7 +220,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
+  /// Start 入口：防并发闸门（见 _scanInFlight），实际流程在 _startScanInner。
   Future<void> _startScan() async {
+    if (_scanInFlight) return;
+    _scanInFlight = true;
+    try {
+      await _startScanInner();
+    } finally {
+      _scanInFlight = false;
+    }
+  }
+
+  Future<void> _startScanInner() async {
     // P2:有未完成会话先问恢复(与安卓 Home 同款,避免 Start 重扫覆写丢决策)。
     final summary = await ref
         .read(sessionControllerProvider.notifier)

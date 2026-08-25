@@ -78,6 +78,11 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
 
   bool _loading = false;
   bool _scanning = false;
+
+  /// Start 防并发闸门：恢复探测/弹窗/构建目标相册的 async gap 期间
+  /// _scanning 仍为 false、按钮可再点，双击会并发进入两次扫描（双 push
+  /// sort）。_scanning 置位后的窗口由其自身兜底（按钮禁用）。
+  bool _scanInFlight = false;
   bool _permissionGranted = false;
   bool _manageMediaGranted = false; // MANAGE_MEDIA 特殊权限（零弹窗媒体操作）
   String? _error;
@@ -315,7 +320,18 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     return true;
   }
 
+  /// Start 入口：防并发闸门（见 _scanInFlight），实际流程在 _startScanInner。
   Future<void> _startScan() async {
+    if (_scanInFlight) return;
+    _scanInFlight = true;
+    try {
+      await _startScanInner();
+    } finally {
+      _scanInFlight = false;
+    }
+  }
+
+  Future<void> _startScanInner() async {
     // 收键盘+清焦点链（同 _dismissAndFlush）：开始按钮在底栏，输入框聚焦时
     // 点击不会触发 body 的 onTap，若不先收焦点，push 到 sort/review 返回时
     // 路由作用域会把焦点还给输入框、键盘自动弹出。
@@ -356,6 +372,12 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         toast(context, t(ref, 'no_target_album'));
         return;
       }
+      // 快捷键池硬上限：超过 _keyOrder 后 key 溢出为 '?'（decide 按 key 匹配
+      // 会串位、Run 的 folderMap 会静默覆盖），在源头拦截。
+      if (_targetBucketIds.length > _keyOrder.length) {
+        toast(context, t(ref, 'too_many_targets', [_keyOrder.length]));
+        return;
+      }
       setState(() => _scanning = true);
       folders = await _buildTargetAlbumFolders();
     } else {
@@ -376,6 +398,12 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       folders = _buildNewDirFolders();
       if (folders.isEmpty) {
         toast(context, t(ref, 'no_subdir'));
+        return;
+      }
+      // 同 toAlbum：子目录行数超过快捷键池即拦截（_addSubDir 已前置拦截，
+      // 此处兜底——旧持久化配置可能带回超限行数）。
+      if (folders.length > _keyOrder.length) {
+        toast(context, t(ref, 'too_many_targets', [_keyOrder.length]));
         return;
       }
       setState(() => _scanning = true);
@@ -1458,6 +1486,12 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
 
   /// 新增子目录行（同步数据后通知 AnimatedList 插入，触发入场动画）。
   void _addSubDir() {
+    // 快捷键池上限：超出后 key 会溢出为 '?'，decide/Run 均按 key 匹配将串位。
+    // 在新增入口拦截（_startScan 处另有兜底）。
+    if (_subDirs.length >= _keyOrder.length) {
+      toast(context, t(ref, 'too_many_targets', [_keyOrder.length]));
+      return;
+    }
     final newIdx = _subDirs.length;
     setState(() => _subDirs.add(''));
     _subDirsKey.currentState?.insertItem(newIdx);

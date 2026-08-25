@@ -16,6 +16,7 @@ import 'dart:convert' show jsonDecode, jsonEncode;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'folder_name_validator.dart';
 import 'models.dart';
 
 /// shared_preferences 中存储 AppConfig JSON 的 key。
@@ -190,6 +191,13 @@ class ProfilesService {
       }
       if (!seenKeys.add(key)) {
         throw TemplateValidationException('row_dup', [i + 1]);
+      }
+      // label 非法字符 / `.` `..` 路径穿越：label 会被 computeDestinationFolders
+      // 直接拼进文件系统路径（桌面）或 RELATIVE_PATH（安卓），必须保存前拦截。
+      // 规则与安卓 Home 共用 folder_name_validator（含单测）。
+      final invalidKey = folderNameInvalidKey(label);
+      if (invalidKey != null) {
+        throw TemplateValidationException(invalidKey, [i + 1]);
       }
       normalized.add(FolderTemplate(key: key, label: label));
     }

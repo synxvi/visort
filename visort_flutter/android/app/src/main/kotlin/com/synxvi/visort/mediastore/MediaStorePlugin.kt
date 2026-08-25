@@ -187,8 +187,12 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 val pending = pendingDeleteResult ?: return true
                 pendingDeleteResult = null
                 if (resultCode == Activity.RESULT_OK) {
-                    pending.success(pendingDeleteCount)
+                    // Android 10：RecoverableSecurityException 授权只授写权，
+                    // 需重放删除；R+ createDeleteRequest 授权即系统直删（-1 走原语义）。
+                    val qRedone = repository?.redoQDeleteIfPending() ?: -1
+                    pending.success(if (qRedone >= 0) qRedone else pendingDeleteCount)
                 } else {
+                    repository?.clearQDeletePending()
                     pending.error(MsError.DeleteCancelled.code, MsError.DeleteCancelled.message, null)
                 }
                 return true
