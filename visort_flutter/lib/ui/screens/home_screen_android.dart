@@ -292,6 +292,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   }
 
   Future<void> _startScan() async {
+    // 收键盘+清焦点链（同 _dismissAndFlush）：开始按钮在底栏，输入框聚焦时
+    // 点击不会触发 body 的 onTap，若不先收焦点，push 到 sort/review 返回时
+    // 路由作用域会把焦点还给输入框、键盘自动弹出。
+    _dismissAndFlush();
     // P2:有未完成会话先问恢复。Start 的默认语义是重扫覆写——不问就直接
     // 覆写会让"中断后点开始续整理"的主诉路径丢决策(每次都从第一张来)。
     final summary = await ref
@@ -407,6 +411,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
 
   /// 右上角 3 点菜单：收藏 / 回收站快捷入口（相册浏览走首页列表直接点）。
   Future<void> _onMenuSelected(String value) async {
+    // 输入框聚焦时先收键盘+清焦点链（同 _dismissAndFlush）：⋮ 菜单挂在
+    // rootOverlay，点击菜单项不会触发 body 的 _interceptIfEditing，若带焦点
+    // 直接 push，返回时路由作用域会把焦点还给输入框、键盘自动弹出。
+    _dismissAndFlush();
     if (value == 'favorites') {
       await Navigator.pushNamed(
         context,
@@ -1228,10 +1236,16 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
 
   /// 点击空白（非输入框）区域时收起键盘并立即落盘 toNewDir 编辑。
   ///
-  /// 收键盘：FocusScope.unfocus 让当前 TextField 失焦 → 输入法收回。输入框为空
-  /// 时失焦后由 hintText 自然显示灰色占位（Visort / folder*），无需回填——text 保持
-  /// 空串，hint 即占位；实际使用由 _buildNewDirFolders / _startScan 的 isEmpty
-  /// 兜底为 'Visort' / 'folder N'。
+  /// 收键盘：对「当前聚焦节点」unfocus → 输入法收回。必须用
+  /// FocusManager.instance.primaryFocus?.unfocus() 而非 FocusScope.of(context)
+  /// .unfocus()——后者只清父级（Navigator）作用域的焦点链，Home 路由作用域
+  /// 的 _focusedChildren 仍记着 TextField；从相册返回时路由作用域恢复焦点会
+  /// 重新聚焦该输入框、键盘自动弹出（2026-08 实测：创建子目录后进相册返回，
+  /// 输入法自动展开聚焦到子目录输入框）。对聚焦节点本身 unfocus 会清空其
+  /// 所在路由作用域的焦点链，返回时不再回焦。
+  /// 输入框为空时失焦后由 hintText 自然显示灰色占位（Visort / folder*），无需
+  /// 回填——text 保持空串，hint 即占位；实际使用由 _buildNewDirFolders /
+  /// _startScan 的 isEmpty 兜底为 'Visort' / 'folder N'。
   /// 立即落盘：取消 _persistTimer 防抖直接 save，符合「点击即保存」语义，避免快速
   /// 切换输入框或返回页面时编辑落在 400ms 防抖窗口内被 dispose cancel 掉而丢失。
   void _dismissAndFlush() {
@@ -1239,7 +1253,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       _persistTimer!.cancel();
       ref.read(profilesServiceProvider).save(ref.read(configProvider));
     }
-    FocusScope.of(context).unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
   }
 
   /// MANAGE_MEDIA 权限引导横幅（未授权时显示）
