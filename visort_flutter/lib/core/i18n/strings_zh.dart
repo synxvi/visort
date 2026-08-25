@@ -114,6 +114,8 @@ const Map<String, String> stringsZh = {
   'sub_dirs': '目标子目录',
   'no_target_album': '请至少选择一个目标相册。',
   'no_subdir': '请至少添加一个子目录。',
+  'folder_name_invalid_char': '文件夹名含非法字符（/ \\ : * ? " < > |）',
+  'folder_name_dup': '文件夹名与其他子目录重复',
   'source_count': '源 {0}',
   'target_count': '目标 {0}',
   'subdir_count': '子目录 {0}',

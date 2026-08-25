@@ -16,6 +16,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:visort_flutter/core/config/models.dart';
+import 'package:visort_flutter/core/config/folder_name_validator.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/core/config/profiles_service.dart';
 import 'package:visort_flutter/core/fs/android_mediastore_file_system.dart';
@@ -291,6 +292,28 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     }).toList();
   }
 
+  /// 子目录名校验：非法字符 / `.` `..` / 与其他行有效名重复 → 错误 key。
+  /// 规则集中在 folder_name_validator.dart（纯函数，有单测）。
+  String? _subDirRowErrorKey(int idx) {
+    return folderNameInvalidKey(_subDirs[idx]) ??
+        folderNameDupKey(idx, _subDirs);
+  }
+
+  /// 父目录名校验（非法字符 / 路径穿越；空值走 Visort 兜底，不算错）。
+  String? _parentDirErrorKey() {
+    return folderNameInvalidKey(_parentCtrl.text);
+  }
+
+  /// toNewDir 模式下父/子目录名是否全部合法（任一非法字符/重名命中即 false）。
+  /// 用于禁用「开始」按钮——红框提示 + 按钮禁用，双重防误触。
+  bool get _newDirNamesValid {
+    if (_parentDirErrorKey() != null) return false;
+    for (var i = 0; i < _subDirs.length; i++) {
+      if (_subDirRowErrorKey(i) != null) return false;
+    }
+    return true;
+  }
+
   Future<void> _startScan() async {
     // 收键盘+清焦点链（同 _dismissAndFlush）：开始按钮在底栏，输入框聚焦时
     // 点击不会触发 body 的 onTap，若不先收焦点，push 到 sort/review 返回时
@@ -335,6 +358,20 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       setState(() => _scanning = true);
       folders = await _buildTargetAlbumFolders();
     } else {
+      // 合法性 + 重复校验：非法字符 / `.` `..` 穿越 / 重名直接拦截，提示中止。
+      // （输入框已实时标红，这里是兜底强制——用户可能忽略红框直接点开始。）
+      final parentErr = _parentDirErrorKey();
+      if (parentErr != null) {
+        toast(context, t(ref, parentErr));
+        return;
+      }
+      for (var i = 0; i < _subDirs.length; i++) {
+        final err = _subDirRowErrorKey(i);
+        if (err != null) {
+          toast(context, t(ref, err));
+          return;
+        }
+      }
       folders = _buildNewDirFolders();
       if (folders.isEmpty) {
         toast(context, t(ref, 'no_subdir'));
@@ -1334,6 +1371,9 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             controller: _parentCtrl,
             focusNode: _parentFocus,
             hintText: 'Visort',
+            errorText: _parentDirErrorKey() == null
+                ? null
+                : t(ref, _parentDirErrorKey()!),
             onChanged: (_) {
               setState(() {});
               _persistNewDir();
@@ -1425,15 +1465,20 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       keyLabel: idx < _keyOrder.length ? _keyOrder[idx] : '?',
       animation: animation,
       // fieldBuilder 闭包捕获 idx，复用父级 _dirInputField 与编辑/删除逻辑不变
-      fieldBuilder: (controller) => _dirInputField(
-        controller: controller,
-        hintText: 'folder ${idx + 1}',
-        onChanged: (val) {
-          setState(() => _subDirs[idx] = val);
-          _persistNewDir();
-        },
-        onDelete: _subDirs.length > 1 ? () => _removeSubDir(idx) : null,
-      ),
+      // 实时校验：非法字符/重名 → 红框 + 红字（_subDirRowErrorKey）。
+      fieldBuilder: (controller) {
+        final errKey = _subDirRowErrorKey(idx);
+        return _dirInputField(
+          controller: controller,
+          hintText: 'folder ${idx + 1}',
+          errorText: errKey == null ? null : t(ref, errKey),
+          onChanged: (val) {
+            setState(() => _subDirs[idx] = val);
+            _persistNewDir();
+          },
+          onDelete: _subDirs.length > 1 ? () => _removeSubDir(idx) : null,
+        );
+      },
     );
   }
 
@@ -1462,6 +1507,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     FocusNode? focusNode,
     ValueChanged<String>? onChanged,
     String? hintText,
+    String? errorText,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1474,6 +1520,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           focusNode: focusNode,
           onChanged: onChanged,
           hintText: hintText,
+          errorText: errorText,
         ),
       ],
     );
@@ -1484,12 +1531,14 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   /// 纯 Flutter 原生 TextField + 单层 OutlineInputBorder（无外层 Container，
   /// 无嵌套双框）。父目录和子目录用完全相同的组件 + InputDecoration，
   /// 渲染必然一致。Pictures/ 提示在标题显示。
+  /// [errorText] 非空时红框 + 红字（非法字符 / 重名校验，见 _subDirRowErrorKey）。
   Widget _dirInputField({
     required TextEditingController controller,
     FocusNode? focusNode,
     ValueChanged<String>? onChanged,
     VoidCallback? onDelete,
     String? hintText,
+    String? errorText,
   }) {
     final field = TextField(
       controller: controller,
@@ -1503,6 +1552,13 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       decoration: InputDecoration(
         isDense: true,
         hintText: hintText,
+        errorText: errorText,
+        errorStyle: const TextStyle(
+          color: AppColors.danger,
+          fontSize: 11,
+          fontFamily: 'Space Mono',
+          fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+        ),
         hintStyle: const TextStyle(
           color: AppColors.muted,
           fontFamily: 'Space Mono',
@@ -1526,6 +1582,14 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
           borderSide: const BorderSide(color: AppColors.accent, width: 1.5),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: AppColors.danger),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: AppColors.danger, width: 1.5),
         ),
       ),
       onChanged: onChanged,
@@ -1555,7 +1619,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     final canStart =
         _sourceBucketIds.isNotEmpty &&
         ((_mode == ClassifyMode.toAlbum && _targetBucketIds.isNotEmpty) ||
-            (_mode == ClassifyMode.toNewDir && _subDirs.isNotEmpty));
+            (_mode == ClassifyMode.toNewDir &&
+                _subDirs.isNotEmpty &&
+                // 名称非法/重复时禁用开始（红框已提示原因）。
+                _newDirNamesValid));
     // 贴边底栏（Column 尾，非悬浮）：Container 背景延伸到物理底边，
     // 内部 SafeArea(top:false) 让内容避让手势条。
     return Container(
