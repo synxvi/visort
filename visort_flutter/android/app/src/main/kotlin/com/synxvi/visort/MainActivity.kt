@@ -7,8 +7,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.window.BackEvent
-import android.window.OnBackAnimationCallback
+import android.window.OnBackInvokedCallback
 import android.window.OnBackInvokedDispatcher
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -203,7 +202,7 @@ class MainActivity : FlutterActivity() {
         return null
     }
 
-    // 接管系统返回手势：window 级 OnBackAnimationCallback（API 34+）。
+    // 接管系统返回手势：window 级【非动画】OnBackInvokedCallback（API 34+）。
     //
     // 背景：ColorOS/Android 16 对“隐藏了系统栏”的应用（沉浸模式）会消费第一次返回手势
     // 用于显示系统栏，并提示“再次滑动返回”——这是系统行为，Flutter 侧无法关闭。
@@ -218,30 +217,45 @@ class MainActivity : FlutterActivity() {
     // 实现要点（对照 AOSP 源码验证）：
     //   1) 注册 priority 用 PRIORITY_OVERLAY（1000000）：高于任何应用级注册（Checker 禁止
     //      负 priority），必盖过 Flutter embedding 在 PRIORITY_DEFAULT 的注册，手势只到我们。
-    //   2) onBackStarted/onBackProgressed/onBackCancelled 全部 no-op → 系统不播放默认动画
-    //      （相册网格不再缩放抖动），也不退出沉浸模式、不弹“再次滑动返回”。
+    //   2) 注册【非动画】OnBackInvokedCallback（lambda 版）而非 OnBackAnimationCallback：
+    //      系统对非动画回调不进预测返回动画路径——松手才回调，手势全程不画任何系统
+    //      预览。此前用 OnBackAnimationCallback（onBackStarted/Progressed 均 no-op），
+    //      系统仍认为 app 参与预测动画而在手势期间绘制默认预览条（屏幕右侧贯穿
+    // 顶底的灰色半透明条，松手即消——弹窗打开时滑动返回可复现，2026-08 实测）。
+    //      代价仅是失去本就 no-op 的 onBackStarted/Progressed 回调，零功能损失。
     //   3) onBackInvoked 里 popRoute()：走 Flutter 的 Navigator.maybePop（PopScope 拦截仍生效），
     //      页面弹出动画由 Flutter 正常播放。
     //   4) 需配合 Manifest android:enableOnBackInvokedCallback="true"：Android 16 的
     //      WindowOnBackInvokedDispatcher$Checker 在 flag=false 时拒绝注册。
     //
     // 注：API 34 以下不注册，维持 Flutter embedding 默认行为。
+    //
+    // ⚠️ 防抖（2026-08 实测）：ColorOS 的 OplusPredictiveBackController 会对同一次
+    // 返回手势【二次投递】onBackInvoked——popRoute 连发导致 Navigator 连退多层
+    //（弹窗开着返回直接跳回相册网格，多层路由转场叠加成右侧灰色竖条闪烁）。
+    // popRoute 是异步 platform message，第二次到达时 dialog 退场动画仍在进行、
+    // 不阻塞 maybePop 继续退下一层。500ms 窗口覆盖最长退场动画（450ms）。
+    private var lastBackInvokeMs = 0L
+
     private fun registerBackGestureInterceptor() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
         val dispatcher = window.getOnBackInvokedDispatcher()
+        android.util.Log.i("VisortBack", "registering PRIORITY_OVERLAY callback")
         dispatcher.registerOnBackInvokedCallback(
             OnBackInvokedDispatcher.PRIORITY_OVERLAY,
-            object : OnBackAnimationCallback {
-                override fun onBackStarted(backEvent: BackEvent) {
-                    // no-op：不播动画、不显示系统栏（保持沉浸）
-                }
-
-                override fun onBackProgressed(backEvent: BackEvent) {}
-
-                override fun onBackCancelled() {}
-
-                override fun onBackInvoked() {
-                    // 执行返回：直接通知 Flutter（Navigator.maybePop，PopScope 仍生效）
+            OnBackInvokedCallback {
+                val now = android.os.SystemClock.elapsedRealtime()
+                android.util.Log.i(
+                    "VisortBack",
+                    "onBackInvoked dt=${now - lastBackInvokeMs}ms" +
+                        (if (now - lastBackInvokeMs < 500L) " [debounced]" else " [dispatch]"),
+                )
+                if (now - lastBackInvokeMs < 500L) return@OnBackInvokedCallback
+                lastBackInvokeMs = now
+                // 执行返回：直接通知 Flutter（Navigator.maybePop，PopScope 仍生效）。
+                // popRoute 的 Dart 侧处理在 platform 线程回调，派发主线程保序。
+                runOnUiThread {
+                    android.util.Log.i("VisortBack", "popRoute dispatch")
                     flutterEngine?.navigationChannel?.popRoute()
                 }
             },

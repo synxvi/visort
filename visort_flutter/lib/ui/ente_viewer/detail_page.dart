@@ -29,7 +29,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
-import 'package:visort_flutter/core/fs/wallpaper_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart' show configProvider, t;
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
@@ -44,6 +43,7 @@ import 'package:visort_flutter/ui/screens/album_picker_screen.dart';
 import 'detail_page_state.dart';
 import 'fast_scroll_physics.dart';
 import 'photo_details_sheet.dart';
+import 'wallpaper_crop_page.dart';
 import 'zoomable_image.dart';
 
 // ─────────────── 栏位常量（主分支 photo_viewer.dart 同款） ───────────────
@@ -202,12 +202,22 @@ class _DetailPageState extends ConsumerState<DetailPage>
   OverlayEntry? _chromeEntry;
   Offset? _lastDoubleTapDown;
 
+  /// 栏让路开关：root Overlay 在所有路由之上（Hero 时序需要），push
+  /// 壁纸裁剪页这类全屏子页面时若不抑制，顶/底栏/缩略图条会浮在子页
+  /// 之上。裁剪页进入前置 true、返回后复位（_setAsWallpaper）。
+  final ValueNotifier<bool> chromeSuppressed = ValueNotifier(false);
+
   // ─────────────── 底栏 ⋮ 菜单（NonModalMenu 向上展开）───────────────
   // 必须走 rootOverlay 的 NonModalMenu（PopupMenu 走 Navigator overlay，
   // 层级低于挂在 Overlay 之上的底栏/缩略图条，会被盖住）；底栏按钮在屏幕
   // 下缘，用 upward 让菜单向上长。
   final GlobalKey _viewerMenuKey = GlobalKey();
   NonModalMenuController? _viewerMenuCtl;
+
+  /// ⋮ 菜单是否展开中（含收回动画期间，isClosed=false）：PopScope 拦截
+  /// 系统返回的依据——展开时系统返回应收起菜单，而非直接退出大图。
+  bool get _viewerMenuOpen =>
+      _viewerMenuCtl != null && !_viewerMenuCtl!.isClosed;
 
   /// viewer 无纵向滚动信号（屏障本身拦截手势），恒 false 占位满足 API。
   final ValueNotifier<bool> _viewerMenuScrolling = ValueNotifier(false);
@@ -381,21 +391,30 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 面板；面板 z 序最高，展开时覆盖缩略图条区域）。Material 提供栏组件
   /// 的默认文本/ink 语境（原在 Scaffold 内）。
   Widget _buildChromeOverlay(BuildContext _) {
-    return Material(
-      type: MaterialType.transparency,
-      child: Stack(
-        children: [
-          // 底栏缩略图条（filmstrip）
-          _buildThumbLine(),
-          // 详情面板：z 序在底栏**后面**——滑入/滑出动画经过底栏区域时
-          // 被底栏遮住（"从底栏后面弹出/收回"），而非覆盖底栏。
-          if (_detailsOpen && _panelCtrl != null)
-            _buildPanelOverlay(_selectedFile),
-          // 顶栏
-          _buildTopBar(),
-          // 底栏（z 序最上）
-          _buildBottomOverlay(),
-        ],
+    // 抑制时整体透明 + 不可点（保持 subtree 状态——filmstrip 滚动位置等
+    // 不因 entry 重建丢失）。
+    return ValueListenableBuilder<bool>(
+      valueListenable: chromeSuppressed,
+      builder: (_, suppressed, child) => IgnorePointer(
+        ignoring: suppressed,
+        child: Opacity(opacity: suppressed ? 0.0 : 1.0, child: child!),
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Stack(
+          children: [
+            // 底栏缩略图条（filmstrip）
+            _buildThumbLine(),
+            // 详情面板：z 序在底栏**后面**——滑入/滑出动画经过底栏区域时
+            // 被底栏遮住（"从底栏后面弹出/收回"），而非覆盖底栏。
+            if (_detailsOpen && _panelCtrl != null)
+              _buildPanelOverlay(_selectedFile),
+            // 顶栏
+            _buildTopBar(),
+            // 底栏（z 序最上）
+            _buildBottomOverlay(),
+          ],
+        ),
       ),
     );
   }
@@ -436,11 +455,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
       // 面板打开时点击图片区 → 收面板（而非切换全屏）。
       onImageTap: _detailsOpen ? _animateClose : null,
       child: PopScope(
-        // 面板展开/删除 sheet 显示时拦截系统返回:先收回面板/关 sheet
-        // 而非退出大图;都关闭时正常返回相册。
-        canPop: !_detailsOpen && !_deleteDialogShowing,
+        // 面板展开/删除 sheet 显示/⋮ 菜单展开时拦截系统返回:先收回面板/关
+        // sheet/收起菜单,而非退出大图;都关闭时正常返回相册。
+        canPop: !_detailsOpen && !_deleteDialogShowing && !_viewerMenuOpen,
         onPopInvokedWithResult: (didPop, _) {
           if (didPop) return;
+          // ⋮ 菜单优先:展开时系统返回先收起菜单(再按一次才退出大图)。
+          if (_viewerMenuOpen) {
+            _viewerMenuCtl?.close();
+            return;
+          }
           if (_deleteDialogShowing) {
             _deleteSheetClose?.call();
             return;
@@ -1268,21 +1292,58 @@ class _DetailPageState extends ConsumerState<DetailPage>
     _removeCurrentAndAdvance(t(ref, 'restored'));
   }
 
-  // ─────────────── ⋮ 菜单：复制/移动/重命名（当前图） ───────────────
+  // ─────────────── ⋮ 菜单：复制/移动/重命名/设为壁纸（当前图） ───────────────
 
   /// 底栏 ⋮ 菜单（首页/相册勾选态同款 NonModalMenu，向上展开）。
   void _showViewerMenu() {
-    if (_viewerMenuCtl != null && !_viewerMenuCtl!.isClosed) {
+    // toggle：菜单已展开则收回（与首页同款）。
+    if (_viewerMenuOpen) {
       _viewerMenuCtl!.close();
       return;
     }
-    const menuWidth = 184.0;
+    // 菜单宽度 = max(固定 184, 按最宽项测量)。测量公式（首页语言菜单/设置页
+    // 同算法）：padding 16×2 + 图标 20 + 间距 12 + 最宽文本 + 12 缓冲。
+    // 固定 184 在英文 "Set as wallpaper"（Space Mono 14px ≈ 143px）下会溢出
+    // 弹窗右缘，故英文时按内容加宽；中文短标签（≈132px）保持 184 原观感。
+    // 缓冲 12 而非同款菜单的 2——实测 TextPainter 测量值与实际渲染有 2~3px
+    // 误差，2px 缓冲在 "Set as wallpaper" 上仍会触发 RenderFlex 溢出（debug 黄条）。
+    const labelStyle = TextStyle(
+      fontFamily: 'Space Mono',
+      fontFamilyFallback: AppFonts.cjkFallback,
+      color: AppColors.text,
+      fontSize: 14,
+    );
+    final scaler = MediaQuery.textScalerOf(context);
+    const labelKeys = [
+      'copy_to_album',
+      'move_to_album',
+      'rename',
+      'set_wallpaper',
+    ];
+    double maxText = 0;
+    for (final key in labelKeys) {
+      final tp = TextPainter(
+        text: TextSpan(text: t(ref, key), style: labelStyle),
+        textScaler: scaler,
+        textDirection: TextDirection.ltr,
+      )..layout();
+      if (tp.width > maxText) maxText = tp.width;
+    }
+    const minMenuWidth = 184.0;
+    final measuredWidth = 16 * 2 + 20 + 12 + maxText + 12;
+    final menuWidth =
+        measuredWidth > minMenuWidth ? measuredWidth : minMenuWidth;
     _viewerMenuCtl = showNonModalMenu(
       context: context,
       anchorKey: _viewerMenuKey,
       menuWidth: menuWidth,
       upward: true,
       isScrolling: _viewerMenuScrolling,
+      // 菜单收起（任意途径）后刷新 PopScope.canPop：不刷新则收起后仍停留
+      // false，下一次系统返回会被 onPopInvoked 吞掉（菜单已关、无操作）。
+      onDismiss: () {
+        if (mounted) setState(() {});
+      },
       menuBuilder: (ctx) => Material(
         color: AppColors.surfaceElevated,
         elevation: 3,
@@ -1331,6 +1392,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
         ),
       ),
     );
+    // 展开后立即刷新 PopScope.canPop——菜单刚开、期间无其它 rebuild，
+    // 不刷新则系统返回会直接 pop 页面（详见 PopScope 拦截逻辑）。
+    setState(() {});
   }
 
   /// 菜单单项（首页 _buildMenuItem 同款：图标 + 文本，48 高）。
@@ -1350,13 +1414,19 @@ class _DetailPageState extends ConsumerState<DetailPage>
             children: [
               Icon(icon, color: AppColors.text, size: 20),
               const SizedBox(width: 12),
-              Text(
-                label,
-                style: const TextStyle(
-                  fontFamily: 'Space Mono',
-                  fontFamilyFallback: AppFonts.cjkFallback,
-                  color: AppColors.text,
-                  fontSize: 14,
+              // Expanded：菜单宽度按最宽项测量（含 12 缓冲）后文本完整显示；
+              // 极端字号缩放等剩余宽度不足时省略号兜底，而非 RenderFlex 溢出。
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontFamily: 'Space Mono',
+                    fontFamilyFallback: AppFonts.cjkFallback,
+                    color: AppColors.text,
+                    fontSize: 14,
+                  ),
                 ),
               ),
             ],
@@ -1366,94 +1436,18 @@ class _DetailPageState extends ConsumerState<DetailPage>
     );
   }
 
-  /// 设当前图为壁纸（对标 ColorOS 系统相册「设为壁纸」）。
-  ///
-  /// 交互：center dialog 三选（主屏/锁屏/两者）→ 原生侧 BitmapRegionDecoder
-  /// 居中裁剪到屏尺寸 → WallpaperManager.setStream（考古细节见
-  /// WallpaperPlugin.kt 文件头）。系统相册的可拖动调整页 v1 未搬——
-  /// 裁剪固定 CenterCrop（与其调整页初始态一致）。
+  /// 设当前图为壁纸 → 全屏范围调整页（模仿 Aves WallpaperPage：
+  /// 初始 covered 可拖动/捏合调整，右下按钮 → 目标三选 + 滚动效果开关）。
+  /// 裁剪页期间抑制本页栏（root Overlay 浮于子路由之上的问题）。
   Future<void> _setAsWallpaper() async {
     final current = _selectedFile;
     if (current == null) return;
-    final WallpaperTarget? target = await showCenterDialog<WallpaperTarget>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: Text(
-          t(ref, 'set_wallpaper'),
-          style: const TextStyle(
-            fontFamily: 'Space Mono',
-            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-            color: AppColors.text,
-            fontSize: 15,
-          ),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final (icon, label, value) in [
-              (
-                Icons.smartphone,
-                t(ref, 'wallpaper_target_system'),
-                WallpaperTarget.system
-              ),
-              (
-                Icons.lock_outline,
-                t(ref, 'wallpaper_target_lock'),
-                WallpaperTarget.lock
-              ),
-              (
-                Icons.playlist_add_check,
-                t(ref, 'wallpaper_target_both'),
-                WallpaperTarget.both
-              ),
-            ])
-              _wallpaperTargetOption(ctx, icon, label, value),
-          ],
-        ),
-      ),
-    );
-    if (target == null || !mounted) return;
+    chromeSuppressed.value = true;
     try {
-      await setWallpaper(current.id, target);
-      if (mounted) toast(context, t(ref, 'wallpaper_set'));
-    } on WallpaperException {
-      if (mounted) toast(context, t(ref, 'wallpaper_set_failed'));
+      await pushWallpaperCropPage(context, current);
+    } finally {
+      if (mounted) chromeSuppressed.value = false;
     }
-  }
-
-  /// 壁纸目标选项（_viewerMenuItem 同款视觉：图标 + 文本，48 高）。
-  Widget _wallpaperTargetOption(
-    BuildContext ctx,
-    IconData icon,
-    String label,
-    WallpaperTarget value,
-  ) {
-    return InkWell(
-      onTap: () => Navigator.pop(ctx, value),
-      borderRadius: BorderRadius.circular(8),
-      child: SizedBox(
-        height: 48,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: Row(
-            children: [
-              Icon(icon, color: AppColors.text, size: 20),
-              const SizedBox(width: 12),
-              Text(
-                label,
-                style: const TextStyle(
-                  fontFamily: 'Space Mono',
-                  fontFamilyFallback: AppFonts.cjkFallback,
-                  color: AppColors.text,
-                  fontSize: 14,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   /// 复制/移动当前图到选定相册。copy 原图不动只 toast；move 走删除同款

@@ -1,11 +1,10 @@
 // 壁纸 MethodChannel 客户端 —— Dart 侧对 Kotlin WallpaperPlugin 的薄封装
 //
 // channel: visort/wallpaper
-// 对接 Android WallpaperManager.setStream（对标 ColorOS 系统相册
-// SetAsWallpaperActivity，考古见 WallpaperPlugin.kt 文件头）。
 //
-// 像素工作全在原生侧完成（BitmapRegionDecoder 裁剪解码 → CenterCrop 屏
-// 尺寸 → JPEG → setStream），Dart 只传 MediaStore id + 目标。
+// 照抄 Aves（WallpaperService / WallpaperHandler.kt）：像素工作全在 Dart
+// 裁剪页完成（预览所见区域 → Canvas 渲染 → PNG bytes），原生只
+// setStream(bytes, null, true, flags)——哑管道保证所见即所得。
 
 import 'package:flutter/services.dart';
 
@@ -22,7 +21,7 @@ enum WallpaperTarget {
   /// 锁屏（FLAG_LOCK）。
   lock(2),
 
-  /// 主屏 + 锁屏（依次各设一次）。
+  /// 主屏 + 锁屏（flags 组合一次 setStream，Aves 同款）。
   both(3);
 
   const WallpaperTarget(this.flag);
@@ -39,14 +38,13 @@ class WallpaperException implements Exception {
   String toString() => 'WallpaperException($code): $message';
 }
 
-/// 把 [id]（MediaStore _ID）的图片 CenterCrop 后设为 [target] 壁纸。
+/// 把 [bytes]（裁剪页渲染好的 PNG）设为 [target] 壁纸。
 ///
-/// 抛 [WallpaperException]（解码失败 / setStream IOException 等）；
-/// 调用方负责 toast 成败。
-Future<void> setWallpaper(String id, WallpaperTarget target) async {
+/// 抛 [WallpaperException]；调用方负责 toast 成败。
+Future<void> setWallpaper(Uint8List bytes, WallpaperTarget target) async {
   try {
     await wallpaperMethodChannel.invokeMethod<void>('setWallpaper', {
-      'id': id,
+      'bytes': bytes,
       'which': target.flag,
     });
   } on PlatformException catch (e) {
