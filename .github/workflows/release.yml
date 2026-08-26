@@ -120,17 +120,34 @@ jobs:
         working-directory: visort_flutter
         # 产出 arm64-v8a / armeabi-v7a / universal 三个分包。
         # settings.gradle.kts 的国内镜像在 CI runner 上公网可达，无需改 Gradle 配置。
-        run: flutter build apk --release --split-per-abi
+        # ⚠️ flutter 工具对 per-ABI versionCode 定制过的 universal 包会误报
+        # "failed to produce an .apk"（exit 1），实际三包全部成功——universal
+        # 生成在 apk/release/ 而工具只在 flutter-apk/ 找。故 || true 后以
+        # 产物存在性为准，universal 缺席时从 apk/release/ 补拷。
+        run: |
+          flutter build apk --release --split-per-abi || true
+          SRC=build/app/outputs
+          test -f "$SRC/flutter-apk/app-arm64-v8a-release.apk" || { echo "::error::arm64 APK 缺失"; exit 1; }
+          test -f "$SRC/flutter-apk/app-armeabi-v7a-release.apk" || { echo "::error::v7a APK 缺失"; exit 1; }
+          if [ ! -f "$SRC/flutter-apk/app-release.apk" ]; then
+            cp "$SRC/apk/release/app-universal-release.apk" "$SRC/flutter-apk/app-release.apk" \
+              || { echo "::error::universal APK 缺失"; exit 1; }
+          fi
+          echo "三包 APK 就绪"
 
       - name: Rename APKs with tag version
-        # app-arm64-v8a-release.apk → visort-v1.3.0-arm64-v8a.apk（带版本便于
-        # 用户辨认与排查覆盖升级）。
+        # app-arm64-v8a-release.apk → visort-v1.3.0-ci6-arm64-v8a.apk（带版本
+        # 便于用户辨认与排查覆盖升级）；universal 特判命名。
         working-directory: visort_flutter/build/app/outputs/flutter-apk
         run: |
           for f in app-*-release.apk; do
             [ -e "$f" ] || continue
-            abi="${f#app-}"; abi="${abi%-release.apk}"
-            mv "$f" "visort-${{ github.ref_name }}-${abi}.apk"
+            if [ "$f" = "app-release.apk" ]; then
+              mv "$f" "visort-${{ github.ref_name }}-universal.apk"
+            else
+              abi="${f#app-}"; abi="${abi%-release.apk}"
+              mv "$f" "visort-${{ github.ref_name }}-${abi}.apk"
+            fi
           done
 
       - name: Upload APK artifacts
