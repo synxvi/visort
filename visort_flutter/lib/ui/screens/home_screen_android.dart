@@ -1509,7 +1509,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     final removed = _subDirs[idx];
     _subDirsKey.currentState?.removeItem(
       idx,
-      (ctx, animation) => _buildSubDirRow(idx, removed, animation),
+      // 退场动画期间行仍在树上且可命中：禁掉指针，防误触二次删除。
+      (ctx, animation) => IgnorePointer(
+        child: _buildSubDirRow(idx, removed, animation),
+      ),
     );
     setState(() => _subDirs.removeAt(idx));
     _persistNewDir();
@@ -1527,17 +1530,28 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       animation: animation,
       // fieldBuilder 闭包捕获 idx，复用父级 _dirInputField 与编辑/删除逻辑不变
       // 实时校验：非法字符/重名 → 红框 + 红字（_subDirRowErrorKey）。
-      fieldBuilder: (controller) {
+      fieldBuilder: (controller, focusNode) {
         final errKey = _subDirRowErrorKey(idx);
         return _dirInputField(
           controller: controller,
+          focusNode: focusNode,
           hintText: 'folder ${idx + 1}',
           errorText: errKey == null ? null : t(ref, errKey),
           onChanged: (val) {
             setState(() => _subDirs[idx] = val);
             _persistNewDir();
           },
-          onDelete: _subDirs.length > 1 ? () => _removeSubDir(idx) : null,
+          // 删除持焦行前先把焦点转给父目录输入框：删末位行时下方已无
+          // 输入框可自然接焦，系统会直接收起 IME → 窗口 resize →
+          // SurfaceView resize 闪灰（「删末位灰屏闪烁」根因；删中间行
+          // 焦点自然落到下一行输入框故无此现象）。先转移 → 键盘保持
+          // 展开，退场动画与 IME 不打架。
+          onDelete: _subDirs.length > 1
+              ? () {
+                  if (focusNode.hasFocus) _parentFocus.requestFocus();
+                  _removeSubDir(idx);
+                }
+              : null,
         );
       },
     );
@@ -2345,12 +2359,16 @@ class _CoverThumb extends StatelessWidget {
 ///
 /// 输入框本体（[TextField] + 装饰）由父级通过 [fieldBuilder] 提供，以复用
 /// _dirInputField 与既有的 onChanged/onDelete 逻辑；本组件只负责持有
-/// controller、同步外部 value 变化，以及入场/退场动画包裹与快捷键标签。
+/// controller 与 FocusNode、同步外部 value 变化，以及入场/退场动画包裹
+/// 与快捷键标签。FocusNode 同样由行 State 持有（与 controller 同理，跨
+/// rebuild 复用），并在 fieldBuilder 中交给父级——删除持焦行时可据此判断
+/// 与转移焦点（见 _buildSubDirRow 的 onDelete）。
 class _SubDirRow extends StatefulWidget {
   final String value;
   final String keyLabel;
   final Animation<double> animation;
-  final Widget Function(TextEditingController controller) fieldBuilder;
+  final Widget Function(
+      TextEditingController controller, FocusNode focusNode) fieldBuilder;
 
   const _SubDirRow({
     required this.value,
@@ -2367,6 +2385,7 @@ class _SubDirRowState extends State<_SubDirRow> {
   late final TextEditingController _controller = TextEditingController(
     text: widget.value,
   );
+  final _focusNode = FocusNode();
 
   @override
   void didUpdateWidget(covariant _SubDirRow oldWidget) {
@@ -2382,6 +2401,7 @@ class _SubDirRowState extends State<_SubDirRow> {
   @override
   void dispose() {
     _controller.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -2423,7 +2443,7 @@ class _SubDirRowState extends State<_SubDirRow> {
                 ),
                 const SizedBox(width: 10),
                 // 子目录名输入：删除图标内置 suffix（由父级 fieldBuilder 提供）
-                Expanded(child: widget.fieldBuilder(_controller)),
+                Expanded(child: widget.fieldBuilder(_controller, _focusNode)),
               ],
             ),
           ),
