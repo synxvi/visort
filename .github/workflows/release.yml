@@ -88,10 +88,11 @@ jobs:
 
       - name: Apply local Flutter SDK patch (hero pop-flight)
         run: |
-          if patch -d "$FLUTTER_ROOT" -p1 --reverse --dry-run < flutter-sdk-patches/heroes-pop-flight_v3.44.patch > /dev/null 2>&1; then
+          HEROES="$FLUTTER_ROOT/packages/flutter/lib/src/widgets/heroes.dart"
+          if grep -q "onPopFlightStarted" "$HEROES"; then
             echo "patch already applied (cached SDK), skip"
           else
-            patch -d "$FLUTTER_ROOT" -p1 --forward < flutter-sdk-patches/heroes-pop-flight_v3.44.patch \
+            (cd "$FLUTTER_ROOT" && patch -p1 < "$GITHUB_WORKSPACE/flutter-sdk-patches/heroes-pop-flight_v3.44.patch") \
               || { echo "::error::SDK patch 应用失败（heroes.dart context 漂移？需重制补丁）"; exit 1; }
           fi
 
@@ -162,16 +163,16 @@ jobs:
 
       - name: Apply local Flutter SDK patch (hero pop-flight)
         # 同 linux job（见 quality 注释）；Windows runner 无 GNU patch，
-        # 用 git apply（tarball SDK 非 git repo，git apply 仍可作为独立
-        # patch 工具使用）。--reverse --check 成功 = 已打过，跳过。
+        # 用 git apply（非 git repo 目录下可作独立 patch 工具）。
+        # 已应用检测：grep 补丁引入的字段标记（reverse-check 对已应用
+        # 补丁会自动换向并 exit 1，不可用）。
         shell: pwsh
         run: |
-          $patch = "$env:GITHUB_WORKSPACE/flutter-sdk-patches/heroes-pop-flight_v3.44.patch"
-          git -C $env:FLUTTER_ROOT apply --reverse --check $patch 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            Write-Output "patch already applied, skip"
+          $heroes = "$env:FLUTTER_ROOT/packages/flutter/lib/src/widgets/heroes.dart"
+          if (Select-String -Path $heroes -Pattern "onPopFlightStarted" -Quiet) {
+            Write-Output "patch already applied (cached SDK), skip"
           } else {
-            git -C $env:FLUTTER_ROOT apply $patch
+            git -C $env:FLUTTER_ROOT apply "$env:GITHUB_WORKSPACE/flutter-sdk-patches/heroes-pop-flight_v3.44.patch"
             if ($LASTEXITCODE -ne 0) { Write-Error "SDK patch 应用失败"; exit 1 }
           }
 
