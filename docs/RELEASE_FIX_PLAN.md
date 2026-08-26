@@ -68,9 +68,9 @@
 
 ## 批次 H —— 终验
 
-- [ ] H1 `flutter analyze`（warning 清零目标）+ `flutter test` 全过
-- [ ] H2 `flutter build apk --release --split-per-abi` 出包验证 + versionCode 三包互异核对
-- [ ] H3 Windows 构建交 CI 验证（本机 Linux 无法交叉编译）
+- [x] H1 `flutter analyze`（warning 清零目标）+ `flutter test` 全过
+- [x] H2 `flutter build apk --release --split-per-abi` 出包验证 + versionCode 三包互异核对
+- [x] H3 Windows 构建交 CI 验证（本机 Linux 无法交叉编译）
 
 ## 明确不做（本轮范围外）
 

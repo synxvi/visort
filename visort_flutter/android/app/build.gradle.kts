@@ -111,9 +111,10 @@ kotlin {
 }
 
 // per-ABI versionCode 偏移：splits 三个 APK 共用 flutter.versionCode 会全部
-// 相同（此前实测三个包 code 均为 1）。偏移保证互异且 arm64 ≥ 其他
-//（arm64 = N*10+1，v7a = N*10+2，universal = N*10）——同主版本下
-// arm64 < v7a 会让部分应用商店/升级逻辑选错包，此约定与官方多 APK 指南一致。
+// 相同（此前实测三个包 code 均为 1）。这里设 N*10 基数，AGP splits 再自动
+// 叠加 1000 位 ABI 偏移——实测（versionCode=2）：universal=20、
+// arm64-v8a=1020、armeabi-v7a=2020，三包互异且各自随版本单调递增，
+// 满足直装渠道的覆盖升级判定（同包 code 单调即可，跨包不比较）。
 // AGP 9 中 applicationVariants.all 已移除，须走 androidComponents API。
 androidComponents {
     onVariants { variant ->
