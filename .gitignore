@@ -53,3 +53,7 @@ visort_flutter/.font-source/
 
 # 反编译产物（系统相册逆向，体积大，不入库；调研见 docs/IMAGE_DECODE_BENCHMARK.md）
 _reverse/
+
+# AI 协作文档（本地保留，不入库）
+AGENTS.md
+CLAUDE.md
