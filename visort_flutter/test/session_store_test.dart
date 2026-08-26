@@ -123,14 +123,13 @@ void main() {
       await db.close();
     });
 
-    test('hasActive 生命周期:空 false → save true → clear false', () async {
+    test('loadActive 生命周期:空 null → save 非空 → clear null', () async {
       final db = await _memDb();
       final store = SessionStore(Future.value(db));
-      expect(await store.hasActive(), false);
+      expect(await store.loadActive(), isNull);
       await store.saveNewSession(_state());
-      expect(await store.hasActive(), true);
+      expect(await store.loadActive(), isNotNull);
       await store.clear();
-      expect(await store.hasActive(), false);
       expect(await store.loadActive(), isNull);
       await db.close();
     });
@@ -184,7 +183,6 @@ void main() {
       await store.upsertDecision('x', Decision.skip(), 0); // 不抛
       await store.deleteDecision('x'); // 不抛
       await store.updateCurrentIndex(1); // 不抛
-      expect(await store.hasActive(), false);
       expect(await store.loadActive(), isNull);
       await store.clear(); // 不抛
     });

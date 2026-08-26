@@ -28,7 +28,6 @@ import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
 import 'package:visort_flutter/shared/widgets/rename_dialog.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
-import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 
 import 'album_picker_screen.dart';

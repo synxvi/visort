@@ -87,7 +87,9 @@ class WallpaperPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         val flags = (if (which == 1 || which == 3) WallpaperManager.FLAG_SYSTEM else 0) or
             (if (which == 2 || which == 3) WallpaperManager.FLAG_LOCK else 0)
         bytes.inputStream().use { input ->
-            wm.setStream(input, null, true, flags)
+            // 第三参 allowBackup=false（对齐系统相册考古结论）：true 会让
+            // 部分 ROM 把壁纸回写进备份/云恢复链路。
+            wm.setStream(input, null, false, flags)
         }
     }
 }

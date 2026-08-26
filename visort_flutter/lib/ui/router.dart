@@ -10,7 +10,6 @@
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'route_transitions.dart';
 import 'router_android.dart';
@@ -117,8 +116,3 @@ Route<T> _platformRoute<T>({
     fullscreenDialog: fullscreenDialog,
   );
 }
-
-/// 导航辅助（全局 key 访问 navigator，便于非 widget 上下文触发）
-final navigatorKeyProvider = Provider<GlobalKey<NavigatorState>>((ref) {
-  return GlobalKey<NavigatorState>();
-});

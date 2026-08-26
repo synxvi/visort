@@ -1838,7 +1838,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
 /// [onTap] 跳转。
 class _ThumbLineStrip extends StatelessWidget {
   const _ThumbLineStrip({
-    super.key,
     required this.photos,
     required this.controller,
     required this.centerIndex,

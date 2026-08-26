@@ -61,10 +61,10 @@
 
 ## 批次 G —— 清理
 
-- [ ] G1 死代码：不可达 `gallery_screen.dart` 整屏、零引用 `loading_overlay.dart`/`navigatorKeyProvider`/`hasPersistedSession`
-- [ ] G2 `allowBackup=false` + manifest 权限注释纠偏
-- [ ] G3 杂项：壁纸 `setStream` 第三参 false、删零引用 `collection` 依赖、`onReorder`→`onReorderItem`、analyze warning 清零
-- [ ] G4 AGENTS.md 更新（ente_viewer/core/db/photo_view fork/测试规模已漂移一个版本）
+- [x] G1 死代码：不可达 `gallery_screen.dart` 整屏、零引用 `loading_overlay.dart`/`navigatorKeyProvider`/`hasPersistedSession`
+- [x] G2 `allowBackup=false` + manifest 权限注释纠偏
+- [x] G3 杂项：壁纸 `setStream` 第三参 false、删零引用 `collection` 依赖、`onReorder`→`onReorderItem`、analyze warning 清零
+- [x] G4 AGENTS.md 更新（ente_viewer/core/db/photo_view fork/测试规模已漂移一个版本）
 
 ## 批次 H —— 终验
 

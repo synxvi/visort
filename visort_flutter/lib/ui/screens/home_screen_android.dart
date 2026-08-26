@@ -63,9 +63,6 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
 
   // 模式
   ClassifyMode _mode = ClassifyMode.toNewDir;
-  // 模式切换方向(抽屉滑动):正向 toAlbum→toNewDir(新从右进/旧向左出),反向反之。
-  // 点击 SegmentedButton 与左右滑动手势共同维护,transitionBuilder 据此定向。
-  bool _slideForward = true;
 
   // 模式一（toNewDir）配置
   final _parentCtrl = TextEditingController(text: '');
@@ -809,14 +806,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     await _checkResumableSession();
   }
 
-  /// 切换模式:触发内容抽屉滑动(_slideForward 定向)。
+  /// 切换模式:触发内容抽屉滑动。
   void _applyMode(ClassifyMode m) {
     if (m == _mode) return;
     setState(() {
-      // 显示顺序为 toNewDir(左)→toAlbum(右)：切到右边的 toAlbum = 正向(新面板从右进)，
-      // 切到左边的 toNewDir = 反向(从左进)。让抽屉动画方向与顶栏位置一致。
-      // （原按枚举 index 判定，交换显示顺序后方向会反。）
-      _slideForward = m == ClassifyMode.toAlbum;
       _mode = m;
     });
   }

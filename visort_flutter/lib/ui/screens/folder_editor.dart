@@ -139,7 +139,8 @@ class _FolderEditorState extends ConsumerState<FolderEditor> {
   }
 
   Future<void> _reorder(int oldIdx, int newIdx) async {
-    if (newIdx > oldIdx) newIdx -= 1;
+    // onReorderItem（v3.41+ 替代废弃的 onReorder）已自动补偿被移除项的
+    // newIndex——旧 onReorder 需要的手动 `newIdx -= 1` 不再需要。
     setState(() {
       final item = _templates.removeAt(oldIdx);
       _templates.insert(newIdx, item);
@@ -232,7 +233,7 @@ class _FolderEditorState extends ConsumerState<FolderEditor> {
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           itemCount: _templates.length,
-          onReorder: _reorder,
+          onReorderItem: _reorder,
           itemBuilder: (ctx, idx) {
             final f = _templates[idx];
             return Padding(

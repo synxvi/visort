@@ -10,7 +10,6 @@ import 'package:flutter/material.dart';
 
 import 'route_transitions.dart';
 import 'screens/album_screen.dart';
-import 'screens/gallery_screen.dart';
 
 /// 安卓相册浏览链的路由名。
 ///
@@ -18,9 +17,6 @@ import 'screens/gallery_screen.dart';
 /// gallery/album/photoViewer 仅安卓可达，故常量归此处。
 class AlbumRoutes {
   AlbumRoutes._();
-
-  /// 相册列表（bucket 网格）。
-  static const gallery = '/gallery';
 
   /// 单个相册（bucket 内图片瀑布流）。
   static const album = '/album';
@@ -35,8 +31,9 @@ class AlbumRoutes {
 ///
 /// 这些页面有大面积滚动列表/全屏看图，每帧全屏 alpha 合成会拖慢渲染；
 /// 且「看照片」时颗粒质感无意义，故绕过。见 currentRouteName 说明。
+/// （原 /gallery 相册列表屏已不可达——首页 bucket 网格直接进 /album；
+///  GalleryScreen 与其路由已随死代码清理移除。）
 const albumNoiseDisabledRoutes = {
-  AlbumRoutes.gallery,
   AlbumRoutes.album,
   AlbumRoutes.photoViewer,
 };
@@ -47,11 +44,6 @@ const albumNoiseDisabledRoutes = {
 /// 不会进入本函数。转场统一 ente 式 200ms 淡入（enteFadeRoute）。
 Route<dynamic>? onGenerateAlbumRoute(RouteSettings settings) {
   switch (settings.name) {
-    case AlbumRoutes.gallery:
-      return enteFadeRoute(
-        builder: (_) => const GalleryScreen(),
-        settings: settings,
-      );
     case AlbumRoutes.album:
       // 参数通过 settings.arguments（Map）传入 bucketId / bucketName / bucketCount。
       final args = settings.arguments;

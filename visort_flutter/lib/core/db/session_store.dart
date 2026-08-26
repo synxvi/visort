@@ -162,19 +162,6 @@ class SessionStore {
     }
   }
 
-  /// 是否有可恢复的会话(头行存在且 images 非空)。Home 横条轻量探测。
-  Future<bool> hasActive() async {
-    try {
-      final db = await _db;
-      if (db == null) return false;
-      final rows = await db.rawQuery(
-          'SELECT 1 FROM sort_session WHERE id = ? LIMIT 1', [_sessionId]);
-      return rows.isNotEmpty;
-    } catch (_) {
-      return false;
-    }
-  }
-
   /// 恢复会话(头 + images + decisions);无会话/解析失败返回 null。
   /// 未知 action 或 folders JSON 损坏时整体放弃(宁可不恢复也不错恢复)。
   Future<RestoredSession?> loadActive() async {

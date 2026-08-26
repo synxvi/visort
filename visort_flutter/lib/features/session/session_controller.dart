@@ -203,9 +203,6 @@ class SessionController extends Notifier<SessionState> {
 
   // ───────────────────────── 会话恢复(P2) ─────────────────────────
 
-  /// 是否有可恢复的持久化会话(Home 横条探测用)。
-  Future<bool> hasPersistedSession() => _store.hasActive();
-
   /// 持久化会话摘要(Start 前恢复弹窗:总张数/已决策/进行到);无会话 null。
   Future<({int total, int decided, int currentIndex})?>
       persistedSummary() async {

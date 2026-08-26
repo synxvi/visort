@@ -329,13 +329,10 @@ class _ScrollbarWithUseNotifier extends RawScrollbar {
     required this.showThumb,
     required this.scrollbarPadding,
     super.controller,
-    super.thumbVisibility,
-    super.trackVisibility,
     super.thickness,
     super.radius,
     ScrollNotificationPredicate? notificationPredicate,
     super.interactive,
-    super.scrollbarOrientation,
   }) : super(
          fadeDuration: _kScrollbarFadeDuration,
          timeToFade: _kScrollbarTimeToFade,

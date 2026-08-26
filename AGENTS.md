@@ -20,12 +20,13 @@ Plain Flutter `Navigator` named routes (no `go_router`) defined in `visort_flutt
 ```
 home(/) ──Start/scan──▶ sort ──Review──▶ review ──Run──▶ results ──Continue──▶ home
    │
-   └─(Android)─▶ gallery ──tap album──▶ album(bucketId/bucketName)
+   └─(Android)──tap album tile──▶ album(bucketId/bucketName) ──tap photo──▶ photoViewer
 ```
 
 - `home` route **platform-forks**: `HomeScreenAndroid` vs `HomeScreen`.
 - `sort` screen guards empty session (pops back to home).
 - `safDemo` route (legacy SAF PoC) has been **removed** in v2 — SAF code is fully gone.
+- `/gallery` route (bucket grid screen) removed with dead-code cleanup 2026-08 — the home screen's bucket tiles push `/album` directly; `GalleryScreen` is gone.
 
 ### State management — Riverpod ^2.6.1
 A single **hand-created `ProviderContainer`** is built in `main()` (so config loads synchronously before `runApp`), then injected via `UncontrolledProviderScope` — **not** the standard `ProviderScope` widget.
@@ -71,11 +72,12 @@ visort_flutter/
 ├─ lib/
 │  ├─ main.dart, app.dart          # bootstrap + root MaterialApp
 │  ├─ core/
-│  │  ├─ config/                   # @immutable models + ProfilesService (persistence/validation)
+│  │  ├─ config/                   # @immutable models + ProfilesService (persistence/validation) + folder_name_validator
 │  │  ├─ i18n/                     # tr()/t(), strings_en/zh, AND global Riverpod providers
 │  │  ├─ theme/                    # buildAppTheme(), AppColors, AppFonts, WithNoise overlay
 │  │  ├─ window/                   # WindowStateService (desktop window-bounds persistence)
-│  │  └─ fs/                       # FileSystemRepository + desktop/MediaStore impls (SAF removed v2)
+│  │  ├─ db/                       # SQLite base + stores (session/gallery-snapshot/hdr-cache/run-log); degraded null-db red line, all tested
+│  │  └─ fs/                       # FileSystemRepository + desktop/MediaStore impls + image_loader (decode pipeline) + mediastore_channel/events + wallpaper_channel (SAF removed v2)
 │  ├─ features/
 │  │  ├─ home/                     # HomeController (profiles, folders, action-keys)
 │  │  ├─ session/                  # SessionController + models (the decision state machine)
@@ -85,14 +87,17 @@ visort_flutter/
 │  │  └─ gallery/                  # GalleryController (Android album browsing)
 │  ├─ ui/
 │  │  ├─ router.dart               # named routes (no go_router)
-│  │  ├─ screens/                  # home/sort/review/results/gallery/album + photo_viewer/photo_details_sheet + editors
+│  │  ├─ screens/                  # home/sort/review/results/album + editors (gallery screen removed)
+│  │  ├─ ente_viewer/              # photo viewer subsystem ported from Ente Photos (detail_page, zoomable_image, filmstrip, details sheet, wallpaper crop, aves ported slivers) — consumed by album_screen
 │  │  └─ adaptive/                 # WindowsKeyboardHandler
-│  └─ shared/widgets/             # Kbd/DecisionBadge, toast, ProfileDropdown, SortToggle, LoadingOverlay
+│  └─ shared/widgets/             # Kbd/DecisionBadge, toast, ProfileDropdown, SortToggle, confirm_sheet…
+├─ packages/photo_view/            # local fork of photo_view (dual-axis edge adjudication patches; ente-aligned 0.15.0) — kept deliberately
 ├─ android/app/src/main/kotlin/com/synxvi/visort/
-│  └─ mediastore/                  # MediaStore MethodChannel + EventChannel plugin (ContentObserver); registered in MainActivity
+│  ├─ mediastore/                  # MediaStore MethodChannel + EventChannel plugin (ContentObserver); registered in MainActivity
+│  └─ wallpaper/                   # WallpaperManager channel (setStream)
 ├─ windows/                        # CMake desktop runner (C++17, /W4 /WX)
 ├─ tools/                          # subset_fonts.py (CJK font subsetter), generate_icons.py (Android+Windows app icon generator)
-└─ test/                           # pure-Dart unit tests (5 files / 56 cases)
+└─ test/                           # pure-Dart unit tests (16 files / 114 cases)
 # Repo root:
 docs/ANDROID_ROADMAP.md   # Flutter Android port decisions (A0–A4)
 ```
@@ -164,28 +169,31 @@ python tools/generate_icons.py          # regenerates Android mipmap + adaptive 
 
 ## Runtime / Tooling Preferences
 
-- **Flutter ≥ 3.44.0** (Dart ≥ 3.12.0; `pubspec.yaml` lower bound `sdk: ^3.10.4`). Resolved floor from `pubspec.lock`.
-- **Android toolchain:** JDK 17, AGP 8.11.1, Kotlin 2.2.20, Gradle 8.14.
-- **Windows desktop:** CMake ≥ 3.14, MSVC C++17 (`/W4 /WX` warnings-as-errors).
-- **Android package:** `com.synxvi.visort`. SDK versions use Flutter toolchain defaults (not pinned in `build.gradle.kts`). Impeller enabled.
-- **Signing:** ⚠️ Release currently signs with **debug keys** (no production keystore / `key.properties` committed). Works for local `--release` builds; a real keystore is required for Play Store upload.
-- **Python (tooling only):** Used by `tools/subset_fonts.py` (CJK font subsetting; `fonttools`/`brotli`/`zopfli`) and `tools/generate_icons.py` (app icon generation; `pillow`). Python 3.11+.
+- **Flutter 3.47.1** (pinned in CI; local SDK carries the heroes.dart patch, see `flutter-sdk-patches/`). `pubspec.yaml` lower bound `sdk: ^3.10.4`.
+- **Android toolchain:** JDK 17, AGP 9.0.1 (built-in Kotlin — no `kotlin-android` apply), Kotlin 2.3.20, Gradle 9.1.0.
+- **Windows desktop:** CMake ≥ 3.14, MSVC C++17 (`/W4 /WX` warnings-as-errors). `BINARY_NAME` is `visort` (exe named `visort.exe`).
+- **Android package:** `com.synxvi.visort`. **minSdk pinned to 26** (Bundle-query MediaStore API is 26+; toolchain default 24 crashes Android 7.x). Impeller enabled.
+- **Version:** `1.3.0+2` (pubspec; continues the legacy v1.2.x line). per-ABI versionCode offset via `androidComponents.onVariants` (arm64=N*10+1, v7a=N*10+2, universal=N*10).
+- **Signing:** release signs via `android/key.properties` (gitignored) pointing at the production keystore (`~/Dev/keystores/visort-release.keystore`, kept **outside the repo**); when the file is absent it falls back to debug keys for local runs. CI decodes the `VISORT_KEYSTORE_BASE64`/`VISORT_KEYSTORE_PASSWORD` secrets — configure them before the first tagged release, or every release would be signed with a throwaway runner debug key (users could never upgrade in place).
+- **Python (tooling only):** Used by `tools/subset_fonts.py` (CJK font subsetting; `fonttools`/`brotli`/`zopfli`) and `tools/generate_icons.py` (app icon generation; `pillow`). Python 3.11+. Re-run `subset_fonts.py` whenever i18n strings change (font subsets live in `assets/fonts/`, originals in `.font-source/` which is gitignored).
 
 ## Testing & QA
 
-**Flutter** — `flutter test` from `visort_flutter/`. Five files, **58 cases, all pure-Dart unit tests** (no widget/integration/golden tests). Tests guard platform-agnostic logic (config, session state machine, run flow, desktop FS) plus the **album (gallery) controller** (v2):
+**Flutter** — `flutter test` from `visort_flutter/`. **16 files / 114 cases, all pure-Dart unit tests** (plus two `photo_view_*` widget-level tests for the local fork). Coverage map:
 
-| Test file | Covers | Cases |
-|---|---|---|
-| `test/widget_test.dart` | `core/config` — models, JSON round-trip, `normalizeFolderTemplates` validation, `computeDestinationFolders`, profile CRUD (misleadingly named; tests no widgets) | 13 |
-| `test/session_controller_test.dart` | `features/session` state machine — `decide`/`undo`/`initFromScan`/bounds (via real `ProviderContainer`) | 15 |
-| `test/run_controller_test.dart` | `features/run` — execute flow + progress stream (in-memory `FakeFileSystem`) | 5 |
-| `test/fs_desktop_test.dart` | `core/fs/desktop_file_system` — real-IO scan/filter/move/collision-rename/delete | 11 |
-|`test/gallery_controller_test.dart`|`features/gallery` — keyset pagination (cursor advance/hasMore), delete/trash/restore (local remove + buckets 重查：count 递减/封面推进), sort persistence; via `_FakeMediaStoreChannel` injected through `mediaStoreChannelProvider` override|14|
+| Area | Test files |
+|---|---|
+| `core/config` | `widget_test.dart` (config models/JSON/profile CRUD), `folder_name_validator_test.dart` |
+| `features/session` | `session_controller_test.dart` (decide/undo/restore), `session_store_test.dart` (SQLite round-trip + degraded null-db red line) |
+| `features/run` | `run_controller_test.dart` (FakeFileSystem) |
+| `features/gallery` | `gallery_controller_test.dart` (keyset pagination, batch ops, ContentObserver debounce), `gallery_snapshot_store_test.dart`, `hdr_cache_store_test.dart`, `run_log_store_test.dart` |
+| `core/fs` | `fs_desktop_test.dart` (real IO), `service_policy_test.dart` |
+| i18n | `i18n_keys_test.dart` (**EN/ZH key-set alignment + `{0}` placeholder-count guardrails**), `group_title_i18n_test.dart` |
+| misc | `visort_logo_test.dart` (cold-start entrance animation), `photo_view_double_tap_test.dart`, `photo_view_page_switch_test.dart` |
 
 - **Framework:** `flutter_test` SDK only. No `mocktail`/`bloc_test` — fakes are hand-written (`FakeFileSystem` implements `FileSystemRepository`; `_FakeMediaStoreChannel` extends `MediaStoreChannel`).
 - **Conventions:** `*_test.dart` files, `group()`/`test()` clusters, Chinese descriptive names, `setUp`/`tearDown`. Fixtures inline (1×1 PNG byte array). Controllers needing `PaintingBinding` (e.g. `deletePhoto`→`evictImageCache`) call `TestWidgetsFlutterBinding.ensureInitialized()` at the top of `main()`.
 - **Coverage:** not measured/enforced (no lcov/codecov/`--coverage`).
-- **Gaps:** all UI (`lib/ui/`, screens, `shared/widgets`, router), `features/home`/`scan`, `core/i18n`/`theme`/`window`, the `FileSystemRepository` interface, and the `shared_preferences` storage layer are untested. (`features/gallery` logic **is** now covered; only its UI/widget layer remains untested.)
+- **Gaps:** all UI (`lib/ui/`, screens, `shared/widgets`, router), `features/home`/`scan`, `core/theme`/`window`, and the `FileSystemRepository` interface are untested.
 
-**CI** — `.github/workflows/release.yml` builds the Flutter app for both targets on `v*` tags: Android (split-per-ABI APK) and Windows (zip). There is no `flutter test`/`flutter analyze` step and no coverage gate in CI; those run locally.
+**CI** — `.github/workflows/release.yml` runs a **quality gate** (`flutter analyze --no-fatal-infos --no-fatal-warnings` + `flutter test`, Flutter pinned to 3.47.1) before the two build jobs (Android split-per-ABI APK + Windows zip), then publishes tagged Release assets named `visort-v*-{abi}.apk` / `visort-v*-windows-x64.zip`.
