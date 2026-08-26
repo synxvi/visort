@@ -11,6 +11,8 @@
 // 容器由 DetailPage 的 Overlay 面板提供(Overlay 自有实现,无 DSS);scrollable=true
 // 时内容为可滚动 ListView,经 NotificationListener 的 overscroll 联动面板收回/展开。
 
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
@@ -53,7 +55,15 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
     _load();
   }
 
+  /// ACCESS_MEDIA_LOCATION 首问闸门：详情面板首次打开请求一次，
+  /// 授权后 EXIF 精确 GPS 不再被系统剥离（本次面板可能仍空，下次生效）。
+  static bool? _amlAsked;
+
   Future<void> _load() async {
+    if (!(_amlAsked ?? false)) {
+      _amlAsked = true;
+      unawaited(const MediaStoreChannel().requestAccessMediaLocation());
+    }
     try {
       final results = await Future.wait([
         const MediaStoreChannel().readMeta(widget.info.id),

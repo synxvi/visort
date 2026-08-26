@@ -205,9 +205,19 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 pendingDeleteResult = null
                 if (resultCode == Activity.RESULT_OK) {
                     // Android 10：RecoverableSecurityException 授权只授写权，
-                    // 需重放删除；R+ createDeleteRequest 授权即系统直删（-1 走原语义）。
-                    val qRedone = repository?.redoQDeleteIfPending() ?: -1
-                    pending.success(if (qRedone >= 0) qRedone else pendingDeleteCount)
+                    // 需重放删除；R+ createDeleteRequest 授权即系统直删。
+                    val repo = repository
+                    if (repo != null && repo.hasQDeletePending()) {
+                        // 重放是逐 URI delete 的磁盘 IO，下 ioExecutor
+                        ioExecutor.execute {
+                            val qRedone = repo.redoQDeleteIfPending()
+                            mainHandler.post {
+                                pending.success(if (qRedone >= 0) qRedone else pendingDeleteCount)
+                            }
+                        }
+                    } else {
+                        pending.success(pendingDeleteCount)
+                    }
                 } else {
                     repository?.clearQDeletePending()
                     pending.error(MsError.DeleteCancelled.code, MsError.DeleteCancelled.message, null)
@@ -223,14 +233,19 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 pendingMoveRelativePath = ""
 
                 if (resultCode == Activity.RESULT_OK) {
-                    // 授权通过，执行真正的 update（之前 update 因权限失败只返回了 intentSender）
+                    // 授权通过，执行真正的 update（之前 update 因权限失败只返回了 intentSender）。
+                    // 全量重放是磁盘 IO，下 ioExecutor；result 回主线程。
                     val repo = repository
-                    val successCount = if (repo != null) {
-                        repo.doMoveToRelativePath(ids, relPath)
-                    } else 0
-                    pending.success(successCount)
+                    if (repo == null) {
+                        pending.success(emptyList<String>())
+                    } else {
+                        ioExecutor.execute {
+                            val movedIds = repo.doMoveToRelativePath(ids, relPath)
+                            mainHandler.post { pending.success(movedIds) }
+                        }
+                    }
                 } else {
-                    pending.success(0) // 用户取消
+                    pending.success(emptyList<String>()) // 用户取消
                 }
                 return true
             }
@@ -273,10 +288,17 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 pendingRenameNewName = ""
 
                 if (resultCode == Activity.RESULT_OK) {
-                    // 授权通过，执行真正的 rename（同 move 的二次执行模式）
+                    // 授权通过，执行真正的 rename（同 move 的二次执行模式）。
+                    // update 是磁盘 IO，下 ioExecutor；result 回主线程。
                     val repo = repository
-                    val successCount = if (repo != null) repo.doRename(id, newName) else 0
-                    pending.success(successCount)
+                    if (repo == null) {
+                        pending.success(0)
+                    } else {
+                        ioExecutor.execute {
+                            val successCount = repo.doRename(id, newName)
+                            mainHandler.post { pending.success(successCount) }
+                        }
+                    }
                 } else {
                     pending.success(0) // 用户取消
                 }
@@ -325,6 +347,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             "hasPermission" -> result.success(hasReadPermission())
             "requestPermission" -> handleRequestPermission(result)
             "openAppSettings" -> handleOpenAppSettings(result)
+            "requestAccessMediaLocation" -> handleRequestAccessMediaLocation(result)
             "hasManageMedia" -> result.success(hasManageMediaPermission())
             "requestManageMedia" -> handleRequestManageMedia(result)
             // [ente 对齐] 设备总内存（MB）：解码防崩阈值用（<5GB → 24MP 上限）。
@@ -401,6 +424,38 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             } else {
                 result.success(true) // 老版本 manifest 声明即授予
             }
+        } catch (e: Exception) {
+            pendingPermissionResult = null
+            result.success(false)
+        }
+    }
+
+    /// 请求 ACCESS_MEDIA_LOCATION（运行时权限）。Android 10+ 未授权时系统
+    /// 剥离 content URI 的 EXIF 精确位置标签 → 详情面板「位置」恒空。
+    /// 复用 REQUEST_PERMISSION 的 pending 回调链。
+    private fun handleRequestAccessMediaLocation(result: Result) {
+        val act = activity ?: run {
+            result.error(MsError.InvalidArg("Activity 未绑定").code, null, null); return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            result.success(true); return // Q 以下无位置剥离限制
+        }
+        if (ContextCompat.checkSelfPermission(
+                act.applicationContext,
+                android.Manifest.permission.ACCESS_MEDIA_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            result.success(true); return
+        }
+        if (pendingPermissionResult != null) {
+            result.success(false); return
+        }
+        pendingPermissionResult = result
+        try {
+            act.requestPermissions(
+                arrayOf(android.Manifest.permission.ACCESS_MEDIA_LOCATION),
+                REQUEST_PERMISSION
+            )
         } catch (e: Exception) {
             pendingPermissionResult = null
             result.success(false)
@@ -799,21 +854,36 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             result.error(MsError.InvalidArg("已有删除请求进行中").code, null, null); return
         }
 
-        try {
-            val intentSender: IntentSender? = repo.createDeleteRequest(ids)
-            Log.i(TAG, "handleRequestDelete: intentSender=${if (intentSender != null) "非null(走系统弹窗)" else "null(直接删/无图)"}")
-            if (intentSender == null) {
-                // 老版本直接删除已完成，或无图可删
-                result.success(if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) ids.size else 0)
-                return
+        // createDeleteRequest 内含 MANAGE_MEDIA 逐 URI delete 的磁盘 IO
+        //（数百张可达数秒，主线程执行 ANR）——下 ioExecutor；
+        // 弹窗启动、pending 置位与 result 回调回主线程。
+        ioExecutor.execute {
+            val intentSender: IntentSender? = try {
+                repo.createDeleteRequest(ids)
+            } catch (e: Exception) {
+                Log.e(TAG, "handleRequestDelete 异常: ${e.message}", e)
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("requestDelete 异常: ${e.message}").code, e.message, null)
+                }
+                return@execute
             }
-            // 启动系统弹窗
-            pendingDeleteResult = result
-            pendingDeleteCount = ids.size
-            act.startIntentSenderForResult(intentSender, REQUEST_DELETE, null, 0, 0, 0)
-        } catch (e: Exception) {
-            Log.e(TAG, "handleRequestDelete 异常: ${e.message}", e)
-            result.error(MsError.QueryFailed("requestDelete 异常: ${e.message}").code, e.message, null)
+            mainHandler.post {
+                Log.i(TAG, "handleRequestDelete: intentSender=${if (intentSender != null) "非null(走系统弹窗)" else "null(直接删/无图)"}")
+                if (intentSender == null) {
+                    // 老版本直接删除已完成，或无图可删
+                    result.success(if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) ids.size else 0)
+                    return@post
+                }
+                // 启动系统弹窗
+                pendingDeleteResult = result
+                pendingDeleteCount = ids.size
+                try {
+                    act.startIntentSenderForResult(intentSender, REQUEST_DELETE, null, 0, 0, 0)
+                } catch (e: Exception) {
+                    pendingDeleteResult = null
+                    result.error(MsError.QueryFailed("启动删除弹窗失败: ${e.message}").code, e.message, null)
+                }
+            }
         }
     }
 
@@ -858,22 +928,37 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             result.error(MsError.InvalidArg("已有移动请求进行中").code, null, null); return
         }
 
-        try {
-            when (val mr = repo.moveToRelativePath(ids, relativePath)) {
-                is MediaStoreRepository.MoveResult.Done -> {
-                    // 直接完成（MANAGE_MEDIA 或自有文件），返回实际成功数
-                    result.success(mr.successCount)
+        // moveToRelativePath 内含逐 URI update 的磁盘 IO（Run 一次可上千张，
+        // 主线程执行必 ANR）——下 ioExecutor；弹窗启动与 result 回调回主线程。
+        ioExecutor.execute {
+            val mr = try {
+                repo.moveToRelativePath(ids, relativePath)
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("requestMove 异常: ${e.message}").code, e.message, null)
                 }
-                is MediaStoreRepository.MoveResult.NeedsConsent -> {
-                    // 需要用户授权（其他 app 的文件）——记录参数，授权通过后重新 doMove
-                    pendingMoveResult = result
-                    pendingMoveIds = ids
-                    pendingMoveRelativePath = relativePath
-                    act.startIntentSenderForResult(mr.intentSender, REQUEST_MOVE, null, 0, 0, 0)
+                return@execute
+            }
+            mainHandler.post {
+                when (mr) {
+                    is MediaStoreRepository.MoveResult.Done -> {
+                        // 直接完成（MANAGE_MEDIA 或自有文件），返回实际成功 id 集
+                        result.success(mr.movedIds)
+                    }
+                    is MediaStoreRepository.MoveResult.NeedsConsent -> {
+                        // 需要用户授权（其他 app 的文件）——记录参数，授权通过后重新 doMove
+                        pendingMoveResult = result
+                        pendingMoveIds = ids
+                        pendingMoveRelativePath = relativePath
+                        try {
+                            act.startIntentSenderForResult(mr.intentSender, REQUEST_MOVE, null, 0, 0, 0)
+                        } catch (e: Exception) {
+                            pendingMoveResult = null
+                            result.error(MsError.QueryFailed("启动移动弹窗失败: ${e.message}").code, e.message, null)
+                        }
+                    }
                 }
             }
-        } catch (e: Exception) {
-            result.error(MsError.QueryFailed("requestMove 异常: ${e.message}").code, e.message, null)
         }
     }
 
@@ -895,23 +980,39 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             result.error(MsError.InvalidArg("已有重命名请求进行中").code, null, null); return
         }
 
-        try {
-            // 预检：同目录同名（排除自身）→ 直接报错，弹窗前拦住
-            if (repo.nameExistsInDir(id, newName)) {
-                result.error(MsError.NameExists.code, MsError.NameExists.message, null)
-                return
-            }
-            when (val rr = repo.renameTo(id, newName)) {
-                is MediaStoreRepository.MoveResult.Done -> result.success(rr.successCount)
-                is MediaStoreRepository.MoveResult.NeedsConsent -> {
-                    pendingRenameResult = result
-                    pendingRenameId = id
-                    pendingRenameNewName = newName
-                    act.startIntentSenderForResult(rr.intentSender, REQUEST_RENAME, null, 0, 0, 0)
+        // nameExistsInDir 预检 + renameTo update 都是磁盘 IO——下 ioExecutor，
+        // 弹窗启动与 result 回调回主线程。
+        ioExecutor.execute {
+            try {
+                // 预检：同目录同名（排除自身）→ 直接报错，弹窗前拦住
+                if (repo.nameExistsInDir(id, newName)) {
+                    mainHandler.post {
+                        result.error(MsError.NameExists.code, MsError.NameExists.message, null)
+                    }
+                    return@execute
+                }
+                val rr = repo.renameTo(id, newName)
+                mainHandler.post {
+                    when (rr) {
+                        is MediaStoreRepository.MoveResult.Done -> result.success(rr.movedIds.size)
+                        is MediaStoreRepository.MoveResult.NeedsConsent -> {
+                            pendingRenameResult = result
+                            pendingRenameId = id
+                            pendingRenameNewName = newName
+                            try {
+                                act.startIntentSenderForResult(rr.intentSender, REQUEST_RENAME, null, 0, 0, 0)
+                            } catch (e: Exception) {
+                                pendingRenameResult = null
+                                result.error(MsError.QueryFailed("启动重命名弹窗失败: ${e.message}").code, e.message, null)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("requestRename 异常: ${e.message}").code, e.message, null)
                 }
             }
-        } catch (e: Exception) {
-            result.error(MsError.QueryFailed("requestRename 异常: ${e.message}").code, e.message, null)
         }
     }
 

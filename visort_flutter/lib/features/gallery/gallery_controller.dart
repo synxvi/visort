@@ -880,8 +880,8 @@ class GalleryController extends Notifier<GalleryState> {
     try {
       final rel = await _channel.getBucketRelativePath(bucketId);
       if (rel == null || rel.isEmpty) return 'move_failed';
-      final n = await _channel.requestMove(ids, rel);
-      if (n <= 0) return 'move_cancelled';
+      final moved = await _channel.requestMove(ids, rel);
+      if (moved.isEmpty) return 'move_cancelled';
       _markSelfMutation();
       for (final id in ids) {
         evictImageCache(id);

@@ -278,6 +278,18 @@ class MediaStoreChannel {
     }
   }
 
+  /// 请求 ACCESS_MEDIA_LOCATION（EXIF 精确 GPS）。Android 10+ 未授权时
+  /// 系统剥离 content URI 的位置标签 → 详情面板「位置」恒空。
+  /// 详情面板首次打开时调用一次（调用方 static 闸门防重复弹窗）。
+  Future<bool> requestAccessMediaLocation() async {
+    try {
+      return await _channel.invokeMethod<bool>('requestAccessMediaLocation') ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// 列出所有相册（bucket）。无权限时抛 [MsException]。
   ///
   /// [sortBy]/[asc] 同时决定：
@@ -571,15 +583,19 @@ class MediaStoreChannel {
     }
   }
 
-  /// 批量移动（改 RELATIVE_PATH）。返回成功数。
+  /// 批量移动（改 RELATIVE_PATH）。返回**实际成功移动的 id 集**——
+  /// 部分成功如实上报（自有文件直移成功 + 他人文件弹窗被拒的组合下，
+  /// 旧协议只回成功数，count != total 时上层把全部记失败，但其中
+  /// 自有文件早已物理移走）。
   /// [relativePath] 如 "Pictures/QQ" 或 "Pictures/整理结果/保留"。
   /// Android 11+ 对其他 app 的文件会弹系统确认窗。
-  Future<int> requestMove(List<String> ids, String relativePath) async {
+  Future<List<String>> requestMove(List<String> ids, String relativePath) async {
     try {
-      return await _channel
-          .invokeMethod<int>(
+      final raw = await _channel
+          .invokeMethod<List<dynamic>>(
               'requestMove', {'ids': ids, 'relativePath': relativePath})
-          .timeout(_kConsentTimeout) ?? 0;
+          .timeout(_kConsentTimeout);
+      return raw?.cast<String>() ?? const [];
     } on PlatformException catch (e) {
       throw _convertError(e);
     }

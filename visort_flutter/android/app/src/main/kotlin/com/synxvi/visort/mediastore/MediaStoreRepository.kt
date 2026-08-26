@@ -744,7 +744,10 @@ class MediaStoreRepository(private val context: Context) {
     /// 否则读文件头重测（aves (contentId, dateModified) 增量语义）。进程内有效；
     /// 冷启动每页首扫重测（60 张 × 64KB 流读 ≈ 数十 ms，分页加载路径可接受），
     /// 实测偏慢再加磁盘层——避免为一个 bool 提前引入 DB。
-    private val hdrCache = HashMap<String, Pair<Long, Boolean>>()
+    // detectHdrs 在 ioExecutor（12 线程池）执行，Dart 侧 HDR 补测是
+    // unawaited——快速切桶可让两轮补测并发。HashMap 并发写可致桶链
+    // 损坏/脏读甚至卡死 IO 线程，必须用并发容器。
+    private val hdrCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Boolean>>()
 
     /// JPEG Ultra HDR 判定（网格 HDR 徽标数据源）。
     ///
@@ -1045,7 +1048,10 @@ class MediaStoreRepository(private val context: Context) {
 
     /// 容量上限：超出按 mtime 删最旧，直到达标。目录小（≤128MB）时跳过扫描。
     private fun trimThumbnailCache() {
-        val files = thumbnailCacheDir.listFiles()?.filter { it.isFile } ?: return
+        // 缩略图实际写入 ${width}x${height}/ 子目录——顶层 listFiles 只见
+        // 目录（isFile 过滤后为空、total 恒 0），旧实现永不触发清理、
+        // 缓存无界增长。walkTopDown 递归统计并按最旧逐个淘汰。
+        val files = thumbnailCacheDir.walkTopDown().filter { it.isFile }.toList()
         var total = 0L
         for (f in files) total += f.length()
         if (total <= MAX_THUMBNAIL_CACHE_BYTES) return
@@ -1137,6 +1143,9 @@ class MediaStoreRepository(private val context: Context) {
         qDeletePreCount = 0
         return deleted
     }
+
+    /// 是否有 Q 删除待重放（主线程查询用，决定是否下 ioExecutor 重放）。
+    fun hasQDeletePending(): Boolean = qDeletePendingUris.isNotEmpty()
 
     /// 清空 Q 删除待重放状态（用户取消授权弹窗时调用，防残留）。
     fun clearQDeletePending() {
@@ -1249,30 +1258,32 @@ class MediaStoreRepository(private val context: Context) {
     ///
     /// [relativePath] 如 "Pictures/QQ" 或 "Pictures/整理结果/保留"
     /// 返回 IntentSender（调用方启动弹窗），null 表示已直接完成或无需弹窗
-    /// 移动结果：要么直接完成（返回成功数），要么需要弹窗（返回 IntentSender）
+    /// 移动结果：直接完成时返回**实际成功移动的 id 集**（部分成功不再被
+    /// 上层误报为全失败——旧协议只回成功数，count != total 时 Dart 全记
+    /// move_failed，但其中自有文件早已物理移走）。
     sealed class MoveResult {
-        data class Done(val successCount: Int) : MoveResult()
+        data class Done(val movedIds: List<String>) : MoveResult()
         data class NeedsConsent(val intentSender: IntentSender) : MoveResult()
     }
 
     fun moveToRelativePath(ids: List<String>, relativePath: String): MoveResult {
-        if (ids.isEmpty() || relativePath.isEmpty()) return MoveResult.Done(0)
+        if (ids.isEmpty() || relativePath.isEmpty()) return MoveResult.Done(emptyList())
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             Log.w(TAG, "Android 9- 不支持 RELATIVE_PATH，跳过移动")
-            return MoveResult.Done(0)
+            return MoveResult.Done(emptyList())
         }
 
         // 先尝试直接逐个 update（自有文件直接成功，无需授权）
-        val success = doMoveToRelativePath(ids, relativePath)
-        if (success == ids.size) {
-            Log.i(TAG, "moveToRelativePath 全部直接成功: $success/${ids.size} → $relativePath")
-            return MoveResult.Done(success)
+        val moved = doMoveToRelativePath(ids, relativePath)
+        if (moved.size == ids.size) {
+            Log.i(TAG, "moveToRelativePath 全部直接成功: ${moved.size}/${ids.size} → $relativePath")
+            return MoveResult.Done(moved)
         }
 
         // 部分或全部失败（其他 app 的文件需授权）
-        val remaining = ids.size - success
-        Log.i(TAG, "moveToRelativePath 部分失败 $success/${ids.size}（$remaining 张需授权）")
+        val remaining = ids.size - moved.size
+        Log.i(TAG, "moveToRelativePath 部分失败 ${moved.size}/${ids.size}（$remaining 张需授权）")
 
         // MANAGE_MEDIA 已授权 → createWriteRequest 免弹窗直接通过，授权后重新 doMove
         if (hasManageMediaPermission() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -1286,17 +1297,17 @@ class MediaStoreRepository(private val context: Context) {
                 MoveResult.NeedsConsent(intentSender)
             } catch (e: Exception) {
                 Log.w(TAG, "moveToRelativePath createWriteRequest 异常: ${e.message}")
-                MoveResult.Done(success)
+                MoveResult.Done(moved)
             }
         }
 
         // 无 MANAGE_MEDIA → createWriteRequest 会弹窗
         return try {
             val sender = buildWriteRequest(ids)
-            if (sender != null) MoveResult.NeedsConsent(sender) else MoveResult.Done(success)
+            if (sender != null) MoveResult.NeedsConsent(sender) else MoveResult.Done(moved)
         } catch (e: Exception) {
             Log.w(TAG, "moveToRelativePath buildWriteRequest 异常: ${e.message}")
-            MoveResult.Done(success)
+            MoveResult.Done(moved)
         }
     }
 
@@ -1321,17 +1332,18 @@ class MediaStoreRepository(private val context: Context) {
         return granted
     }
 
-    /// 真正执行 RELATIVE_PATH update。返回成功更新的行数。
+    /// 真正执行 RELATIVE_PATH update。返回成功更新的 id 集（部分成功如实
+    /// 上报，调用方据此把「已直接移走的自有文件」与「待授权/失败」分开计）。
     /// 授权通过后必须调用此方法才能真移动。
     ///
     /// 重要：Android 10+ 不允许对 EXTERNAL_CONTENT_URI（集合）批量 update，
     /// 必须对每个图片的单独 content URI（content://media/external/images/media/<id>）逐个 update。
-    fun doMoveToRelativePath(ids: List<String>, relativePath: String): Int {
-        if (ids.isEmpty() || relativePath.isEmpty()) return 0
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return 0
+    fun doMoveToRelativePath(ids: List<String>, relativePath: String): List<String> {
+        if (ids.isEmpty() || relativePath.isEmpty()) return emptyList()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return emptyList()
 
         val normalizedPath = if (relativePath.endsWith("/")) relativePath else "$relativePath/"
-        var success = 0
+        val moved = mutableListOf<String>()
         for (id in ids) {
             val longId = id.toLongOrNull() ?: continue
             // 逐个 URI update（不能用集合 URI + IN 子句）
@@ -1343,14 +1355,14 @@ class MediaStoreRepository(private val context: Context) {
                     put(MediaStore.Images.Media.RELATIVE_PATH, normalizedPath)
                 }
                 val rows = contentResolver.update(itemUri, cv, null, null)
-                if (rows > 0) success++
+                if (rows > 0) moved.add(id)
                 Log.i(TAG, "doMoveToRelativePath item $id: $rows 行 → $normalizedPath")
             } catch (e: Exception) {
                 Log.w(TAG, "doMoveToRelativePath item $id 异常: ${e.message}")
             }
         }
-        Log.i(TAG, "doMoveToRelativePath 完成: $success/${ids.size} → $normalizedPath")
-        return success
+        Log.i(TAG, "doMoveToRelativePath 完成: ${moved.size}/${ids.size} → $normalizedPath")
+        return moved
     }
 
     // ──────────── 重命名（改 DISPLAY_NAME）────────────
@@ -1391,8 +1403,8 @@ class MediaStoreRepository(private val context: Context) {
     /// 与 moveToRelativePath 同款 Done/NeedsConsent 双分支：自有文件直接
     /// update 成功；他人文件走 createWriteRequest 授权后重试。
     fun renameTo(id: String, newName: String): MoveResult {
-        if (id.isEmpty() || newName.isEmpty()) return MoveResult.Done(0)
-        val longId = id.toLongOrNull() ?: return MoveResult.Done(0)
+        if (id.isEmpty() || newName.isEmpty()) return MoveResult.Done(emptyList())
+        val longId = id.toLongOrNull() ?: return MoveResult.Done(emptyList())
         val itemUri = ContentUris.withAppendedId(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
         )
@@ -1409,15 +1421,15 @@ class MediaStoreRepository(private val context: Context) {
         val success = doUpdate()
         if (success > 0) {
             Log.i(TAG, "renameTo 直接成功: $id → $newName")
-            return MoveResult.Done(success)
+            return MoveResult.Done(listOf(id))
         }
         // 他人文件 → createWriteRequest 授权（MANAGE_MEDIA 下免弹窗直通）
         return try {
             val sender = buildWriteRequest(listOf(id))
-            if (sender != null) MoveResult.NeedsConsent(sender) else MoveResult.Done(0)
+            if (sender != null) MoveResult.NeedsConsent(sender) else MoveResult.Done(emptyList())
         } catch (e: Exception) {
             Log.w(TAG, "renameTo buildWriteRequest 异常: ${e.message}")
-            MoveResult.Done(0)
+            MoveResult.Done(emptyList())
         }
     }
 

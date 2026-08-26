@@ -123,10 +123,10 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
     // destDir = 目标 RELATIVE_PATH（如 "Pictures/QQ" 或 "Pictures/整理结果/保留"）
     // 单图移动：run_controller 实际走 moveBatch 批量，这里保留单图兼容
     try {
-      final count = await _channel.requestMove([src.relativePath], destDir);
+      final moved = await _channel.requestMove([src.relativePath], destDir);
       return MoveResult(
-        success: count > 0,
-        finalPath: count > 0 ? destDir : null,
+        success: moved.isNotEmpty,
+        finalPath: moved.isNotEmpty ? destDir : null,
       );
     } catch (e) {
       return MoveResult(success: false, error: e.toString());
@@ -143,8 +143,10 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
     // root 在 MediaStore 语义下不使用（ids 即 MediaStore _ID）
     if (ids.isEmpty) return const {};
     try {
-      final count = await _channel.requestMove(ids, destPath);
-      return count == ids.length ? ids.toSet() : <String>{};
+      // 返回实际成功的 id 集——部分成功（自有文件直移 + 他人文件被拒）
+      // 不再被上层误报为全失败
+      final moved = await _channel.requestMove(ids, destPath);
+      return moved.toSet();
     } catch (_) {
       return const {};
     }

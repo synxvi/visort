@@ -52,12 +52,12 @@
 
 ## 批次 F —— 原生层加固
 
-- [ ] F1 批量删除/移动/重命名 IO 移出主线程（ioExecutor）——上千张不再 ANR
-- [ ] F2 系统弹窗 URI 分片（300-500/批）——大批量不再 TransactionTooLarge
-- [ ] F3 `hdrCache` HashMap → ConcurrentHashMap
-- [ ] F4 `trimThumbnailCache` walkTopDown（缓存不再无界增长）
-- [ ] F5 `moveBatch` 部分成功协议（返回成功 id 集，Results 不再误报全失败）
-- [ ] F6 `ACCESS_MEDIA_LOCATION` 运行时请求（详情 GPS 不再恒空）
+- [x] F1 批量删除/移动/重命名 IO 移出主线程（ioExecutor）——上千张不再 ANR
+- [x] F2 系统弹窗 URI 分片（300-500/批）——大批量不再 TransactionTooLarge
+- [x] F3 `hdrCache` HashMap → ConcurrentHashMap
+- [x] F4 `trimThumbnailCache` walkTopDown（缓存不再无界增长）
+- [x] F5 `moveBatch` 部分成功协议（返回成功 id 集，Results 不再误报全失败）
+- [x] F6 `ACCESS_MEDIA_LOCATION` 运行时请求（详情 GPS 不再恒空）
 
 ## 批次 G —— 清理
 

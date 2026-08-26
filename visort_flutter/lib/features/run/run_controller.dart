@@ -17,6 +17,7 @@
 //   每处理一张发 progress，结束发 done
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/db/database_service.dart';
@@ -118,6 +119,11 @@ class RunController {
     // move 按 destDir(RELATIVE_PATH) 分组：<relativePath, List<fileId>>
     final pendingMoveByDest = <String, List<String>>{};
 
+    // 系统同意弹窗的 URI 列表经 Intent ClipData 走 Binder 事务缓冲（~1MB），
+    // 单批过大抛 TransactionTooLargeException → 整批失败。按 400/批分片
+    // 提交（超限多弹几次窗），桌面端逐文件 move 分片无副作用。
+    const kConsentBatchSize = 400;
+
     for (var i = 0; i < entries.length; i++) {
       final entry = entries[i];
       final fileId = entry.key;
@@ -171,7 +177,12 @@ class RunController {
     for (final entry in pendingMoveByDest.entries) {
       final destPath = entry.key;
       final ids = entry.value;
-      final movedIds = await _fs.moveBatch(ids, destPath, session.sourceDir);
+      final movedIds = <String>{};
+      for (var i = 0; i < ids.length; i += kConsentBatchSize) {
+        final chunk =
+            ids.sublist(i, math.min(i + kConsentBatchSize, ids.length));
+        movedIds.addAll(await _fs.moveBatch(chunk, destPath, session.sourceDir));
+      }
       // 找回 fileId 记入结果
       for (final entry2 in entries) {
         if (entry2.value.action == DecisionAction.move) {
@@ -193,7 +204,12 @@ class RunController {
 
     // 批量删除（MediaStore createDeleteRequest 一次系统弹窗；桌面端逐个删）
     if (pendingDeleteIds.isNotEmpty) {
-      final deletedIds = await _fs.deleteBatch(pendingDeleteIds, session.sourceDir);
+      final deletedIds = <String>{};
+      for (var i = 0; i < pendingDeleteIds.length; i += kConsentBatchSize) {
+        final chunk = pendingDeleteIds.sublist(
+            i, math.min(i + kConsentBatchSize, pendingDeleteIds.length));
+        deletedIds.addAll(await _fs.deleteBatch(chunk, session.sourceDir));
+      }
       for (final entry in entries) {
         if (entry.value.action == DecisionAction.delete) {
           final fileId = entry.key;
