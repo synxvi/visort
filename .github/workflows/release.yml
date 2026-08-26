@@ -88,8 +88,12 @@ jobs:
 
       - name: Apply local Flutter SDK patch (hero pop-flight)
         run: |
-          patch -d "$FLUTTER_ROOT" -p1 --forward < flutter-sdk-patches/heroes-pop-flight_v3.44.patch \
-            || { echo "::error::SDK patch 应用失败"; exit 1; }
+          if patch -d "$FLUTTER_ROOT" -p1 --reverse --dry-run < flutter-sdk-patches/heroes-pop-flight_v3.44.patch > /dev/null 2>&1; then
+            echo "patch already applied (cached SDK), skip"
+          else
+            patch -d "$FLUTTER_ROOT" -p1 --forward < flutter-sdk-patches/heroes-pop-flight_v3.44.patch \
+              || { echo "::error::SDK patch 应用失败（heroes.dart context 漂移？需重制补丁）"; exit 1; }
+          fi
 
       - name: Restore release keystore
         # 签名密钥以 base64 存 GitHub secret（VISORT_KEYSTORE_BASE64），
