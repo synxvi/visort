@@ -322,6 +322,6 @@ const Map<String, String> stringsEn = {
   'date_today': 'Today',
   'date_yesterday': 'Yesterday',
   'keep_one_folder': 'Keep at least one destination subfolder',
-  'pending_session_guard': 'An unfinished sorting session exists. Resume and run it (or discard it) before changing targets.',
+  'pending_session_guard': 'Resolve the pending session first',
   'storage_phone': 'Phone storage',
 };

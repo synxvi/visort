@@ -63,9 +63,15 @@ class _ToastViewState extends State<_ToastView>
             opacity: _controller,
             child: Material(
               color: Colors.transparent,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              // 最大宽度约束：长文案优雅换行居中，不再贴满一屏宽
+              // （Center 只给 loose 约束，无上限时长文本会铺满可用宽）。
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.sizeOf(context).width - 48,
+                ),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 decoration: BoxDecoration(
                   color: AppColors.surface,
                   border: Border.all(color: AppColors.border),
@@ -78,14 +84,15 @@ class _ToastViewState extends State<_ToastView>
                     ),
                   ],
                 ),
-                child: Text(
-                  widget.message,
-                  style: const TextStyle(
-                    fontFamily: 'Space Mono',
-                    height: 1.2,
-                    fontFamilyFallback: AppFonts.cjkFallback,
-                    fontSize: 13,
-                    color: AppColors.text,
+                  child: Text(
+                    widget.message,
+                    style: const TextStyle(
+                      fontFamily: 'Space Mono',
+                      height: 1.2,
+                      fontFamilyFallback: AppFonts.cjkFallback,
+                      fontSize: 13,
+                      color: AppColors.text,
+                    ),
                   ),
                 ),
               ),

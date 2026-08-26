@@ -297,7 +297,13 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
 
   /// 子目录名校验：非法字符 / `.` `..` / 与其他行有效名重复 → 错误 key。
   /// 规则集中在 folder_name_validator.dart（纯函数，有单测）。
+  ///
+  /// 越界守卫：AnimatedList 退场动画期间，退场行以删除时的旧 idx 回调
+  /// （此时 _subDirs 已收缩），不守卫会 RangeError → 退场行构建失败 →
+  /// 该帧渲染异常（真机「删末位行灰屏闪烁」的根因；删中间行旧 idx 恰在
+  /// 合法域内不炸，故只有删末位必现）。退场行正在消失，无需校验。
   String? _subDirRowErrorKey(int idx) {
+    if (idx < 0 || idx >= _subDirs.length) return null;
     return folderNameInvalidKey(_subDirs[idx]) ??
         folderNameDupKey(idx, _subDirs);
   }
