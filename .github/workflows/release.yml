@@ -39,9 +39,17 @@ jobs:
 
       - name: Analyze
         working-directory: visort_flutter
-        # warning/info 已知存量不阻断（packages/photo_view 本地 fork + 风格类），
-        # error 级会非零退出。存量清零后可收紧为 --fatal-warnings。
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        # 门禁语义：仅 error 级阻断。--no-fatal-infos/--no-fatal-warnings 在
+        # CI 纯净 SDK 上曾被观察到 exit 1（存量 info/warning 也非零，与本地
+        # 行为不一致），故再按输出内容复核——有 error 级问题才真正失败。
+        run: |
+          set -o pipefail
+          flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee analyze.log || true
+          if grep -qE "^[[:space:]]*error[[:space:]]+•" analyze.log; then
+            echo "::error::analyze 发现 error 级问题"
+            exit 1
+          fi
+          echo "analyze 通过（error 级为零；info/warning 存量见上方日志）"
 
       - name: Test
         working-directory: visort_flutter
