@@ -174,16 +174,27 @@ python tools/generate_icons.py          # regenerates Android mipmap + adaptive 
 - **Windows desktop:** CMake ≥ 3.14, MSVC C++17 (`/W4 /WX` warnings-as-errors). `BINARY_NAME` is `visort` (exe named `visort.exe`).
 - **Android package:** `com.synxvi.visort`. **minSdk pinned to 26** (Bundle-query MediaStore API is 26+; toolchain default 24 crashes Android 7.x). Impeller enabled.
 - **Version:** `1.3.0+2` (pubspec; continues the legacy v1.2.x line). per-ABI versionCode offset via `androidComponents.onVariants` (arm64=N*10+1, v7a=N*10+2, universal=N*10).
-- **Signing:** release signs via `android/key.properties` (gitignored) pointing at the production keystore (`~/Dev/keystores/visort-release.keystore`, kept **outside the repo**); when the file is absent it falls back to debug keys for local runs. CI decodes the `VISORT_KEYSTORE_BASE64`/`VISORT_KEYSTORE_PASSWORD` secrets — configure them before the first tagged release, or every release would be signed with a throwaway runner debug key (users could never upgrade in place).
+- **Signing:** release signs via `android/key.properties` (gitignored) pointing at the production keystore; when the file is absent it falls back to debug keys for local runs. CI decodes the `VISORT_KEYSTORE_BASE64`/`VISORT_KEYSTORE_PASSWORD` secrets.
+  - **Production keystore:** `/home/synxvi/Dev/keystores/visort-release.keystore` (kept **outside the repo**; back it up offline — losing it means existing users can never upgrade in place).
+  - **`android/key.properties` template** (full content, for quick local production builds):
+    ```
+    storeFile=/home/synxvi/Dev/keystores/visort-release.keystore
+    storePassword=EG4Xa6XUj0aIYJ4ldDfgULlX
+    keyAlias=visort
+    keyPassword=EG4Xa6XUj0aIYJ4ldDfgULlX
+    ```
+  - **Local build→device speedrun (PJZ110, root, wireless adb):** `flutter build apk --release --split-per-abi` → `adb push build/app/outputs/flutter-apk/app-arm64-v8a-release.apk /data/local/tmp/v.apk` → `adb shell su -c "pm install -r -d /data/local/tmp/v.apk"` (`-d` allows the arm64 versionCode downgrade over an installed v7a build). Plain `adb install -r` only works when the installed build's versionCode ≥ the new APK's.
+  - **⚠ Stale-APK trap:** `flutter build` can serve a cached old APK even after `touch`ing sources (Gradle up-to-date misjudge: task finishes in ~1s and the md5 doesn't change). Verify the md5 changed after building; if not, `flutter clean && flutter pub get` and rebuild — a "✓ Built" line is not proof the fix is in the APK.
 - **Python (tooling only):** Used by `tools/subset_fonts.py` (CJK font subsetting; `fonttools`/`brotli`/`zopfli`) and `tools/generate_icons.py` (app icon generation; `pillow`). Python 3.11+. Re-run `subset_fonts.py` whenever i18n strings change (font subsets live in `assets/fonts/`, originals in `.font-source/` which is gitignored).
 
 ## Testing & QA
 
-**Flutter** — `flutter test` from `visort_flutter/`. **16 files / 114 cases, all pure-Dart unit tests** (plus two `photo_view_*` widget-level tests for the local fork). Coverage map:
+**Flutter** — `flutter test` from `visort_flutter/`. **17 files / 119 cases, all pure-Dart unit tests** (plus two `photo_view_*` widget-level tests for the local fork). Coverage map:
 
 | Area | Test files |
 |---|---|
 | `core/config` | `widget_test.dart` (config models/JSON/profile CRUD), `folder_name_validator_test.dart` |
+| `ui/screens (android)` | `subdir_remove_focus_test.dart` (subdir-row removal focus handoff + AnimatedList exit-animation layout health) |
 | `features/session` | `session_controller_test.dart` (decide/undo/restore), `session_store_test.dart` (SQLite round-trip + degraded null-db red line) |
 | `features/run` | `run_controller_test.dart` (FakeFileSystem) |
 | `features/gallery` | `gallery_controller_test.dart` (keyset pagination, batch ops, ContentObserver debounce), `gallery_snapshot_store_test.dart`, `hdr_cache_store_test.dart`, `run_log_store_test.dart` |
