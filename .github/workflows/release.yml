@@ -33,6 +33,14 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Apply local Flutter SDK patch (hero pop-flight)
+        # HeroController.onPopFlightStarted 是本机 SDK 的 visort 补丁 API
+        #（归档于 flutter-sdk-patches/）；官方 SDK 无此 API，不打补丁
+        # analyze/编译直接 error。--forward 幂等（缓存 SDK 已打过则跳过）。
+        run: |
+          patch -d "$FLUTTER_ROOT" -p1 --forward < flutter-sdk-patches/heroes-pop-flight_v3.44.patch \
+            || { echo "::error::SDK patch 应用失败（heroes.dart context 漂移？需重制补丁）"; exit 1; }
+
       - name: Install dependencies
         working-directory: visort_flutter
         run: flutter pub get
@@ -77,6 +85,11 @@ jobs:
           flutter-version: 3.47.1
           channel: stable
           cache: true
+
+      - name: Apply local Flutter SDK patch (hero pop-flight)
+        run: |
+          patch -d "$FLUTTER_ROOT" -p1 --forward < flutter-sdk-patches/heroes-pop-flight_v3.44.patch \
+            || { echo "::error::SDK patch 应用失败"; exit 1; }
 
       - name: Restore release keystore
         # 签名密钥以 base64 存 GitHub secret（VISORT_KEYSTORE_BASE64），
@@ -142,6 +155,21 @@ jobs:
           flutter-version: 3.47.1
           channel: stable
           cache: true
+
+      - name: Apply local Flutter SDK patch (hero pop-flight)
+        # 同 linux job（见 quality 注释）；Windows runner 无 GNU patch，
+        # 用 git apply（tarball SDK 非 git repo，git apply 仍可作为独立
+        # patch 工具使用）。--reverse --check 成功 = 已打过，跳过。
+        shell: pwsh
+        run: |
+          $patch = "$env:GITHUB_WORKSPACE/flutter-sdk-patches/heroes-pop-flight_v3.44.patch"
+          git -C $env:FLUTTER_ROOT apply --reverse --check $patch 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Output "patch already applied, skip"
+          } else {
+            git -C $env:FLUTTER_ROOT apply $patch
+            if ($LASTEXITCODE -ne 0) { Write-Error "SDK patch 应用失败"; exit 1 }
+          }
 
       - name: Install dependencies
         working-directory: visort_flutter
