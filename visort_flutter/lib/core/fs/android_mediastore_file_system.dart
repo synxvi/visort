@@ -15,6 +15,7 @@
 import 'file_system_repository.dart';
 import 'image_ref.dart';
 import 'mediastore_channel.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:visort_flutter/core/config/models.dart';
 
@@ -87,7 +88,10 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
           .toList(growable: false);
       return ScanResult(images: images);
     } catch (e) {
-      return ScanResult(images: const [], error: e.toString());
+      // error 字段契约是 i18n key（scan_controller 直接透传给 t()），
+      // 不能塞 e.toString()——否则用户看到 PlatformException 原文。
+      debugPrint('[scan] MediaStore 扫描异常: $e');
+      return ScanResult(images: const [], error: 'scan_failed');
     }
   }
 

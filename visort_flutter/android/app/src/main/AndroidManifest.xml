@@ -1,13 +1,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- MediaStore 读取（Android 13+ / API 33+） -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- Android 14+「选择照片」部分授权：用户只授权所选照片子集时系统授予
+         此权限（READ_MEDIA_IMAGES 仍为 denied）。未声明时系统走兼容模式，
+         部分授权会被误判为未授权 → 权限页与系统选择器死循环。 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <!-- 兼容 Android 12 及以下（API ≤ 32）走旧权限 -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <!-- 媒体管理特殊权限（Android 12+）：授权后 createWriteRequest/createDeleteRequest 不弹窗 -->
     <uses-permission android:name="android.permission.MANAGE_MEDIA" />
-    <!-- 配合 MANAGE_MEDIA，使 createWriteRequest 免弹窗 -->
+    <!-- 读取照片 EXIF 精确 GPS（详情面板「位置」；Android 10+ 未授权时系统
+         剥离位置标签。注意：与免弹窗无关——免弹窗只由 MANAGE_MEDIA 决定） -->
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
     <!-- 设置壁纸（普通权限，声明即生效；对标系统相册 SetAsWallpaper） -->
     <uses-permission android:name="android.permission.SET_WALLPAPER" />

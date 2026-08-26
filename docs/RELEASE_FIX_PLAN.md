@@ -35,11 +35,11 @@
 
 ## 批次 D —— 卡死/挂起路径
 
-- [ ] D1 桌面 `scanImages` 异常防护 + 两端 `_startScan` try/finally 复位 `_scanning`
-- [ ] D2 扫描/相册错误不再透传 `e.toString()` 原文 → i18n key 映射
-- [ ] D3 权限：声明 `READ_MEDIA_VISUAL_USER_SELECTED` + Android 14 部分授权识别 + 永久拒绝「去设置」出口
-- [ ] D4 壁纸页 `_applying` finally 复位（非 WallpaperException 不再卡死按钮）
-- [ ] D5 Kotlin `cleanupBinding` 六个 pending 补全 + error 回调；Dart 弹窗类 channel 加超时
+- [x] D1 桌面 `scanImages` 异常防护 + 两端 `_startScan` try/finally 复位 `_scanning`
+- [x] D2 扫描/相册错误不再透传 `e.toString()` 原文 → i18n key 映射
+- [x] D3 权限：声明 `READ_MEDIA_VISUAL_USER_SELECTED` + Android 14 部分授权识别 + 永久拒绝「去设置」出口
+- [x] D4 壁纸页 `_applying` finally 复位（非 WallpaperException 不再卡死按钮）
+- [x] D5 Kotlin `cleanupBinding` 六个 pending 补全 + error 回调；Dart 弹窗类 channel 加超时
 
 ## 批次 E —— 正确性收尾
 

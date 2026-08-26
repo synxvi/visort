@@ -356,8 +356,15 @@ class _WallpaperCropPageState extends ConsumerState<WallpaperCropPage> {
       Navigator.pop(context);
     } on WallpaperException {
       if (!mounted) return;
-      setState(() => _applying = false);
       toast(context, t(ref, 'wallpaper_set_failed'));
+    } catch (e) {
+      // 渲染管线/OOM 等非 WallpaperException：同样复位 + 提示，不能让
+      // _applying 卡 true（应用按钮永久禁用）。
+      debugPrint('[wallpaper] apply 异常: $e');
+      if (!mounted) return;
+      toast(context, t(ref, 'wallpaper_set_failed'));
+    } finally {
+      if (mounted) setState(() => _applying = false);
     }
   }
 

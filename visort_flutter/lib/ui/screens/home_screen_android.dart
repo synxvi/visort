@@ -366,7 +366,9 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       return;
     }
     // 按模式校验目标
-    List<FolderDescriptor> folders;
+    // 可空：toNewDir 在校验后同步赋值；toAlbum 的异步构建挪进下方 try
+    //（channel 异常并入 _scanning 复位保护），scan 的 prebuiltFolders 参数可空。
+    List<FolderDescriptor>? folders;
     if (_mode == ClassifyMode.toAlbum) {
       if (_targetBucketIds.isEmpty) {
         toast(context, t(ref, 'no_target_album'));
@@ -378,8 +380,6 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         toast(context, t(ref, 'too_many_targets', [_keyOrder.length]));
         return;
       }
-      setState(() => _scanning = true);
-      folders = await _buildTargetAlbumFolders();
     } else {
       // 合法性 + 重复校验：非法字符 / `.` `..` 穿越 / 重名直接拦截，提示中止。
       // （输入框已实时标红，这里是兜底强制——用户可能忽略红框直接点开始。）
@@ -406,73 +406,85 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         toast(context, t(ref, 'too_many_targets', [_keyOrder.length]));
         return;
       }
-      setState(() => _scanning = true);
     }
 
-    final sourceIds = _sourceBucketIds.toList();
+    setState(() => _scanning = true);
+    // try/finally：任何异常路径都复位 _scanning——含 _buildTargetAlbumFolders
+    // 的 channel 异常（getBucketRelativePath 可抛 PlatformException），此前
+    // 它会让 Start 永久禁用、页面卡 loading，release 下表现为「卡死」。
+    try {
+      if (_mode == ClassifyMode.toAlbum) {
+        folders = await _buildTargetAlbumFolders();
+      }
+      final sourceIds = _sourceBucketIds.toList();
 
-    // 持久化配置到 Profile
-    final config = ref.read(configProvider);
-    final oldProfile = config.activeProfileData;
-    // 模式一的子目录列表存入 folders（label = 子目录名）
-    final newFolders = _mode == ClassifyMode.toNewDir
-        ? _subDirs
-              .asMap()
-              .entries
-              .map(
-                (e) => FolderTemplate(
-                  key: e.key < _keyOrder.length ? _keyOrder[e.key] : '?',
-                  label: e.value.trim(),
-                ),
-              )
-              .toList()
-        : oldProfile.folders;
-    final newProfile = oldProfile.copyWith(
-      classifyMode: _mode,
-      targetAlbumIds: _targetBucketIds.toList(),
-      newDirParent: _parentCtrl.text.trim(),
-      folders: newFolders,
-    );
-    final newProfiles = Map<String, Profile>.from(config.profiles)
-      ..[config.activeProfile] = newProfile;
-    // destinationParent 的语义：根目录决策（kRootDestKey）会把图片直接移到这里。
-    // - toNewDir：根目录 = 目标父目录本身 → RELATIVE_PATH 应为 'Pictures/<父目录>'，
-    //   这样点「根目录」时图片会落到父目录（与子目录 'Pictures/<父>/<子>' 同级语义一致）。
-    //   不能用 kImagesAuthority（那是 MediaStore 集合 authority，非法 RELATIVE_PATH，
-    //   会导致 Kotlin contentResolver.update 返回 0 行 → 移动失败）。
-    // - toAlbum：根目录按钮已隐藏（无父目录根概念），destinationParent 不会被消费，
-    //   保留 kImagesAuthority 仅作占位。
-    final newDirParent = _parentCtrl.text.trim().isEmpty
-        ? 'Visort'
-        : _parentCtrl.text.trim();
-    final destParent = _mode == ClassifyMode.toNewDir
-        ? 'Pictures/$newDirParent'
-        : kImagesAuthority;
-    final updated = config.copyWith(
-      lastSourceDir: sourceIds.join(','),
-      lastDestParent: destParent,
-      profiles: newProfiles,
-    );
-    ref.read(configProvider.notifier).state = updated;
-    await ref.read(profilesServiceProvider).save(updated);
+      // 持久化配置到 Profile
+      final config = ref.read(configProvider);
+      final oldProfile = config.activeProfileData;
+      // 模式一的子目录列表存入 folders（label = 子目录名）
+      final newFolders = _mode == ClassifyMode.toNewDir
+          ? _subDirs
+                .asMap()
+                .entries
+                .map(
+                  (e) => FolderTemplate(
+                    key: e.key < _keyOrder.length ? _keyOrder[e.key] : '?',
+                    label: e.value.trim(),
+                  ),
+                )
+                .toList()
+          : oldProfile.folders;
+      final newProfile = oldProfile.copyWith(
+        classifyMode: _mode,
+        targetAlbumIds: _targetBucketIds.toList(),
+        newDirParent: _parentCtrl.text.trim(),
+        folders: newFolders,
+      );
+      final newProfiles = Map<String, Profile>.from(config.profiles)
+        ..[config.activeProfile] = newProfile;
+      // destinationParent 的语义：根目录决策（kRootDestKey）会把图片直接移到这里。
+      // - toNewDir：根目录 = 目标父目录本身 → RELATIVE_PATH 应为 'Pictures/<父目录>'，
+      //   这样点「根目录」时图片会落到父目录（与子目录 'Pictures/<父>/<子>' 同级语义一致）。
+      //   不能用 kImagesAuthority（那是 MediaStore 集合 authority，非法 RELATIVE_PATH，
+      //   会导致 Kotlin contentResolver.update 返回 0 行 → 移动失败）。
+      // - toAlbum：根目录按钮已隐藏（无父目录根概念），destinationParent 不会被消费，
+      //   保留 kImagesAuthority 仅作占位。
+      final newDirParent = _parentCtrl.text.trim().isEmpty
+          ? 'Visort'
+          : _parentCtrl.text.trim();
+      final destParent = _mode == ClassifyMode.toNewDir
+          ? 'Pictures/$newDirParent'
+          : kImagesAuthority;
+      final updated = config.copyWith(
+        lastSourceDir: sourceIds.join(','),
+        lastDestParent: destParent,
+        profiles: newProfiles,
+      );
+      ref.read(configProvider.notifier).state = updated;
+      await ref.read(profilesServiceProvider).save(updated);
 
-    final err = await ref
-        .read(scanControllerProvider.notifier)
-        .scan(
-          source: sourceIds,
-          sourceRoot: kImagesAuthority,
-          destinationParent: destParent,
-          recursive: true,
-          config: ref.read(configProvider),
-          prebuiltFolders: folders,
-        );
-    if (!mounted) return;
-    setState(() => _scanning = false);
-    if (err != null) {
-      toast(context, t(ref, err));
-      return;
+      final err = await ref
+          .read(scanControllerProvider.notifier)
+          .scan(
+            source: sourceIds,
+            sourceRoot: kImagesAuthority,
+            destinationParent: destParent,
+            recursive: true,
+            config: ref.read(configProvider),
+            prebuiltFolders: folders,
+          );
+      if (!mounted) return;
+      if (err != null) {
+        toast(context, t(ref, err));
+        return;
+      }
+      Navigator.pushNamed(context, AppRoutes.sort);
+    } catch (e) {
+      debugPrint('[startScan] $e');
+      if (mounted) toast(context, t(ref, 'scan_failed'));
+    } finally {
+      if (mounted) setState(() => _scanning = false);
     }
-    Navigator.pushNamed(context, AppRoutes.sort);
   }
 
   /// 右上角 3 点菜单：收藏 / 回收站快捷入口（相册浏览走首页列表直接点）。
@@ -1791,6 +1803,19 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             FilledButton(
               onPressed: _initAndLoad,
               child: Text(t(ref, 'grant_permission')),
+            ),
+            const SizedBox(height: 8),
+            // 永久拒绝（「不再询问」）后 requestPermissions 不再弹窗、按钮
+            // 原地空转——设置页是唯一出口。
+            TextButton(
+              onPressed: () => _channel.openAppSettings(),
+              child: Text(
+                t(ref, 'open_settings'),
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  fontSize: 13,
+                ),
+              ),
             ),
           ],
         ),

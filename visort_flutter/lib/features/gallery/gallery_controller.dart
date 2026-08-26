@@ -253,7 +253,7 @@ class GalleryController extends Notifier<GalleryState> {
       }
       state = state.copyWith(buckets: buckets);
     } catch (e) {
-      state = state.copyWith(error: e.toString());
+      state = state.copyWith(error: 'load_failed');
     }
   }
 
@@ -344,7 +344,7 @@ class GalleryController extends Notifier<GalleryState> {
       _applyBucketPage(bucketId, token, page);
     } catch (e) {
       if (token != _loadToken) return;
-      state = state.copyWith(error: e.toString());
+      state = state.copyWith(error: 'load_failed');
     }
   }
 
@@ -362,7 +362,7 @@ class GalleryController extends Notifier<GalleryState> {
       _applyBucketPage(bucketId, token, page);
     } catch (e) {
       if (token != _loadToken) return;
-      state = state.copyWith(error: e.toString());
+      state = state.copyWith(error: 'load_failed');
     }
   }
 
@@ -564,7 +564,7 @@ class GalleryController extends Notifier<GalleryState> {
       );
     } catch (e) {
       if (token != _loadToken) return;
-      state = state.copyWith(error: e.toString());
+      state = state.copyWith(error: 'load_failed');
     }
   }
 
@@ -599,7 +599,7 @@ class GalleryController extends Notifier<GalleryState> {
       );
     } catch (e) {
       if (token != _loadToken) return;
-      state = state.copyWith(error: e.toString());
+      state = state.copyWith(error: 'load_failed');
     }
   }
 
@@ -707,7 +707,7 @@ class GalleryController extends Notifier<GalleryState> {
         nextCursor: page.nextCursor,
       );
     } catch (e) {
-      state = state.copyWith(loadingMore: false, error: e.toString());
+      state = state.copyWith(loadingMore: false, error: 'load_failed');
     }
   }
 

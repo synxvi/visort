@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.database.ContentObserver
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -173,9 +174,25 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         binding = null
         activity = null
         repository = null
+        // 六个 pending 全部补齐并回 error：只置 null 会让 Dart 侧 await 的
+        // Future 永久挂起（系统弹窗期间 Activity 被 detach/重建的场景）。
+        // DETACHED 走 error 而非 success，Dart catch 后按失败处理可重试。
+        pendingDeleteResult?.error("DETACHED", "Activity 已分离", null)
         pendingDeleteResult = null
+        pendingPermissionResult?.error("DETACHED", "Activity 已分离", null)
         pendingPermissionResult = null
+        pendingRenameResult?.error("DETACHED", "Activity 已分离", null)
         pendingRenameResult = null
+        pendingMoveResult?.error("DETACHED", "Activity 已分离", null)
+        pendingMoveResult = null
+        pendingMoveIds = emptyList()
+        pendingMoveRelativePath = ""
+        pendingFavoriteResult?.error("DETACHED", "Activity 已分离", null)
+        pendingFavoriteResult = null
+        pendingTrashResult?.error("DETACHED", "Activity 已分离", null)
+        pendingTrashResult = null
+        pendingRestoreResult?.error("DETACHED", "Activity 已分离", null)
+        pendingRestoreResult = null
     }
 
     // ──────────── ActivityResult 回调（删除弹窗） ────────────
@@ -307,6 +324,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             "requestRestore" -> handleRequestRestore(call, result)
             "hasPermission" -> result.success(hasReadPermission())
             "requestPermission" -> handleRequestPermission(result)
+            "openAppSettings" -> handleOpenAppSettings(result)
             "hasManageMedia" -> result.success(hasManageMediaPermission())
             "requestManageMedia" -> handleRequestManageMedia(result)
             // [ente 对齐] 设备总内存（MB）：解码防崩阈值用（<5GB → 24MP 上限）。
@@ -348,8 +366,23 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             android.Manifest.permission.READ_EXTERNAL_STORAGE
         }
 
-    private fun hasReadPermission(): Boolean =
-        ContextCompat.checkSelfPermission(activity!!, readPermission()) == PackageManager.PERMISSION_GRANTED
+    /// 读权限检测。Android 14+（API 34）用户可能选「选择照片」部分授权：
+    /// READ_MEDIA_IMAGES=denied 但 READ_MEDIA_VISUAL_USER_SELECTED=granted——
+    /// 此时 MediaStore 查询自动只返回所选子集，必须视为「已授权」，否则
+    /// 权限页与系统选择器之间死循环。完整/部分授权均返回 true。
+    private fun hasReadPermission(): Boolean {
+        val act = activity ?: return false
+        val ctx = act.applicationContext
+        if (ContextCompat.checkSelfPermission(ctx, readPermission()) ==
+            PackageManager.PERMISSION_GRANTED
+        ) return true
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            return ContextCompat.checkSelfPermission(
+                ctx, android.Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+        return false
+    }
 
     private fun handleRequestPermission(result: Result) {
         val act = activity ?: run {
@@ -379,6 +412,24 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     private fun hasManageMediaPermission(): Boolean {
         val repo = repository ?: return false
         return repo.hasManageMediaPermission()
+    }
+
+    /// 跳转本应用的系统设置详情页（永久拒绝授权后的唯一出口——
+    /// requestPermissions 在「不再询问」后立即回调 denied 不弹窗）。
+    private fun handleOpenAppSettings(result: Result) {
+        val act = activity ?: run {
+            result.error(MsError.InvalidArg("Activity 未绑定").code, null, null); return
+        }
+        try {
+            val intent = Intent(
+                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", act.packageName, null)
+            ).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
+            act.startActivity(intent)
+            result.success(true)
+        } catch (e: Exception) {
+            result.error(MsError.QueryFailed("无法跳转应用设置: ${e.message}").code, e.message, null)
+        }
     }
 
     /// 跳转系统「媒体管理应用」设置页（MANAGE_MEDIA 是特殊权限，只能系统设置开启）

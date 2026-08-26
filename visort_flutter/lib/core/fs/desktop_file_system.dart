@@ -11,6 +11,7 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:visort_flutter/core/config/models.dart';
 
@@ -46,18 +47,27 @@ class DesktopFileSystem implements FileSystemRepository {
       }
       // 递归 vs 同层级
       final entities = dir.list(recursive: recursive, followLinks: false);
-      await for (final entry in entities) {
-        if (entry is File) {
-          final ext = p.extension(entry.path).toLowerCase();
-          if (imageExtensions.contains(ext)) {
-            final rel = p.relative(entry.path, from: root);
-            // 统一用 / 作为相对路径分隔符（与 Python relative_to 跨平台一致）
-            final relNormalized = rel.replaceAll(r'\', '/');
-            images.add(
-              ImageRef(root: root, relativePath: relNormalized, extension: ext),
-            );
+      // list 迭代中的权限拒绝/网络盘断开/路径过长等 FileSystemException 若
+      // 冒泡，Home 的 _scanning 永不复位（Start 永久禁用、表现为卡死）。
+      // 转 i18n 错误 key（ScanResult.error 的契约），原始异常仅 debug 输出。
+      try {
+        await for (final entry in entities) {
+          if (entry is File) {
+            final ext = p.extension(entry.path).toLowerCase();
+            if (imageExtensions.contains(ext)) {
+              final rel = p.relative(entry.path, from: root);
+              // 统一用 / 作为相对路径分隔符（与 Python relative_to 跨平台一致）
+              final relNormalized = rel.replaceAll(r'\', '/');
+              images.add(
+                ImageRef(
+                    root: root, relativePath: relNormalized, extension: ext),
+              );
+            }
           }
         }
+      } catch (e) {
+        debugPrint('[scan] $root 迭代异常: $e');
+        return ScanResult(images: const [], error: 'scan_failed');
       }
     }
     // 按全相对路径字符串升序，对应 sorted(entries)

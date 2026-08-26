@@ -195,6 +195,12 @@ class MsScanPage {
 
 // ───────────────────────── Channel 客户端 ─────────────────────────
 
+/// 系统同意弹窗类调用的超时兜底：Activity detach 时 Kotlin 侧
+/// cleanupBinding 已回 DETACHED error；万一回调丢失（极端 ROM 行为），
+/// 超时保证 Future 可完成，UI 不至于永久挂起。用户在系统弹窗前发呆
+/// 通常不超过 2 分钟，故取 120s。
+const _kConsentTimeout = Duration(seconds: 120);
+
 /// MediaStore MethodChannel 客户端。
 ///
 /// 默认走 `visort/mediastore` channel；测试/解耦时可注入自定义 channel
@@ -221,6 +227,16 @@ class MediaStoreChannel {
       return await _channel.invokeMethod<bool>('requestPermission') ?? false;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// 跳转本应用的系统设置详情页。权限被永久拒绝（「不再询问」）后，
+  /// requestPermissions 立即回调 denied 不再弹窗——设置页是唯一出口。
+  Future<void> openAppSettings() async {
+    try {
+      await _channel.invokeMethod<bool>('openAppSettings');
+    } catch (_) {
+      // 跳转失败静默（无 Activity 等极端场景）
     }
   }
 
@@ -369,9 +385,10 @@ class MediaStoreChannel {
   /// [favorite]=true 收藏，false 取消。返回是否成功（用户确认）。
   Future<bool> requestFavorite(List<String> ids, bool favorite) async {
     try {
-      return await _channel.invokeMethod<bool>(
-              'requestFavorite', {'ids': ids, 'favorite': favorite}) ??
-          false;
+      return await _channel
+          .invokeMethod<bool>(
+              'requestFavorite', {'ids': ids, 'favorite': favorite})
+          .timeout(_kConsentTimeout) ?? false;
     } on PlatformException catch (e) {
       throw _convertError(e);
     }
@@ -380,8 +397,9 @@ class MediaStoreChannel {
   /// 移入回收站（Android R+，系统弹窗确认）。
   Future<bool> requestTrash(List<String> ids) async {
     try {
-      return await _channel.invokeMethod<bool>('requestTrash', {'ids': ids}) ??
-          false;
+      return await _channel
+          .invokeMethod<bool>('requestTrash', {'ids': ids})
+          .timeout(_kConsentTimeout) ?? false;
     } on PlatformException catch (e) {
       throw _convertError(e);
     }
@@ -390,8 +408,9 @@ class MediaStoreChannel {
   /// 从回收站恢复（Android R+，系统弹窗确认）。
   Future<bool> requestRestore(List<String> ids) async {
     try {
-      return await _channel.invokeMethod<bool>('requestRestore', {'ids': ids}) ??
-          false;
+      return await _channel
+          .invokeMethod<bool>('requestRestore', {'ids': ids})
+          .timeout(_kConsentTimeout) ?? false;
     } on PlatformException catch (e) {
       throw _convertError(e);
     }
@@ -475,8 +494,9 @@ class MediaStoreChannel {
   /// 用户取消时抛 [MsDeleteCancelledException]。
   Future<int> requestDelete(List<String> ids) async {
     try {
-      return await _channel.invokeMethod<int>('requestDelete', {'ids': ids}) ??
-          0;
+      return await _channel
+          .invokeMethod<int>('requestDelete', {'ids': ids})
+          .timeout(_kConsentTimeout) ?? 0;
     } on PlatformException catch (e) {
       if (e.code == 'DELETE_CANCELLED') {
         throw const MsDeleteCancelledException();
@@ -518,9 +538,10 @@ class MediaStoreChannel {
   /// Android 11+ 对其他 app 的文件会弹系统确认窗。
   Future<int> requestMove(List<String> ids, String relativePath) async {
     try {
-      return await _channel.invokeMethod<int>(
-              'requestMove', {'ids': ids, 'relativePath': relativePath}) ??
-          0;
+      return await _channel
+          .invokeMethod<int>(
+              'requestMove', {'ids': ids, 'relativePath': relativePath})
+          .timeout(_kConsentTimeout) ?? 0;
     } on PlatformException catch (e) {
       throw _convertError(e);
     }
@@ -531,9 +552,9 @@ class MediaStoreChannel {
   /// 他人文件走 createWriteRequest 授权；返回 1 成功，0 取消/失败。
   Future<int> requestRename(String id, String newName) async {
     try {
-      return await _channel.invokeMethod<int>(
-              'requestRename', {'id': id, 'newName': newName}) ??
-          0;
+      return await _channel
+          .invokeMethod<int>('requestRename', {'id': id, 'newName': newName})
+          .timeout(_kConsentTimeout) ?? 0;
     } on PlatformException catch (e) {
       throw _convertError(e);
     }

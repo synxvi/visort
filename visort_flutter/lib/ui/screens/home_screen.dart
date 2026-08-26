@@ -266,27 +266,36 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       return;
     }
     setState(() => _scanning = true);
+    // try/finally：任何异常路径都复位 _scanning——否则 Start 永久禁用、
+    // 页面卡 loading（release 下无红屏提示，表现为「卡死」）。
+    try {
+      // 持久化 last dirs
+      final config = ref.read(configProvider);
+      final updated =
+          config.copyWith(lastSourceDir: source, lastDestParent: dest);
+      ref.read(configProvider.notifier).state = updated;
+      await ref.read(profilesServiceProvider).save(updated);
 
-    // 持久化 last dirs
-    final config = ref.read(configProvider);
-    final updated = config.copyWith(lastSourceDir: source, lastDestParent: dest);
-    ref.read(configProvider.notifier).state = updated;
-    await ref.read(profilesServiceProvider).save(updated);
-
-    final err = await ref.read(scanControllerProvider.notifier).scan(
-          source: [source],
-          sourceRoot: source,
-          destinationParent: dest,
-          recursive: _recursive,
-          config: ref.read(configProvider),
-        );
-    if (!mounted) return;
-    setState(() => _scanning = false);
-    if (err != null) {
-      toast(context, t(ref, err));
-      return;
+      final err = await ref.read(scanControllerProvider.notifier).scan(
+            source: [source],
+            sourceRoot: source,
+            destinationParent: dest,
+            recursive: _recursive,
+            config: ref.read(configProvider),
+          );
+      if (!mounted) return;
+      if (err != null) {
+        toast(context, t(ref, err));
+        return;
+      }
+      Navigator.pushNamed(context, AppRoutes.sort);
+    } catch (e) {
+      // scan 链路的意外异常（FS 实现漏网）兜底提示，不再静默卡死
+      debugPrint('[startScan] $e');
+      if (mounted) toast(context, t(ref, 'scan_failed'));
+    } finally {
+      if (mounted) setState(() => _scanning = false);
     }
-    Navigator.pushNamed(context, AppRoutes.sort);
   }
 
   @override
