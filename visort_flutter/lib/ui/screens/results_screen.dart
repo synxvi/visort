@@ -9,6 +9,7 @@ import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/run/run_controller.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
+import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/router.dart';
 
 class ResultsScreen extends ConsumerStatefulWidget {
@@ -35,17 +36,23 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
       body: StreamBuilder<RunProgress>(
         stream: _runStream,
         builder: (ctx, snap) {
-          // 执行中
-          if (!snap.hasData || snap.data!.done != true) {
-            final progress = snap.data;
-            return _ExecutingView(
-              current: progress?.current,
-              total: progress?.total,
-              currentFile: progress?.currentFile,
-            );
-          }
-          // 完成
-          return _DoneView(results: snap.data!.results!);
+          final done = snap.hasData && snap.data!.done == true;
+          // 执行中禁止退出：StreamBuilder dispose 会取消订阅，async* 流在
+          // 下个 yield 点终止——批量 move/delete 根本不会执行，用户已确认
+          // Run 却静默落空。done 后恢复返回（Continue/返回键均可离开）。
+          return PopScope(
+            canPop: done,
+            onPopInvokedWithResult: (didPop, _) {
+              if (!didPop) toast(context, t(ref, 'run_in_progress'));
+            },
+            child: !done
+                ? _ExecutingView(
+                    current: snap.data?.current,
+                    total: snap.data?.total,
+                    currentFile: snap.data?.currentFile,
+                  )
+                : _DoneView(results: snap.data!.results!),
+          );
         },
       ),
     );

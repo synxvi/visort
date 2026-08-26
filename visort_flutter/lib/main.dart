@@ -10,6 +10,8 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'dart:ui' show PlatformDispatcher;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -70,6 +72,17 @@ Future<void> main() async {
   smLoader.addFont(rootBundle.load('assets/fonts/SpaceMono-Regular.ttf'));
   smLoader.addFont(rootBundle.load('assets/fonts/SpaceMono-Bold.ttf'));
   await smLoader.load();
+
+  // 全局错误兜底：未捕获的异步异常在 release 下无声消失、线上无从排查。
+  // 统一落 debugPrint（release 为空操作但 zone 已吞掉，不再有未处理异常
+  // 警告；debug/profile 可见全栈）。后续如需持久化再接本地日志文件。
+  FlutterError.onError = (details) {
+    debugPrint('[FlutterError] ${details.exception}\n${details.stack}');
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('[uncaught] $error\n$stack');
+    return true; // 标记已处理，阻止向 zone 冒泡
+  };
 
   runApp(UncontrolledProviderScope(
     container: container,

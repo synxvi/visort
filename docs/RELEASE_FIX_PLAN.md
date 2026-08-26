@@ -43,12 +43,12 @@
 
 ## 批次 E —— 正确性收尾
 
-- [ ] E1 `MsImageInfo`/`MsBucket` copyWith 补全，删除 3+ 处手写拷贝（修收藏后 HDR 徽标被清 bug）
-- [ ] E2 文件夹 key 与 actionKeys 双向冲突检测（delete 键不再被静默劫持）+ i18n
-- [ ] E3 i18n：`photo_count` 中文补齐、快捷键冲突文案 key 化、EN/ZH key 对齐护栏测试
-- [ ] E4 Run 生命周期：Results 屏 PopScope（执行中禁退出）+ RunController 防重入
-- [ ] E5 配置损坏备份（`visort_config_bak`）不再静默清零
-- [ ] E6 全局错误兜底（`FlutterError.onError` + `PlatformDispatcher.onError`）
+- [x] E1 `MsImageInfo`/`MsBucket` copyWith 补全，删除 3+ 处手写拷贝（修收藏后 HDR 徽标被清 bug）
+- [x] E2 文件夹 key 与 actionKeys 双向冲突检测（delete 键不再被静默劫持）+ i18n
+- [x] E3 i18n：`photo_count` 中文补齐、快捷键冲突文案 key 化、EN/ZH key 对齐护栏测试
+- [x] E4 Run 生命周期：Results 屏 PopScope（执行中禁退出）+ RunController 防重入
+- [x] E5 配置损坏备份（`visort_config_bak`）不再静默清零
+- [x] E6 全局错误兜底（`FlutterError.onError` + `PlatformDispatcher.onError`）
 
 ## 批次 F —— 原生层加固
 

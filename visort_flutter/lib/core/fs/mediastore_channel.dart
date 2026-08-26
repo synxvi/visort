@@ -77,6 +77,27 @@ class MsBucket {
   final int dateModifiedMs;
   /// 封面图 _ID（该相册最新一张图）。用于首页缩略图。null = 无封面。
   final String? coverId;
+
+  /// 全字段 copyWith——此前缺失导致调用方手写 7 字段构造，每加一个字段
+  /// 都要在多处手写拷贝里同步漏改（曾漏 isHdr 使收藏操作清掉 HDR 徽标）。
+  MsBucket copyWith({
+    String? id,
+    String? name,
+    int? count,
+    int? dateCreatedMs,
+    int? dateModifiedMs,
+    String? coverId,
+    bool clearCoverId = false,
+  }) =>
+      MsBucket(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        count: count ?? this.count,
+        dateCreatedMs: dateCreatedMs ?? this.dateCreatedMs,
+        dateModifiedMs: dateModifiedMs ?? this.dateModifiedMs,
+        coverId: clearCoverId ? null : (coverId ?? this.coverId),
+      );
+
   @override
   String toString() => 'MsBucket($name, $count, cover=$coverId)';
 }
@@ -149,20 +170,37 @@ class MsImageInfo {
         isHdr: j['isHdr'] as bool? ?? false,
       );
 
-  /// HDR 后台补测回填 / 重命名后本地回填用。
-  MsImageInfo copyWith({bool? isHdr, String? name}) => MsImageInfo(
-        id: id,
+  /// 全字段 copyWith。此前只有 {isHdr, name}，调用方为改一个字段手写
+  /// 13 字段构造——三处手写拷贝全都漏了 isHdr（收藏/取消后 HDR 徽标被
+  /// 静默清掉）。新字段一律加到这里，禁止再手写整对象构造。
+  MsImageInfo copyWith({
+    String? id,
+    String? name,
+    int? size,
+    String? mime,
+    String? bucketId,
+    int? dateAddedMs,
+    int? dateModifiedMs,
+    bool? isFavorite,
+    bool? isTrashed,
+    int? dateTrashedMs,
+    int? width,
+    int? height,
+    bool? isHdr,
+  }) =>
+      MsImageInfo(
+        id: id ?? this.id,
         name: name ?? this.name,
-        size: size,
-        mime: mime,
-        bucketId: bucketId,
-        dateAddedMs: dateAddedMs,
-        dateModifiedMs: dateModifiedMs,
-        isFavorite: isFavorite,
-        isTrashed: isTrashed,
-        dateTrashedMs: dateTrashedMs,
-        width: width,
-        height: height,
+        size: size ?? this.size,
+        mime: mime ?? this.mime,
+        bucketId: bucketId ?? this.bucketId,
+        dateAddedMs: dateAddedMs ?? this.dateAddedMs,
+        dateModifiedMs: dateModifiedMs ?? this.dateModifiedMs,
+        isFavorite: isFavorite ?? this.isFavorite,
+        isTrashed: isTrashed ?? this.isTrashed,
+        dateTrashedMs: dateTrashedMs ?? this.dateTrashedMs,
+        width: width ?? this.width,
+        height: height ?? this.height,
         isHdr: isHdr ?? this.isHdr,
       );
 }

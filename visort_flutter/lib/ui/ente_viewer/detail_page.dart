@@ -1164,21 +1164,8 @@ class _DetailPageState extends ConsumerState<DetailPage>
     setState(() {
       final i = _files.indexWhere((f) => f.id == file.id);
       if (i >= 0) {
-        final p = _files[i];
-        _files[i] = MsImageInfo(
-          id: p.id,
-          name: p.name,
-          size: p.size,
-          mime: p.mime,
-          bucketId: p.bucketId,
-          dateAddedMs: p.dateAddedMs,
-          dateModifiedMs: p.dateModifiedMs,
-          isFavorite: !p.isFavorite,
-          isTrashed: p.isTrashed,
-          dateTrashedMs: p.dateTrashedMs,
-          width: p.width,
-          height: p.height,
-        );
+        // 全字段 copyWith——旧手写 13 字段构造漏 isHdr（收藏后 HDR 徽标被清）
+        _files[i] = _files[i].copyWith(isFavorite: !_files[i].isFavorite);
       }
     });
     toast(context, t(ref, file.isFavorite ? 'unfavorited' : 'favorited'));

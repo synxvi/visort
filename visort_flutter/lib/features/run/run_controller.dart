@@ -60,9 +60,33 @@ class RunController {
   /// Run 历史落库(P3);null = 不记录(纯内存测试/降级)。
   final RunLogStore? _runLog;
 
+  /// Run 防重入闸门：run() 是 async* 流，Results 屏退出即取消订阅；重入
+  /// （退出后再 Run）会对全量决策重放一遍——操作幂等不损坏数据，但 Results
+  /// 会被 move_failed/source_missing 误导性错误刷屏。in-flight 时直接返回
+  /// 单事件错误流。async* 的 finally 保证任意取消路径都会复位。
+  bool _running = false;
+
   /// 执行 RUN。返回进度 Stream。
   /// UI 用 StreamBuilder 订阅，结束事件含 results。
   Stream<RunProgress> run(SessionState session) async* {
+    if (_running) {
+      yield const RunProgress(
+        done: true,
+        results: RunResults(
+          errors: [(file: 'run', reason: 'run_already_running')],
+        ),
+      );
+      return;
+    }
+    _running = true;
+    try {
+      yield* _runInner(session);
+    } finally {
+      _running = false;
+    }
+  }
+
+  Stream<RunProgress> _runInner(SessionState session) async* {
     final decisions = session.decisions ?? {};
 
     if (decisions.isEmpty || session.images.isEmpty) {

@@ -662,20 +662,10 @@ class GalleryController extends Notifier<GalleryState> {
     }
   }
 
-  MsImageInfo _copyWithFavorite(MsImageInfo p, bool fav) => MsImageInfo(
-        id: p.id,
-        name: p.name,
-        size: p.size,
-        mime: p.mime,
-        bucketId: p.bucketId,
-        dateAddedMs: p.dateAddedMs,
-        dateModifiedMs: p.dateModifiedMs,
-        isFavorite: fav,
-        isTrashed: p.isTrashed,
-        dateTrashedMs: p.dateTrashedMs,
-        width: p.width,
-        height: p.height,
-      );
+  /// 委托全字段 copyWith——旧手写 13 字段构造漏 isHdr，收藏/取消后 HDR
+  /// 徽标被静默清掉（直到下次重查）。
+  MsImageInfo _copyWithFavorite(MsImageInfo p, bool fav) =>
+      p.copyWith(isFavorite: fav);
 
   /// 加载下一页（滚动到底触发）。keyset 游标法：用上一页返回的游标取下一页。
   Future<void> loadMore() async {
@@ -740,14 +730,7 @@ class GalleryController extends Notifier<GalleryState> {
               .toList();
           newCoverId = remaining.isEmpty ? null : remaining.first.id;
         }
-        return MsBucket(
-          id: b.id,
-          name: b.name,
-          count: newCount,
-          dateCreatedMs: b.dateCreatedMs,
-          dateModifiedMs: b.dateModifiedMs,
-          coverId: newCoverId,
-        );
+        return b.copyWith(count: newCount, coverId: newCoverId);
       }).toList(),
     );
   }
@@ -986,14 +969,7 @@ class GalleryController extends Notifier<GalleryState> {
               .toList();
           newCoverId = remaining.isEmpty ? null : remaining.first.id;
         }
-        return MsBucket(
-          id: b.id,
-          name: b.name,
-          count: newCount,
-          dateCreatedMs: b.dateCreatedMs,
-          dateModifiedMs: b.dateModifiedMs,
-          coverId: newCoverId,
-        );
+        return b.copyWith(count: newCount, coverId: newCoverId);
       }).toList(),
     );
   }
@@ -1031,12 +1007,8 @@ class GalleryController extends Notifier<GalleryState> {
             photos: state.photos.where((p) => p.id != id).toList(),
             buckets: state.buckets
                 .map((b) => b.id == state.bucketId && b.count > 0
-                    ? MsBucket(
-                        id: b.id,
-                        name: b.name,
+                    ? b.copyWith(
                         count: b.count - 1,
-                        dateCreatedMs: b.dateCreatedMs,
-                        dateModifiedMs: b.dateModifiedMs,
                         coverId: b.coverId == id ? null : b.coverId,
                       )
                     : b)

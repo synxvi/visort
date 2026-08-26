@@ -22,6 +22,11 @@ import 'models.dart';
 /// shared_preferences 中存储 AppConfig JSON 的 key。
 const _kPrefKey = 'visort_config';
 
+/// 配置损坏时的备份 key：load 失败回退默认前把原文保留于此，
+/// 重度用户的全部 profiles 可手工找回（否则任何一次 save 会把损坏前的
+/// 原值彻底覆写掉，静默清零）。
+const _kPrefBackupKey = 'visort_config_bak';
+
 /// 文件夹描述符：模板 + 完整路径（供 Session 决策时拿到 destPath）。
 @immutable
 class FolderDescriptor {
@@ -64,14 +69,26 @@ const _defaultActionKeys = ActionKeys(undo: 'Z', delete: 'X', skip: 'C');
 /// Profile 管理与持久化服务。
 class ProfilesService {
   /// 读取持久化配置；失败或不存在则返回默认配置。
+  /// 损坏时先把原文备份到 [_kPrefBackupKey] 再回退默认——此后任何一次
+  /// save 覆写的是新默认值，用户全部 profiles 的原数据只留在这份备份里。
   Future<AppConfig> load() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_kPrefKey);
       if (raw == null || raw.isEmpty) return AppConfig.defaults();
       return AppConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
-    } catch (_) {
-      // 损坏的 JSON 等异常 → 回退默认，避免启动崩溃
+    } catch (e) {
+      // 损坏的 JSON 等 → 回退默认，避免启动崩溃；备份原文供手工找回
+      debugPrint('[config] 配置加载失败，已备份原文并回退默认: $e');
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final raw = prefs.getString(_kPrefKey);
+        if (raw != null && raw.isNotEmpty) {
+          await prefs.setString(_kPrefBackupKey, raw);
+        }
+      } catch (_) {
+        // 备份失败不阻断启动
+      }
       return AppConfig.defaults();
     }
   }

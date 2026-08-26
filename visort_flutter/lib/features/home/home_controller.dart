@@ -67,6 +67,18 @@ class HomeController {
     } on TemplateValidationException catch (e) {
       return e.i18nKey;
     }
+    // 与 actionKeys 冲突：键盘优先级是 文件夹 key → Space → delete → skip
+    // → undo，文件夹 key 撞 delete/skip 会让操作键静默失效（用户以为在
+    // 删图、实际移进了文件夹）。updateActionKeys 已查正向，此处补反向。
+    final ak = _config.activeProfileData.actionKeys;
+    final actionKeys = {ak.undo, ak.delete, ak.skip}
+        .map((k) => k.toLowerCase())
+        .toSet();
+    for (final f in folders) {
+      if (actionKeys.contains(f.key.toLowerCase())) {
+        return 'folder_key_used_action';
+      }
+    }
     final profile = _config.activeProfileData.copyWith(folders: folders);
     final newProfiles = Map<String, Profile>.from(_config.profiles);
     newProfiles[_config.activeProfile] = profile;
@@ -84,17 +96,9 @@ class HomeController {
         .map((e) => e.toLowerCase())
         .toList();
     if (lower.toSet().length != lower.length) {
-      // 找到重复项
-      for (var i = 0; i < lower.length; i++) {
-        for (var j = i + 1; j < lower.length; j++) {
-          if (lower[i] == lower[j]) {
-            final labels = ['undo_label', 'delete_label', 'skip_label'];
-            return _ref.read(currentLanguageProvider) == 'zh'
-                ? '「${actionKeys[labels[i]]}」与「${actionKeys[labels[j]]}」快捷键冲突'
-                : 'Shortcut conflict between ${labels[i]} and ${labels[j]}';
-          }
-        }
-      }
+      // 三个操作键互相冲突。返回 i18n key（此前手工双语拼接会向英文用户
+      // 输出内部 label 名 "undo_label"，且绕过 i18n 体系）。
+      return 'key_conflict_action';
     }
     // 与文件夹 key 冲突
     for (final folder in _config.activeProfileData.folders) {
@@ -130,21 +134,5 @@ class HomeController {
       if (!used.contains(k)) return k;
     }
     return '?';
-  }
-}
-
-// 帮助函数：按 label 名取 action key 值
-extension on ActionKeys {
-  String operator [](String label) {
-    switch (label) {
-      case 'undo_label':
-        return undo;
-      case 'delete_label':
-        return delete;
-      case 'skip_label':
-        return skip;
-      default:
-        return '';
-    }
   }
 }
