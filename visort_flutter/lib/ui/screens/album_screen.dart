@@ -714,9 +714,11 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   }
 
   /// 当前仍存在于列表中的选中 id（observer/外部变更可能已移除部分）。
+  /// 交集用 Set：万张相册勾选千张时 O(n+m)，原 any 嵌套是 O(sel×n)。
   List<String> _currentSelectedIds() {
-    final photos = ref.read(galleryControllerProvider).photos;
-    return _selectedIds.where((id) => photos.any((p) => p.id == id)).toList();
+    final photoIds =
+        ref.read(galleryControllerProvider).photos.map((p) => p.id).toSet();
+    return _selectedIds.where(photoIds.contains).toList();
   }
 
   /// 批量移入回收站（普通相册/收藏视图的「批量删除」）。

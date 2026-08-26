@@ -27,11 +27,11 @@
 
 ## 批次 C —— 性能口碑
 
-- [ ] C1 Sort 屏解码带 `targetWidth`（桌面 `_ImageArea` / 安卓 `_FullscreenImage` / `precacheNextImage`）——键盘连按每键 48MB → ~7MB
-- [ ] C2 viewer 大图缓存清理接线（`evictViewerImageCache` 目前零调用）+ ImageCache 上限显式配置
-- [ ] C3 ContentObserver 防抖合并（批量操作后不再全量重查风暴）+ 快照落盘节流
-- [ ] C4 viewer `allowImplicitScrolling: true`（相邻页预取，连翻不糊）
-- [ ] C5 批量操作 `List.contains` → `Set` 四处 + `_currentSelectedIds` 交集化
+- [x] C1 Sort 屏解码带 `targetWidth`（桌面 `_ImageArea` / 安卓 `_FullscreenImage` / `precacheNextImage`）——键盘连按每键 48MB → ~7MB
+- [x] C2 viewer 大图缓存清理接线（`evictViewerImageCache` 目前零调用）+ ImageCache 上限显式配置
+- [x] C3 ContentObserver 防抖合并（批量操作后不再全量重查风暴）+ 快照落盘节流
+- [x] C4 viewer `allowImplicitScrolling: true`（相邻页预取，连翻不糊）
+- [x] C5 批量操作 `List.contains` → `Set` 四处 + `_currentSelectedIds` 交集化
 
 ## 批次 D —— 卡死/挂起路径
 

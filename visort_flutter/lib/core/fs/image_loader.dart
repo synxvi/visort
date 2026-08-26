@@ -21,16 +21,34 @@ import 'service_policy.dart';
 
 /// 构建当前平台的 ImageProvider。
 /// 安卓端 root=authority、relativePath=_ID；Windows 端 root=源目录、relativePath=相对路径。
+/// [targetWidth]（物理像素）：预览类场景（Sort 屏）应传入——全分辨率解码
+/// （12MP ≈ 48MB ARGB）在键盘连按时每键双份解码会瞬间塞满 ImageCache；
+/// 下采样后 ~7MB/张。GIF 跳过缩放（ResizeImage 对多帧动图不可靠，
+/// 安卓侧 _AndroidBytesImageProvider 同样对 GIF 走全量保多帧）。
 ImageProvider buildImageProvider(ImageRef ref, {int? targetWidth}) {
   if (Platform.isAndroid) {
     return _AndroidBytesImageProvider(ref: ref, targetWidth: targetWidth);
   }
-  return FileImage(File(p.join(ref.root, ref.relativePath)));
+  final file = FileImage(File(p.join(ref.root, ref.relativePath)));
+  if (targetWidth != null &&
+      targetWidth > 0 &&
+      ref.extension.toLowerCase() != '.gif') {
+    return ResizeImage(file, width: targetWidth, policy: ResizeImagePolicy.fit);
+  }
+  return file;
 }
 
-/// 预加载下一张图片到缓存（跨平台）。
-Future<void> precacheNextImage(BuildContext context, ImageRef ref) {
-  return precacheImage(buildImageProvider(ref), context);
+/// 预加载下一张图片到缓存（跨平台）。Sort 屏调用时传 [targetWidth]，
+/// 与显示用 provider 的 key 一致才能命中缓存。
+Future<void> precacheNextImage(
+  BuildContext context,
+  ImageRef ref, {
+  int? targetWidth,
+}) {
+  return precacheImage(
+    buildImageProvider(ref, targetWidth: targetWidth),
+    context,
+  );
 }
 
 /// 清理指定 MediaStore _ID 的所有图片缓存（缩略图 + 全图）。
@@ -90,11 +108,18 @@ int computeViewerTargetWidth(double screenWidthPx) {
 int _cachedMaxDecodePixels = 100000000; // 100MP 默认，首次解码前刷新
 
 /// main() 后台预热（不阻塞首帧）；RAM 查询失败时保持默认（幂等跳过）。
+/// 顺带显式配置 ImageCache 上限：raw ARGB 管线的条目普遍 1~7MB/张，
+/// 框架默认 1000 条 / 100MB 的「条数先到」语义会把字节上限架空
+///（万张相册滚动时反复 evict + 重解码）。按 RAM 档位给字节上限、
+/// 条数收敛到 500，让 LRU 以字节为准。
 Future<void> initMaxDecodePixels() async {
   final ramMb = await MediaStoreChannel().totalRamMb();
   if (ramMb == null) return;
   final base = ramMb < 5 * 1024 ? 24000000 : 100000000;
   _cachedMaxDecodePixels = base < 50000000 ? base : 50000000; // min(50MP, base)
+  final cache = PaintingBinding.instance.imageCache;
+  cache.maximumSize = 500;
+  cache.maximumSizeBytes = ramMb < 6 * 1024 ? 96 << 20 : 160 << 20;
 }
 
 /// 安卓端从 MediaStore 读字节的 ImageProvider。

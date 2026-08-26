@@ -218,6 +218,11 @@ class GalleryController extends Notifier<GalleryState> {
     ref.onDispose(() {
       _changeSub?.cancel();
       _changeSub = null;
+      _observerDebounce?.cancel();
+      for (final t in _snapshotFlushTimers.values) {
+        t.cancel();
+      }
+      _snapshotFlushTimers.clear();
     });
     return GalleryState(
       albumSortBy: config.albumSortBy,
@@ -461,13 +466,24 @@ class GalleryController extends Notifier<GalleryState> {
     );
   }
 
+  /// 快照落盘防抖：HDR 批次回填等高频 _putSnapshot（每批 60 张 copyWith +
+  /// 落盘）会造成万行级 SQLite 事务风暴；合并为每桶至多 1s 一次，最新快照
+  /// 存 _pendingSnapshots，进程被杀丢的只是最后 1s 的增量（重查可重建）。
+  final _snapshotFlushTimers = <String, Timer>{};
+  final _pendingSnapshots = <String, _BucketSnapshot>{};
+
   /// 桶快照 LRU：最多保留 8 桶，超出删最早写入的。
   void _putSnapshot(String bucketId, _BucketSnapshot snap) {
     _bucketSnapshots[bucketId] = snap;
     if (_bucketSnapshots.length > 8) {
       _bucketSnapshots.remove(_bucketSnapshots.keys.first);
     }
-    _persistSnapshot(bucketId, snap); // fire-and-forget 磁盘持久化（杀后台后秒出）
+    _pendingSnapshots[bucketId] = snap;
+    _snapshotFlushTimers[bucketId]?.cancel();
+    _snapshotFlushTimers[bucketId] = Timer(const Duration(seconds: 1), () {
+      final pending = _pendingSnapshots.remove(bucketId);
+      if (pending != null) _persistSnapshot(bucketId, pending);
+    });
   }
 
   /// 写磁盘快照（异步，失败静默——store 内部吞错）。杀后台/进程重建后
@@ -774,14 +790,16 @@ class GalleryController extends Notifier<GalleryState> {
   /// 成功后本地移除全部 + 清缓存 + 重查相册列表。返回 null 成功，否则错误信息。
   Future<String?> trashPhotos(List<String> ids) async {
     if (ids.isEmpty) return null;
+    final idSet = ids.toSet(); // 万张相册勾选千张时 Set 过滤 O(n) 而非 O(n×m)
     try {
       await _channel.requestTrash(ids);
+      _markSelfMutation();
       for (final id in ids) {
         evictImageCache(id);
       }
       _applyBucketDeltaBatch(ids, countDelta: -1);
       state = state.copyWith(
-        photos: state.photos.where((p) => !ids.contains(p.id)).toList(),
+        photos: state.photos.where((p) => !idSet.contains(p.id)).toList(),
       );
       await loadBuckets();
       return null;
@@ -793,14 +811,16 @@ class GalleryController extends Notifier<GalleryState> {
   /// 批量从回收站恢复。成功后本地移除 + 清缓存 + 重查相册列表。
   Future<String?> restorePhotos(List<String> ids) async {
     if (ids.isEmpty) return null;
+    final idSet = ids.toSet();
     try {
       await _channel.requestRestore(ids);
+      _markSelfMutation();
       for (final id in ids) {
         evictImageCache(id);
       }
       _applyBucketDeltaBatch(ids, countDelta: 1);
       state = state.copyWith(
-        photos: state.photos.where((p) => !ids.contains(p.id)).toList(),
+        photos: state.photos.where((p) => !idSet.contains(p.id)).toList(),
       );
       await loadBuckets();
       return null;
@@ -826,12 +846,14 @@ class GalleryController extends Notifier<GalleryState> {
         }
       }
       if (gone.isEmpty) return 'delete_failed';
+      _markSelfMutation();
       for (final id in gone) {
         evictImageCache(id);
       }
+      final goneSet = gone.toSet();
       _applyBucketDeltaBatch(gone, countDelta: -1);
       state = state.copyWith(
-        photos: state.photos.where((p) => !gone.contains(p.id)).toList(),
+        photos: state.photos.where((p) => !goneSet.contains(p.id)).toList(),
       );
       await loadBuckets();
       return stuck.isEmpty ? null : 'delete_failed';
@@ -877,13 +899,15 @@ class GalleryController extends Notifier<GalleryState> {
       if (rel == null || rel.isEmpty) return 'move_failed';
       final n = await _channel.requestMove(ids, rel);
       if (n <= 0) return 'move_cancelled';
+      _markSelfMutation();
       for (final id in ids) {
         evictImageCache(id);
       }
       // 先同步桶数（需 photos 定位所属相册），再移除本地列表。
+      final idSet = ids.toSet();
       _applyBucketDeltaBatch(ids, countDelta: -1);
       state = state.copyWith(
-        photos: state.photos.where((p) => !ids.contains(p.id)).toList(),
+        photos: state.photos.where((p) => !idSet.contains(p.id)).toList(),
       );
       await loadBuckets();
       return null;
@@ -976,9 +1000,27 @@ class GalleryController extends Notifier<GalleryState> {
 
   // ───────────────────────── ContentObserver 刷新 ─────────────────────────
 
+  /// ContentObserver 防抖 timer：批量操作（应用内移动/删除 N 张、外部批量
+  /// 写图）会触发 N 个 insert/update 事件——逐个全量重查 + 万行快照落盘是
+  /// IO 风暴；400ms 窗口内合并为一次刷新。
+  Timer? _observerDebounce;
+
+  /// 自身批量操作后的回环静默窗：本端在操作完成时已本地同步 + 主动重查，
+  /// observer 的回环事件（delete 走精准增量、insert/update 走防抖重载）
+  /// 在窗口内直接忽略，避免同一批变更刷新两遍。
+  DateTime? _selfMutationUntil;
+
+  void _markSelfMutation() {
+    _selfMutationUntil = DateTime.now().add(const Duration(milliseconds: 600));
+  }
+
   /// MediaStore 发生变更时静默刷新当前视图（相册列表或相册内）。
   /// 不触发 loading 闪烁；分页进行中则跳过避免打断。
   void _onMediaStoreChanged(MsChangeEvent event) {
+    final now = DateTime.now();
+    if (_selfMutationUntil != null && now.isBefore(_selfMutationUntil!)) {
+      return; // 自身操作的系统回环，已本地同步
+    }
     if (state.loadingMore) return;
     switch (event.type) {
       case MsChangeType.delete:
@@ -1008,18 +1050,22 @@ class GalleryController extends Notifier<GalleryState> {
       case MsChangeType.insert:
       case MsChangeType.update:
       case MsChangeType.refresh:
-        // 新增/修改/兜底：按当前视图(单一枚举)重载对应第一页/相册数
-        switch (state.view) {
-          case GalleryView.favorites:
-            enterFavorites(silent: true);
-          case GalleryView.trash:
-            enterTrash(silent: true);
-          case GalleryView.bucket:
-            final id = state.bucketId;
-            if (id != null) enterBucket(id, silent: true);
-          case GalleryView.albums:
-            loadBuckets(silent: true);
-        }
+        // 新增/修改/兜底：防抖合并后按当前视图(单一枚举)重载对应第一页/相册数
+        _observerDebounce?.cancel();
+        _observerDebounce = Timer(const Duration(milliseconds: 400), () {
+          if (state.loadingMore) return;
+          switch (state.view) {
+            case GalleryView.favorites:
+              enterFavorites(silent: true);
+            case GalleryView.trash:
+              enterTrash(silent: true);
+            case GalleryView.bucket:
+              final id = state.bucketId;
+              if (id != null) enterBucket(id, silent: true);
+            case GalleryView.albums:
+              loadBuckets(silent: true);
+          }
+        });
         break;
     }
   }

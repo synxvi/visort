@@ -26,6 +26,14 @@ import 'package:visort_flutter/shared/widgets/visort_logo.dart';
 import 'package:visort_flutter/ui/adaptive/windows_keyboard_handler.dart';
 import 'package:visort_flutter/ui/router.dart';
 
+/// Sort 屏解码目标宽度（物理像素）：与 viewer 同源（computeViewerTargetWidth）。
+/// 预览区只有屏幕大小——全分辨率解码（12MP ≈ 48MB ARGB）在键盘连按时
+/// 当前图 + precache 下一张双份解码会瞬间塞满 ImageCache；下采样后 ~7MB/张。
+int _sortTargetWidth(BuildContext context) => computeViewerTargetWidth(
+      MediaQuery.sizeOf(context).width *
+          MediaQuery.devicePixelRatioOf(context),
+    );
+
 class SortScreen extends ConsumerWidget {
   const SortScreen({super.key});
 
@@ -201,7 +209,7 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
       if (session.hasNext) {
         final next = session.images[session.currentIndex + 1];
         if (mounted) {
-          precacheNextImage(context, next);
+          precacheNextImage(context, next, targetWidth: _sortTargetWidth(context));
         }
       }
     } catch (_) {}
@@ -254,7 +262,8 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
                     child: Text(t(ref, 'preview_na'),
                         style: const TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'], color: AppColors.muted)))
                 : Image(
-                    image: buildImageProvider(img),
+                    image: buildImageProvider(img,
+                        targetWidth: _sortTargetWidth(context)),
                     fit: BoxFit.contain,
                     errorBuilder: (ctx, error, stack) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -330,7 +339,7 @@ class _FullscreenImageState extends ConsumerState<_FullscreenImage> {
     final session = ref.read(sessionControllerProvider);
     if (session.hasNext) {
       final next = session.images[session.currentIndex + 1];
-      precacheNextImage(context, next);
+      precacheNextImage(context, next, targetWidth: _sortTargetWidth(context));
     }
   }
 
@@ -364,7 +373,8 @@ class _FullscreenImageState extends ConsumerState<_FullscreenImage> {
               // 全图：保证清晰度 + 动图(GIF)可播放。预览区 padding 已约束图片
               // 不溢出到顶栏，配合 gaplessPlayback + precacheNext 消除切换闪烁。
               : Image(
-                  image: buildImageProvider(img),
+                  image: buildImageProvider(img,
+                      targetWidth: _sortTargetWidth(context)),
                   fit: BoxFit.contain,
                   gaplessPlayback: true,
                   errorBuilder: (ctx, error, stack) {

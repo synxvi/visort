@@ -465,7 +465,7 @@ void main() {
       expect(st.photos.length, 4);
     });
 
-    test('refresh 事件触发当前相册静默重载', () async {
+    test('refresh 事件触发当前相册静默重载（400ms 防抖合并）', () async {
       final ctl = StreamController<MsChangeEvent>();
       final c = ProviderContainer(overrides: [
         mediaStoreChannelProvider.overrideWithValue(fakeChannel),
@@ -480,10 +480,18 @@ void main() {
       final callsBefore = fakeChannel.scanCalls.length;
 
       ctl.add(const MsChangeEvent(MsChangeType.refresh));
+      ctl.add(const MsChangeEvent(MsChangeType.update));
       await Future<void>.delayed(Duration.zero);
 
+      // 防抖窗口内不重查——批量操作触发的 N 个事件合并为一次刷新，
+      // 避免逐个全量重查 + 万行快照落盘的 IO 风暴。
+      expect(fakeChannel.scanCalls.length, callsBefore,
+          reason: '防抖窗口内不应立即重查');
+
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+
       expect(fakeChannel.scanCalls.length, greaterThan(callsBefore),
-          reason: 'refresh 应触发相册重载');
+          reason: '防抖到期后 refresh 应触发相册重载');
     });
   });
 }

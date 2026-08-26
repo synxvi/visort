@@ -302,7 +302,35 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // 路由动画值驱动位移（值驱动对重建免疫）。
     if (status == AnimationStatus.dismissed) {
       _removeChromeEntry();
+      _evictViewedViewerCache();
     }
+  }
+
+  /// 本次浏览已出全图的 id 集合 + 首次全图时算好的目标宽度。
+  /// pop(dismissed)/dispose 时逐个 evict viewer 大图缓存——
+  /// evictViewerImageCache 的设计意图（见其 doc），此前 onFullLoaded 是
+  /// 空回调、零调用接线：每张 ~9.5MB 三级条目会占满 ImageCache、挤掉网格
+  /// 缩略图，表现为「打开关闭几次后滚动变卡」。
+  final _viewedFullIds = <String>{};
+  int? _viewerTargetWidthPx;
+
+  void _onFullImageLoaded(String id) {
+    _viewedFullIds.add(id);
+    // 此时 context 处于活跃生命周期（zoomable_image 全图解码完成回调），
+    // MediaQuery 读取安全；dispose 阶段不可再读 inherited，故提前缓存。
+    _viewerTargetWidthPx ??= computeViewerTargetWidth(
+      MediaQuery.sizeOf(context).width *
+          MediaQuery.devicePixelRatioOf(context),
+    );
+  }
+
+  void _evictViewedViewerCache() {
+    final tw = _viewerTargetWidthPx;
+    if (tw == null || _viewedFullIds.isEmpty) return;
+    for (final id in _viewedFullIds) {
+      evictViewerImageCache(id, tw);
+    }
+    _viewedFullIds.clear();
   }
 
   void _removeChromeEntry() {
@@ -345,6 +373,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
     }
     _routeAnimation?.removeStatusListener(_onRouteAnimationStatus);
     _removeChromeEntry();
+    // opaque:false 的路由 dispose 可能延迟/不触发，dismissed 分支已 evict；
+    // 此处兜底（如直接 remove 路由的场景）。
+    _evictViewedViewerCache();
     isZoomedNotifier.removeListener(_onZoomedForImmersive);
     _pageController.dispose();
     _selectedIndexNotifier.dispose();
@@ -548,6 +579,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
         },
         child: PageView.builder(
           clipBehavior: Clip.none,
+          // 相邻页预 build（±1 页）：ZoomableImage 的 didChangeDependencies
+          // 自然完成预解码，快速连翻不再有糊图期（对标系统相册翻页即现）。
+          allowImplicitScrolling: true,
           itemBuilder: (context, index) {
             final file = _files[index];
             _preloadFiles(index);
@@ -570,7 +604,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
               onSwipeDown: _detailsOpen ? _animateClose : null,
               // 放大后平移到 X 边缘继续拖 → 翻页（photo_view fork onEdgeX）。
               onEdgeX: _handleEdgePage,
-              onFullLoaded: (_) {},
+              onFullLoaded: _onFullImageLoaded,
             );
             final pageContent = GestureDetector(
               onTap: () {
