@@ -87,6 +87,7 @@ class ScanController extends StateNotifier<ScanState> {
       images: result.images,
       folderTemplates: templates,
       prebuiltFolders: prebuiltFolders,
+      classifyMode: profile.classifyMode.name,
     );
 
     state = ScanState(

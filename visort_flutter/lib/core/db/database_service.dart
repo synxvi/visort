@@ -25,7 +25,9 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 ///   v3 (P2): sort_session / sort_image / sort_decision —— 整理会话持久化
 ///           (决策/索引/扫描结果,进程死亡不丢;单活跃会话 id 恒为 1)
 ///   v4 (P3): run_log —— Run 执行历史审计(RunController.run 结束写摘要行)
-const int kDbVersion = 4;
+///   v5:     sort_session.classify_mode —— 会话快照的整理模式;恢复的
+///           会话按快照模式渲染根目录按钮,不再误读当前首页配置
+const int kDbVersion = 5;
 
 final databaseServiceProvider =
     Provider<DatabaseService>((ref) => DatabaseService());
@@ -96,6 +98,11 @@ class DatabaseService {
     if (oldVersion < 4) {
       await _createRunLogTable(db);
     }
+    // v4 → v5: 会话快照的整理模式(恢复会话根目录按钮按快照模式渲染)。
+    if (oldVersion < 5) {
+      await db.execute(
+          'ALTER TABLE sort_session ADD COLUMN classify_mode TEXT');
+    }
   }
 
   /// 建当前版本的全部表(测试的内存库复用同一 schema,保证不漂移)。
@@ -160,7 +167,8 @@ class DatabaseService {
         destination_parent TEXT NOT NULL,
         current_index     INTEGER NOT NULL,
         folder_templates  TEXT NOT NULL,
-        folders           TEXT NOT NULL
+        folders           TEXT NOT NULL,
+        classify_mode     TEXT
       )
     ''');
     await db.execute('''

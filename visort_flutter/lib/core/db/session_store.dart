@@ -72,6 +72,7 @@ class SessionStore {
             for (final f in s.folders)
               {'key': f.key, 'label': f.label, 'path': f.path},
           ]),
+          'classify_mode': s.classifyMode,
         });
         final imgBatch = txn.batch();
         for (var i = 0; i < s.images.length; i++) {
@@ -236,6 +237,8 @@ class SessionStore {
           folderTemplates: folderTemplates,
           folders: folders,
           decisions: decisions,
+          // v5 前的旧会话无此列(null)——UI 回退当前配置判断。
+          classifyMode: head['classify_mode'] as String?,
         ),
         seqById: seqById,
         nextSeq: maxSeq + 1,

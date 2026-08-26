@@ -757,8 +757,20 @@ class _AndroidBottomBar extends ConsumerWidget {
     // toAlbum 模式下目标是已有相册（bucket），不存在「父目录根」概念，
     // 且 destinationParent 被设为 MediaStore authority（非法 RELATIVE_PATH），
     // 选「根目录」会导致 Kotlin update 返回 0 行 → 移动失败。故此模式不显示根目录。
-    final isToAlbum = ref.watch(configProvider
-        .select((c) => c.activeProfileData.classifyMode == ClassifyMode.toAlbum));
+    // 模式取会话快照的 classifyMode（扫描时刻落盘）——恢复的会话不读当前
+    // 首页配置，否则「恢复 toAlbum 会话 + 首页已切回 toNewDir」会错显根目录
+    // 按钮（产生非法 move），反向则丢按钮。旧版会话无快照（null）回退当前配置。
+    final ClassifyMode effectiveMode;
+    final snapshotMode = session.classifyMode == null
+        ? null
+        : ClassifyMode.values.asNameMap()[session.classifyMode];
+    if (snapshotMode != null) {
+      effectiveMode = snapshotMode;
+    } else {
+      effectiveMode = ref.watch(configProvider
+          .select((c) => c.activeProfileData.classifyMode));
+    }
+    final isToAlbum = effectiveMode == ClassifyMode.toAlbum;
     // edge-to-edge：补底部导航栏/手势条高度，让底栏内容不被遮挡、
     // 背景延伸到屏幕物理底边。
     final bottomInset = MediaQuery.viewPaddingOf(context).bottom;

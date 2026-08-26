@@ -60,12 +60,15 @@ class SessionController extends Notifier<SessionState> {
   ///
   /// [prebuiltFolders]：若传入则直接用（安卓 MediaStore 模式，folders 已由 Home 层构建好，
   /// path 存 RELATIVE_PATH）。否则用 destinationParent + folderTemplates 走 computeDestinationFolders（Windows）。
+  /// [classifyMode]：扫描时刻的整理模式（ClassifyMode.name），随会话落盘；
+  /// 恢复的会话按快照模式渲染（根目录按钮显隐），不读当前首页配置。
   void initFromScan({
     required String sourceDir,
     required String destinationParent,
     required List<ImageRef> images,
     required List<FolderTemplate> folderTemplates,
     List<FolderDescriptor>? prebuiltFolders,
+    String? classifyMode,
   }) {
     final folders = prebuiltFolders ??
         _profilesService.computeDestinationFolders(
@@ -78,6 +81,7 @@ class SessionController extends Notifier<SessionState> {
       folderTemplates: folderTemplates,
       folders: folders,
       decisions: {},
+      classifyMode: classifyMode,
     );
     // 新扫描整体覆写旧会话(单活跃模型);序号计数归零。
     _seqById.clear();

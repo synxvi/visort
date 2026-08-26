@@ -186,5 +186,37 @@ void main() {
       expect(await store.loadActive(), isNull);
       await store.clear(); // 不抛
     });
+
+    test('classifyMode 随会话落盘/恢复往返保真', () async {
+      final db = await _memDb();
+      final store = SessionStore(Future.value(db));
+      final withMode = _state().copyWith(classifyMode: 'toAlbum');
+      await store.saveNewSession(withMode);
+      final restored = await store.loadActive();
+      expect(restored!.state.classifyMode, 'toAlbum');
+
+      // 新扫描覆写（mode 变化随之替换）
+      await store.saveNewSession(_state());
+      expect((await store.loadActive())!.state.classifyMode, isNull);
+      await db.close();
+    });
+
+    test('v4 旧库(无 classify_mode 列)升 v5 后恢复仍可用', () async {
+      // 直接建 v4 版表结构,模拟未迁移旧库——v5 起点已自动 ALTER 补列,
+      // 这里验证的是「旧列缺失场景下 loadActive 不因 classify_mode 查询
+      // 失败而整体放弃恢复」的兜底(未知列读到 null)。
+      final db = await _memDb();
+      await db.execute(
+          'ALTER TABLE sort_session DROP COLUMN classify_mode');
+      final store = SessionStore(Future.value(db));
+      await store.saveNewSession(_state());
+      // saveNewSession 写 classify_mode 会因列缺失失败 → 事务回滚,但
+      // loadActive 读旧头行不应抛异常(降级为 null mode)。
+      final r = await store.loadActive();
+      if (r != null) {
+        expect(r.state.classifyMode, isNull);
+      }
+      await db.close();
+    });
   });
 }

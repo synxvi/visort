@@ -86,6 +86,7 @@ class SessionState {
     this.folderTemplates = const [],
     this.folders = const [],
     this.decisions,
+    this.classifyMode,
   });
 
   /// 源目录根标识（Windows=路径 / 安卓=tree URI）
@@ -105,6 +106,12 @@ class SessionState {
   /// 构造侧保证 LinkedHashMap 语义(map literal 默认实现)保持插入顺序，
   /// 撤销时删除最后一个。类型放宽为 Map 便于字面量构造/SQLite 恢复重建。
   final Map<String, Decision>? decisions;
+
+  /// 扫描时刻的整理模式（ClassifyMode.name：'toNewDir'/'toAlbum'）。
+  /// 随会话落盘——恢复的会话用快照模式而非当前首页配置（否则恢复
+  /// toAlbum 会话时根目录按钮会按当前 toNewDir 配置错误出现/消失，
+  /// 见 sort_screen 根目录按钮判断）。null = 旧版会话无此列，UI 回退当前配置。
+  final String? classifyMode;
 
   bool get isEmpty => images.isEmpty;
   int get totalCount => images.length;
@@ -133,6 +140,7 @@ class SessionState {
     List<FolderTemplate>? folderTemplates,
     List<FolderDescriptor>? folders,
     Map<String, Decision>? decisions,
+    String? classifyMode,
   }) {
     return SessionState(
       sourceDir: sourceDir ?? this.sourceDir,
@@ -142,6 +150,7 @@ class SessionState {
       folderTemplates: folderTemplates ?? this.folderTemplates,
       folders: folders ?? this.folders,
       decisions: decisions ?? this.decisions,
+      classifyMode: classifyMode ?? this.classifyMode,
     );
   }
 }

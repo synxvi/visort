@@ -18,6 +18,7 @@ import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/home/home_controller.dart';
+import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/shared/widgets/text_formatters.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 
@@ -154,6 +155,15 @@ class _FolderEditorState extends ConsumerState<FolderEditor> {
   }
 
   Future<void> _removeAt(int idx) async {
+    // 有未完成决策的会话在引用 folders 快照：移除行会让「恢复会话看到的
+    // 目标」与配置脱节（Run 走快照不出错，但配置形同虚设）。先处理会话
+    // （恢复并 Run / 丢弃）再改目标。与安卓 _removeSubDir 守卫同语义。
+    final summary =
+        await ref.read(sessionControllerProvider.notifier).persistedSummary();
+    if (summary != null && summary.decided > 0) {
+      if (mounted) toast(context, t(ref, 'pending_session_guard'));
+      return;
+    }
     // 至少保留一个：目标文件夹预览与 Run 语义都依赖非空 folders，
     // 删空会让右侧预览消失（也过不了 start 校验）。
     if (_templates.length <= 1) {

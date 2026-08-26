@@ -939,9 +939,17 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                         child: _buildBucketList(
                           selectedIds: _targetBucketIds,
                           onToggle: (id) => setState(() {
-                            _targetBucketIds.contains(id)
-                                ? _targetBucketIds.remove(id)
-                                : _targetBucketIds.add(id);
+                            if (_targetBucketIds.contains(id)) {
+                              // 取消勾选 = 移除目标相册：有未完成决策的会话
+                              // 在引用目标快照，同子目录移除一样拦截。
+                              if (_resumeAvailable) {
+                                toast(context, t(ref, 'pending_session_guard'));
+                                return;
+                              }
+                              _targetBucketIds.remove(id);
+                            } else {
+                              _targetBucketIds.add(id);
+                            }
                           }),
                         ),
                       ),
@@ -1505,6 +1513,13 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
 
   /// 删除子目录行（保存被删行数据渲染退场动画，再移除数据）。
   void _removeSubDir(int idx) {
+    // 有未完成决策的会话在引用子目录列表快照：移除行会让「恢复会话看到
+    // 的目标」与首页配置脱节（Run 本身走快照不出错，但用户极易误解为
+    // 配置生效）。先处理会话（恢复并 Run / 丢弃）再改目标。
+    if (_resumeAvailable) {
+      toast(context, t(ref, 'pending_session_guard'));
+      return;
+    }
     if (_subDirs.length <= 1) return;
     final removed = _subDirs[idx];
     _subDirsKey.currentState?.removeItem(

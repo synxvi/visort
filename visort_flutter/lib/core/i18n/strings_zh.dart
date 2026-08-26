@@ -316,5 +316,6 @@ const Map<String, String> stringsZh = {
   'date_today': '今天',
   'date_yesterday': '昨天',
   'keep_one_folder': '至少保留一个目标子目录',
+  'pending_session_guard': '有未完成的整理会话，请先恢复并执行（或丢弃会话）后再修改目标',
   'storage_phone': '手机存储',
 };
