@@ -136,18 +136,18 @@ jobs:
           echo "三包 APK 就绪"
 
       - name: Rename APKs with tag version
-        # app-arm64-v8a-release.apk → visort-v1.3.0-ci6-arm64-v8a.apk（带版本
-        # 便于用户辨认与排查覆盖升级）；universal 特判命名。
+        # app-arm64-v8a-release.apk → visort-v1.3.0-ci7-arm64-v8a.apk（带版本
+        # 便于用户辨认与排查覆盖升级）。universal 单独处理——app-release.apk
+        # 不匹配 app-*-release.apk 的 glob（中间无字符），旧写法漏了它。
         working-directory: visort_flutter/build/app/outputs/flutter-apk
         run: |
+          if [ -f "app-release.apk" ]; then
+            mv "app-release.apk" "visort-${{ github.ref_name }}-universal.apk"
+          fi
           for f in app-*-release.apk; do
             [ -e "$f" ] || continue
-            if [ "$f" = "app-release.apk" ]; then
-              mv "$f" "visort-${{ github.ref_name }}-universal.apk"
-            else
-              abi="${f#app-}"; abi="${abi%-release.apk}"
-              mv "$f" "visort-${{ github.ref_name }}-${abi}.apk"
-            fi
+            abi="${f#app-}"; abi="${abi%-release.apk}"
+            mv "$f" "visort-${{ github.ref_name }}-${abi}.apk"
           done
 
       - name: Upload APK artifacts
