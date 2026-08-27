@@ -34,11 +34,13 @@ android {
         applicationId = "com.synxvi.visort"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        // 显式钉 26（不用工具链默认 24）：scanImages/listBuckets 全链路的
-        // Bundle 版 contentResolver.query 是 API 26+ 方法，minSdk=24 会让
-        // Android 7.x 进相册即 NoSuchMethodError 崩溃。
-        // 与 docs/ANDROID_ROADMAP.md 共识 #11 的决策对齐（曾被默认值静默回退）。
-        minSdk = 26
+        // minSdk 30（Android 11+，2026-08 决策）：放弃 Android 8-10 存量——
+        // Q(29)/pre-Q 的存储授权分支（RecoverableSecurityException 探针、
+        // 直删重放、TRASH/FAVORITE_UNSUPPORTED 降级）从未被真机覆盖且已
+        // 确认含多处缺陷，维护成本大于用户收益（GitHub 分发、无 ≤10 用户）。
+        // 30 同时保证 createTrashRequest/createDeleteRequest/createWriteRequest
+        // 全系可用。历史下限 26 的理由（bundle-query 需 26+）已被 30 覆盖。
+        minSdk = 30
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

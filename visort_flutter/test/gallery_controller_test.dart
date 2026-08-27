@@ -32,6 +32,9 @@ class _FakeMediaStoreChannel extends MediaStoreChannel {
   final Set<String> _deletedIds = {};
   final Set<String> _trashedIds = {};
   final Set<String> _favoriteIds = {};
+  /// 模拟系统级 untrash 静默失败：这些 id 即使恢复弹窗确认后仍保持
+  /// trashed（对默认查询不可见 → exists false）。
+  final Set<String> restoreStuckIds = {};
   /// 模拟 ROM 误报：这些 id 即使 requestDelete 成功 exists 仍返回 true。
   final Set<String> stickyIds = {};
   final List<String> scanCalls = []; // 记录每次 scanImages 的 afterCursor
@@ -132,7 +135,10 @@ class _FakeMediaStoreChannel extends MediaStoreChannel {
 
   @override
   Future<bool> requestRestore(List<String> ids) async {
-    ids.forEach(_trashedIds.remove);
+    for (final id in ids) {
+      if (restoreStuckIds.contains(id)) continue; // 系统 untrash 未生效
+      _trashedIds.remove(id);
+    }
     return true;
   }
 
@@ -148,7 +154,9 @@ class _FakeMediaStoreChannel extends MediaStoreChannel {
 
   @override
   Future<bool> exists(String id) async =>
-      stickyIds.contains(id) || !_deletedIds.contains(id);
+      // 对齐真机语义：trashed 行对默认查询不可见（restorePhotos 复查依赖）
+      !_trashedIds.contains(id) &&
+      (stickyIds.contains(id) || !_deletedIds.contains(id));
 }
 
 MsImageInfo _info(String id, {String bucket = 'b1', int added = 0}) =>
@@ -492,6 +500,37 @@ void main() {
 
       expect(fakeChannel.scanCalls.length, greaterThan(callsBefore),
           reason: '防抖到期后 refresh 应触发相册重载');
+    });
+  });
+
+  group('restorePhotos exists 复查（回收站恢复防御）', () {
+    test('恢复成功：从回收站列表移除并返回 null', () async {
+      fakeChannel._trashedIds.addAll(['1', '2']);
+      await controller.enterTrash();
+      expect(container.read(galleryControllerProvider).photos.length, 2);
+
+      final err = await controller.restorePhotos(['1', '2']);
+
+      expect(err, isNull);
+      expect(container.read(galleryControllerProvider).photos, isEmpty,
+          reason: '恢复成功的应从回收站列表移除');
+    });
+
+    test('系统 untrash 静默失败：保留在列表并报 restore_failed，不再静默吞掉', () async {
+      // 复现真机场景：恢复弹窗已确认（RESULT_OK），但被破坏的 trashed 行
+      // 系统侧未生效——旧行为按成功本地移除 = 照片"静默消失"。
+      fakeChannel._trashedIds.addAll(['1', '2']);
+      fakeChannel.restoreStuckIds.add('1');
+      await controller.enterTrash();
+
+      final err = await controller.restorePhotos(['1', '2']);
+
+      expect(err, 'restore_failed');
+      final photos = container.read(galleryControllerProvider).photos;
+      expect(photos.map((p) => p.id), contains('1'),
+          reason: '未恢复的必须留在回收站列表（可见、可重试）');
+      expect(photos.map((p) => p.id), isNot(contains('2')),
+          reason: '恢复成功的应正常移除');
     });
   });
 }

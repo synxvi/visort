@@ -25,6 +25,9 @@ enum MsErrorCode {
   queryFailed,
   invalidArg,
   deleteCancelled,
+  favoriteCancelled,
+  trashCancelled,
+  restoreCancelled,
   nameExists,
   unknown;
 
@@ -33,6 +36,9 @@ enum MsErrorCode {
         'QUERY_FAILED' => MsErrorCode.queryFailed,
         'INVALID_ARG' => MsErrorCode.invalidArg,
         'DELETE_CANCELLED' => MsErrorCode.deleteCancelled,
+        'FAVORITE_CANCELLED' => MsErrorCode.favoriteCancelled,
+        'TRASH_CANCELLED' => MsErrorCode.trashCancelled,
+        'RESTORE_CANCELLED' => MsErrorCode.restoreCancelled,
         'NAME_EXISTS' => MsErrorCode.nameExists,
         _ => MsErrorCode.unknown,
       };

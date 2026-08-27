@@ -11,12 +11,15 @@
 // __root__ 标签: Python 存中文"根目录"，这里存占位常量，UI 层翻译显示
 
 
+import 'dart:io' show Platform;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/config/profiles_service.dart';
 import 'package:visort_flutter/core/db/database_service.dart';
 import 'package:visort_flutter/core/db/session_store.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
+import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/features/session/session_models.dart';
 
 /// __root__ 决策的 label 占位（UI 层用 i18n root_dir 翻译显示）
@@ -226,7 +229,56 @@ class SessionController extends Notifier<SessionState> {
       ..clear()
       ..addAll(r.seqById);
     _decisionSeq = r.nextSeq;
+    // Android：剔除会话中断期间被移入回收站的图。trash 只能发生在退出
+    // sort 的窗口（相册页手动删除），而会话快照是 trash 之前扫描的——
+    // 不剔除则它仍进决策队列，Run 时对 trashed 行改 RELATIVE_PATH 会破坏
+    // 系统回收站恢复映射（照片恢复后静默消失，真机实证）。已决策的一并
+    // 剔除并作废决策——语义：回收站项不参与最后的 sort（真机复现：已决策
+    // 保留会在 Run 报 1 项 move_failed，用户确认这不是期望行为）。
+    if (Platform.isAndroid) {
+      try {
+        final page = await const MediaStoreChannel()
+            .scanImages(const [], trashedOnly: true, limit: 100000);
+        pruneTrashedPhotos(page.images.map((e) => e.id).toSet());
+      } catch (_) {
+        // 查询失败不阻塞恢复（Kotlin 侧防御仍在，最坏回到旧行为）
+      }
+    }
     return true;
+  }
+
+  /// 从会话队列剔除已被移入回收站的图（恢复会话时调用）——不分已/未
+  /// 决策：已决策的决策一并作废（不参与 Run、undo 不复活），seq 同步
+  /// 清理。校正 currentIndex 并整体覆写落盘（saveNewSession 含决策全量
+  /// 重写，下次 resume 幂等）。
+  void pruneTrashedPhotos(Set<String> trashedIds) {
+    if (trashedIds.isEmpty || state.images.isEmpty) return;
+    var removedBefore = 0; // 剔除发生在 currentIndex 之前的张数
+    final kept = <ImageRef>[];
+    for (var i = 0; i < state.images.length; i++) {
+      final img = state.images[i];
+      if (trashedIds.contains(img.id)) {
+        if (i < state.currentIndex) removedBefore++;
+        continue;
+      }
+      kept.add(img);
+    }
+    if (kept.length == state.images.length) return; // 无可剔除
+    // 决策作废（map 浅拷贝后过滤，不原地改 state 引用）
+    final oldDecisions = state.decisions;
+    Map<String, Decision>? decisions;
+    if (oldDecisions != null) {
+      decisions = {...oldDecisions}..removeWhere((id, _) => trashedIds.contains(id));
+    }
+    for (final id in trashedIds) {
+      _seqById.remove(id);
+    }
+    var newIndex = state.currentIndex - removedBefore;
+    if (newIndex >= kept.length) newIndex = kept.length - 1;
+    if (newIndex < 0) newIndex = 0;
+    state = state.copyWith(
+        images: kept, currentIndex: newIndex, decisions: decisions);
+    _store.saveNewSession(state);
   }
 
   /// 丢弃持久化会话(横条滑除)。不动内存活动会话——清的只是「中断记录」;

@@ -1,6 +1,5 @@
 package com.synxvi.visort.mediastore
 
-import android.app.RecoverableSecurityException
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
@@ -32,7 +31,7 @@ import kotlin.math.min
 //   - scanImages(ids)    : 按 bucket id 列表查询图片
 //   - readMeta(id)       : 单图元信息
 //   - readBytes(id, max) : 读字节流（图片加载用）
-//   - createDeleteRequest(ids) : 构造批量删除 IntentSender（Android 10+ 系统弹窗）
+//   - createDeleteRequest(ids) : 构造批量删除请求（createDeleteRequest 系统弹窗）
 
 private const val TAG = "MsRepository"
 
@@ -44,13 +43,9 @@ class MediaStoreRepository(private val context: Context) {
 
     private val contentResolver: ContentResolver get() = context.contentResolver
 
-    /// 外部存储图片集合 URI
+    /// 外部存储图片集合 URI（minSdk 30：getContentUri 恒可用）
     private val collection: Uri
-        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-        } else {
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        }
+        get() = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
 
     // ──────────── 列出相册 ────────────
 
@@ -82,36 +77,27 @@ class MediaStoreRepository(private val context: Context) {
         }
         val sortDir = if (asc) "ASC" else "DESC"
         try {
-            // 与 scanImages 一致：R+ 用 Bundle query 显式排除回收站项。
+            // 与 scanImages 一致：Bundle query 显式排除回收站项。
             // 旧式 selection 参数在 ColorOS 上对 MANAGE_MEDIA 应用不生效
             // （默认查询含回收站项，导致删除后首页 count/封面不更新）。
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                val bundle = android.os.Bundle().apply {
-                    putString(
-                        android.content.ContentResolver.QUERY_ARG_SQL_SELECTION,
-                        "${MediaStore.Images.Media.IS_TRASHED} = 0"
-                    )
-                    putString(
-                        android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER,
-                        "$sortColumn $sortDir"
-                    )
-                    // MANAGE_MEDIA app 默认查询含回收站项（MATCH_INCLUDE）——
-                    // 必须显式 MATCH_EXCLUDE 才可靠（与回收站视图 MATCH_INCLUDE 对称）。
-                    putInt(
-                        MediaStore.QUERY_ARG_MATCH_TRASHED,
-                        MediaStore.MATCH_EXCLUDE
-                    )
-                }
-                contentResolver.query(collection, projection, bundle, null)?.use { cursor ->
-                    aggregateBuckets(cursor, buckets)
-                }
-            } else {
-                contentResolver.query(
-                    collection, projection, null, null,
+            val bundle = android.os.Bundle().apply {
+                putString(
+                    android.content.ContentResolver.QUERY_ARG_SQL_SELECTION,
+                    "${MediaStore.Images.Media.IS_TRASHED} = 0"
+                )
+                putString(
+                    android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER,
                     "$sortColumn $sortDir"
-                )?.use { cursor ->
-                    aggregateBuckets(cursor, buckets)
-                }
+                )
+                // MANAGE_MEDIA app 默认查询含回收站项（MATCH_INCLUDE）——
+                // 必须显式 MATCH_EXCLUDE 才可靠（与回收站视图 MATCH_INCLUDE 对称）。
+                putInt(
+                    MediaStore.QUERY_ARG_MATCH_TRASHED,
+                    MediaStore.MATCH_EXCLUDE
+                )
+            }
+            contentResolver.query(collection, projection, bundle, null)?.use { cursor ->
+                aggregateBuckets(cursor, buckets)
             }
         } catch (e: Exception) {
             Log.w(TAG, "listBuckets 异常: ${e.message}")
@@ -128,9 +114,8 @@ class MediaStoreRepository(private val context: Context) {
         val idxDateAdded = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
         val idxDateModified = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
         // ColorOS 的 MATCH_TRASHED/selection 对 MANAGE_MEDIA app 不可靠，
-        // 代码级手动跳过回收站行（R+），保证 count/coverId 永远不含回收站项。
-        val idxTrash = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
-            cursor.getColumnIndex(MediaStore.Images.Media.IS_TRASHED) else -1
+        // 代码级手动跳过回收站行，保证 count/coverId 永远不含回收站项。
+        val idxTrash = cursor.getColumnIndex(MediaStore.Images.Media.IS_TRASHED)
         data class Agg(
             val name: String, var count: Int, val coverId: String?,
             var minDateAdded: Long = Long.MAX_VALUE, var maxDateModified: Long = 0L,
@@ -197,14 +182,12 @@ class MediaStoreRepository(private val context: Context) {
             add(MediaStore.Images.Media.HEIGHT)
             // EXIF 方向（0/90/180/270）：HEIC 尺寸复核时交换宽高用（对齐 Q+ 显示尺寸语义）
             add(MediaStore.Images.Media.ORIENTATION)
-            // IS_FAVORITE 仅 Android R+ 存在；低版本不加该列，解析时 getColumnIndex 返回 -1 当 false
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                add(MediaStore.Images.Media.IS_FAVORITE)
-                add(MediaStore.Images.Media.IS_TRASHED)
-                // DATE_EXPIRES：回收站项的过期时间（移入回收站时刻 + 30 天），
-                // 作「删除日期」排序键。仅 R+ 且仅回收站视图使用（dateTrashed 排序）。
-                add(MediaStore.Images.Media.DATE_EXPIRES)
-            }
+            // IS_FAVORITE/IS_TRASHED/DATE_EXPIRES（minSdk 30 恒在）：
+            // 收藏/回收站标记 + 回收站过期时间（移入回收站时刻 + 30 天，
+            // 作「删除日期」排序键，仅回收站视图 dateTrashed 排序使用）。
+            add(MediaStore.Images.Media.IS_FAVORITE)
+            add(MediaStore.Images.Media.IS_TRASHED)
+            add(MediaStore.Images.Media.DATE_EXPIRES)
         }.toTypedArray()
         val sortColumn = when (sortBy) {
             "name" -> MediaStore.Images.Media.DISPLAY_NAME
@@ -222,16 +205,14 @@ class MediaStoreRepository(private val context: Context) {
                 sb.append("${MediaStore.Images.Media.BUCKET_ID} IN ($placeholders)")
                 args.addAll(bucketIds)
             }
-            // 收藏过滤（P1b）：仅查 IS_FAVORITE=1（Android R+）
-            if (favoritesOnly && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // 收藏过滤（P1b）：仅查 IS_FAVORITE=1
+            if (favoritesOnly) {
                 if (sb.isNotEmpty()) sb.append(" AND ")
                 sb.append("${MediaStore.Images.Media.IS_FAVORITE} = 1")
             }
-            // 回收站过滤（P1a）：默认排除(IS_TRASHED=0)；trashedOnly 仅查回收站(IS_TRASHED=1)。Android R+
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                if (sb.isNotEmpty()) sb.append(" AND ")
-                sb.append("${MediaStore.Images.Media.IS_TRASHED} = ${if (trashedOnly) 1 else 0}")
-            }
+            // 回收站过滤（P1a）：默认排除(IS_TRASHED=0)；trashedOnly 仅查回收站(IS_TRASHED=1)
+            if (sb.isNotEmpty()) sb.append(" AND ")
+            sb.append("${MediaStore.Images.Media.IS_TRASHED} = ${if (trashedOnly) 1 else 0}")
             // keyset 游标：解析 "sortValue|id"，构造复合比较
             //   ASC  → (col > ?) OR (col = ? AND _ID > ?)
             //   DESC → (col < ?) OR (col = ? AND _ID < ?)
@@ -275,12 +256,10 @@ class MediaStoreRepository(private val context: Context) {
                 putString(android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sortOrder)
                 // 回收站过滤：trashedOnly 显式包含回收站项（默认 query 排除 IS_TRASHED=1）；
                 // 普通视图显式排除（MANAGE_MEDIA app 默认包含，selection 在 ColorOS 上不可靠）
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    putInt(
-                        MediaStore.QUERY_ARG_MATCH_TRASHED,
-                        if (trashedOnly) MediaStore.MATCH_INCLUDE else MediaStore.MATCH_EXCLUDE
-                    )
-                }
+                putInt(
+                    MediaStore.QUERY_ARG_MATCH_TRASHED,
+                    if (trashedOnly) MediaStore.MATCH_INCLUDE else MediaStore.MATCH_EXCLUDE
+                )
             }
             contentResolver.query(collection, projection, queryBundle, null)?.use { cursor ->
                 val idxId = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
@@ -291,13 +270,10 @@ class MediaStoreRepository(private val context: Context) {
                 val idxDate = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
                 val idxDateModified = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
                 val idxSort = cursor.getColumnIndexOrThrow(sortColumn)
-                val idxFav = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
-                    cursor.getColumnIndex(MediaStore.Images.Media.IS_FAVORITE) else -1
-                val idxTrash = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
-                    cursor.getColumnIndex(MediaStore.Images.Media.IS_TRASHED) else -1
-                // DATE_EXPIRES（回收站删除日期）；非 R+ 或未查该列时 -1
-                val idxDateExpires = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
-                    cursor.getColumnIndex(MediaStore.Images.Media.DATE_EXPIRES) else -1
+                val idxFav = cursor.getColumnIndex(MediaStore.Images.Media.IS_FAVORITE)
+                val idxTrash = cursor.getColumnIndex(MediaStore.Images.Media.IS_TRASHED)
+                // DATE_EXPIRES（回收站删除日期）
+                val idxDateExpires = cursor.getColumnIndex(MediaStore.Images.Media.DATE_EXPIRES)
                 // WIDTH/HEIGHT：标准列（全版本），个别格式/损坏项可能无值（-1 或 null → 0）
                 val idxWidth = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
                 val idxHeight = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
@@ -539,11 +515,10 @@ class MediaStoreRepository(private val context: Context) {
 
     // ──────────── 收藏/取消收藏（P1b）────────────
 
-    /// 构造批量收藏/取消收藏请求（Android R+）。
-    /// favorite=true 收藏，false 取消。返回 IntentSender（系统弹窗确认）；
-    /// <R 返回 null（不支持）。移植自 photo_manager PhotoManagerFavoriteManager。
+    /// 构造批量收藏/取消收藏请求。favorite=true 收藏，false 取消。
+    /// 返回 IntentSender（系统弹窗确认）；空集返回 null。
+    /// 移植自 photo_manager PhotoManagerFavoriteManager。
     fun requestFavorite(ids: List<String>, favorite: Boolean): IntentSender? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
         if (ids.isEmpty()) return null
         val uris = ids.mapNotNull { id ->
             val longId = id.toLongOrNull() ?: return@mapNotNull null
@@ -559,10 +534,9 @@ class MediaStoreRepository(private val context: Context) {
 
     // ──────────── 回收站（P1a）────────────
 
-    /// 构造批量移入回收站请求（Android R+）。返回 IntentSender（系统弹窗确认）；不支持返回 null。
+    /// 构造批量移入回收站请求。返回 IntentSender（系统弹窗确认）；空集返回 null。
     /// 移植自 photo_manager PhotoManagerDeleteManager.moveToTrashInApi30。
     fun requestTrash(ids: List<String>): IntentSender? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
         if (ids.isEmpty()) return null
         val uris = ids.mapNotNull { id ->
             val longId = id.toLongOrNull() ?: return@mapNotNull null
@@ -576,9 +550,8 @@ class MediaStoreRepository(private val context: Context) {
         }
     }
 
-    /// 构造批量从回收站恢复请求（Android R+）。
+    /// 构造批量从回收站恢复请求。
     fun requestRestore(ids: List<String>): IntentSender? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
         if (ids.isEmpty()) return null
         val uris = ids.mapNotNull { id ->
             val longId = id.toLongOrNull() ?: return@mapNotNull null
@@ -824,11 +797,6 @@ class MediaStoreRepository(private val context: Context) {
         dateModifiedMs: Long? = null,
         squareCrop: Boolean = false,
     ): ByteArray {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            // 低版本不支持 loadThumbnail，返回空让 Dart 回退
-            Log.d(TAG, "readThumbnail: API <29，跳过（id=$id）")
-            return ByteArray(0)
-        }
         val longId = id.toLongOrNull() ?: throw MsError.InvalidArg("非法图片 id: $id")
 
         // ① 长图（极端 aspect）专用 centerCrop 解码（见 tallImageCropBytes）。
@@ -1083,21 +1051,22 @@ class MediaStoreRepository(private val context: Context) {
 
     // ──────────── 批量删除（Recovery API） ────────────
 
-    /// 构造批量删除的 IntentSender（Android 10+）。
-    /// 返回 null 表示无需弹窗（老版本直接删除）或构造失败。
-    /// 调用方（Plugin）用 startIntentSenderForResult 启动，系统会弹确认窗。
-    fun createDeleteRequest(ids: List<String>): IntentSender? {
-        if (ids.isEmpty()) return null
+    /// 构造批量删除请求（createDeleteRequest，一次系统弹窗）。
+    /// MANAGE_MEDIA 已授权时先逐 URI 直删（零弹窗），全量成功返回 Done(实际数)；
+    /// 需弹窗返回 NeedsConsent。Done 必须携带真实删除数——此前协议把
+    /// 「已直删完成」误报为 0，Dart 侧把已删文件记为 delete_failed。
+    fun createDeleteRequest(ids: List<String>): DeleteResult {
+        if (ids.isEmpty()) return DeleteResult.Done(0)
         val uris = ids.mapNotNull { id ->
             val longId = id.toLongOrNull() ?: return@mapNotNull null
             ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId)
         }
-        if (uris.isEmpty()) return null
+        if (uris.isEmpty()) return DeleteResult.Done(0)
 
         // MANAGE_MEDIA 已授权 → 尝试直接逐个删除（零弹窗）。
         // 注意：部分 ROM（如 ColorOS）即使 AppOps 报告 mode=ALLOWED，实际 contentResolver.delete
         // 仍会抛 "has no access" 异常。故删除失败的 URI 必须 fallback 到系统弹窗，否则会
-        // 误报成功（return null → Dart 以为删了，实际文件还在）。
+        // 误报成功（Done 全量 → Dart 以为删了，实际文件还在）。
         if (hasManageMediaPermission()) {
             val failed = mutableListOf<Uri>()
             var deleted = 0
@@ -1112,104 +1081,25 @@ class MediaStoreRepository(private val context: Context) {
             }
             Log.i(TAG, "createDeleteRequest (MANAGE_MEDIA): $deleted/${uris.size}, 失败=${failed.size}")
             // 全部删除成功 → 无需弹窗；否则对失败的 URI 走系统弹窗 fallback
-            if (failed.isEmpty()) return null
-            return systemDeleteRequest(failed)
+            if (failed.isEmpty()) return DeleteResult.Done(deleted)
+            return DeleteResult.NeedsConsent(systemDeleteRequest(failed))
         }
 
-        return systemDeleteRequest(uris)
+        return DeleteResult.NeedsConsent(systemDeleteRequest(uris))
     }
 
-    /// Android 10 删除授权的待重放状态（见 systemDeleteRequest Q 分支）：
-    /// Q 的 RecoverableSecurityException 授权只授写权、不执行删除，需在
-    /// RESULT_OK 后由本端对 pending URI 重放 contentResolver.delete。
-    private var qDeletePendingUris: List<Uri> = emptyList()
-    private var qDeletePreCount = 0
-
-    /// 重放 Android 10 授权删除。返回累计成功数（授权前直删 + 授权后重删）；
-    /// 无 pending（非 Q 流程）返回 -1，调用方走 R+ 的原语义。
-    fun redoQDeleteIfPending(): Int {
-        if (qDeletePendingUris.isEmpty()) return -1
-        var deleted = qDeletePreCount
-        for (uri in qDeletePendingUris) {
-            try {
-                contentResolver.delete(uri, null, null)
-                deleted++
-            } catch (e: Exception) {
-                Log.w(TAG, "redoQDelete 失败 $uri: ${e.message}")
-            }
-        }
-        Log.i(TAG, "redoQDeleteIfPending: 授权重放完成, 总成功 $deleted")
-        qDeletePendingUris = emptyList()
-        qDeletePreCount = 0
-        return deleted
+    /// 删除结果：Done=已直接完成（含实际删除数）；NeedsConsent=需系统弹窗。
+    /// 与 [MoveResult] 同构。
+    sealed class DeleteResult {
+        data class Done(val deleted: Int) : DeleteResult()
+        data class NeedsConsent(val intentSender: IntentSender) : DeleteResult()
     }
 
-    /// 是否有 Q 删除待重放（主线程查询用，决定是否下 ioExecutor 重放）。
-    fun hasQDeletePending(): Boolean = qDeletePendingUris.isNotEmpty()
-
-    /// 清空 Q 删除待重放状态（用户取消授权弹窗时调用，防残留）。
-    fun clearQDeletePending() {
-        qDeletePendingUris = emptyList()
-        qDeletePreCount = 0
-    }
-
-    /// 构造系统级删除弹窗（Android 11+ 真删 / Android 10 直删+授权重放 / 9- 直接删）。
+    /// 构造系统级删除弹窗（createDeleteRequest，批量一次弹窗）。
     /// 抽出以便 MANAGE_MEDIA 路径删除失败时复用 fallback。
-    /// Android 10 授权的待重放状态见 [qDeletePendingUris]（授权只授写权不执行删除）。
-    private fun systemDeleteRequest(uris: List<Uri>): IntentSender? {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 11+：createDeleteRequest（批量，一次弹窗）
-            Log.i(TAG, "systemDeleteRequest: Android R+ createDeleteRequest, uris=${uris.size}")
-            MediaStore.createDeleteRequest(contentResolver, uris).intentSender
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Android 10：createTrashRequest/createDeleteRequest 均为 API 30 方法，
-            // Q 上调用直接抛 NoSuchMethodError（是 Error，不被 catch(Exception)
-            // 捕获 → 进程崩溃）。处理方式照搬 buildWriteRequest 的 Q 授权模式
-            //（move 路径已真机验证）：
-            //   1) 自有文件直接 delete 成功；
-            //   2) 他人文件用空 values 集合 update 触发 RecoverableSecurityException
-            //      拿系统授权 IntentSender（一次弹窗）；授权通过后由
-            //      redoQDeleteIfPending() 重放删除（Plugin 在 RESULT_OK 回调里调）。
-            var deleted = 0
-            val needConsent = mutableListOf<Uri>()
-            for (uri in uris) {
-                try {
-                    contentResolver.delete(uri, null, null)
-                    deleted++
-                } catch (e: Exception) {
-                    Log.w(TAG, "Android Q 直接删除失败 $uri: ${e.message}")
-                    needConsent.add(uri)
-                }
-            }
-            Log.i(TAG, "systemDeleteRequest: Android Q 直删 $deleted/${uris.size}, 待授权=${needConsent.size}")
-            if (needConsent.isEmpty()) return null
-            qDeletePendingUris = needConsent
-            qDeletePreCount = deleted
-            return try {
-                // 空 values：只触发权限检查不实际修改（同 buildWriteRequest Q 分支）
-                val cv = android.content.ContentValues()
-                contentResolver.update(
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv,
-                    "${MediaStore.Images.Media._ID} IN (${needConsent.joinToString(",")})", null
-                )
-                null // update 未抛 = 实际已有权限（needConsent 非空时理论上到不了这）
-            } catch (e: RecoverableSecurityException) {
-                e.userAction.actionIntent.intentSender
-            }
-        } else {
-            // Android 9 及以下：直接删（无弹窗）
-            var deleted = 0
-            for (uri in uris) {
-                try {
-                    contentResolver.delete(uri, null, null)
-                    deleted++
-                } catch (e: Exception) {
-                    Log.w(TAG, "直接删除失败 $uri: ${e.message}")
-                }
-            }
-            Log.i(TAG, "Android 9- 直接删除 $deleted/${uris.size}")
-            null
-        }
+    private fun systemDeleteRequest(uris: List<Uri>): IntentSender {
+        Log.i(TAG, "systemDeleteRequest: createDeleteRequest, uris=${uris.size}")
+        return MediaStore.createDeleteRequest(contentResolver, uris).intentSender
     }
 
     // ──────────── 存在性检查 ────────────
@@ -1269,10 +1159,6 @@ class MediaStoreRepository(private val context: Context) {
     fun moveToRelativePath(ids: List<String>, relativePath: String): MoveResult {
         if (ids.isEmpty() || relativePath.isEmpty()) return MoveResult.Done(emptyList())
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            Log.w(TAG, "Android 9- 不支持 RELATIVE_PATH，跳过移动")
-            return MoveResult.Done(emptyList())
-        }
 
         // 先尝试直接逐个 update（自有文件直接成功，无需授权）
         val moved = doMoveToRelativePath(ids, relativePath)
@@ -1286,7 +1172,7 @@ class MediaStoreRepository(private val context: Context) {
         Log.i(TAG, "moveToRelativePath 部分失败 ${moved.size}/${ids.size}（$remaining 张需授权）")
 
         // MANAGE_MEDIA 已授权 → createWriteRequest 免弹窗直接通过，授权后重新 doMove
-        if (hasManageMediaPermission() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        if (hasManageMediaPermission()) {
             val uris = ids.mapNotNull { id ->
                 val longId = id.toLongOrNull() ?: return@mapNotNull null
                 ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId)
@@ -1340,7 +1226,6 @@ class MediaStoreRepository(private val context: Context) {
     /// 必须对每个图片的单独 content URI（content://media/external/images/media/<id>）逐个 update。
     fun doMoveToRelativePath(ids: List<String>, relativePath: String): List<String> {
         if (ids.isEmpty() || relativePath.isEmpty()) return emptyList()
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return emptyList()
 
         val normalizedPath = if (relativePath.endsWith("/")) relativePath else "$relativePath/"
         val moved = mutableListOf<String>()
@@ -1354,7 +1239,14 @@ class MediaStoreRepository(private val context: Context) {
                 val cv = android.content.ContentValues().apply {
                     put(MediaStore.Images.Media.RELATIVE_PATH, normalizedPath)
                 }
-                val rows = contentResolver.update(itemUri, cv, null, null)
+                // 排除回收站项：trashed 行的路径属于系统回收站的恢复映射
+                //（untrash 恒回到 trash 时刻路径）。对它改 RELATIVE_PATH 会把行
+                // 移成病态——恢复通道从此失效（真机实证：恢复弹窗确认后
+                // is_trashed 仍=1，照片静默消失）。selection 过滤后 trashed 行
+                // 返回 0 rows，自然不计入 moved（上层如实记 move_failed）。
+                val rows = contentResolver.update(
+                    itemUri, cv, "${MediaStore.Images.Media.IS_TRASHED} = 0", null
+                )
                 if (rows > 0) moved.add(id)
                 Log.i(TAG, "doMoveToRelativePath item $id: $rows 行 → $normalizedPath")
             } catch (e: Exception) {
@@ -1461,7 +1353,6 @@ class MediaStoreRepository(private val context: Context) {
     /// 新条目 DATE_ADDED 为当前时间（copy 语义即新文件）。
     fun copyToRelativePath(ids: List<String>, relativePath: String): Int {
         if (ids.isEmpty() || relativePath.isEmpty()) return 0
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return 0 // RELATIVE_PATH/IS_PENDING 都要 Q+
 
         val normalizedPath = if (relativePath.endsWith("/")) relativePath else "$relativePath/"
         var success = 0
@@ -1526,22 +1417,7 @@ class MediaStoreRepository(private val context: Context) {
         }
         if (uris.isEmpty()) return null
 
-        // Android 11+：直接用 createWriteRequest 获取批量写权限（最可靠）
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            return MediaStore.createWriteRequest(contentResolver, uris).intentSender
-        }
-
-        // Android 10：尝试 update 触发 RecoverableSecurityException（无 createWriteRequest）
-        // 用空 values + 选中项 selection 来触发权限检查
-        return try {
-            val cv = android.content.ContentValues() // 空 values，update 只触发权限检查不实际修改
-            contentResolver.update(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv,
-                "${MediaStore.Images.Media._ID} IN (${ids.joinToString(",")})", null
-            )
-            null
-        } catch (e: RecoverableSecurityException) {
-            e.userAction.actionIntent.intentSender
-        }
+        // createWriteRequest 获取批量写权限（minSdk 30 恒可用，最可靠）
+        return MediaStore.createWriteRequest(contentResolver, uris).intentSender
     }
 }

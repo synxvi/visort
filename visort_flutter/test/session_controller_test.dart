@@ -203,4 +203,59 @@ void main() {
       expect(stats.undecidedIds.single, 'c.jpg');
     });
   });
+
+  group('pruneTrashedPhotos（恢复会话剔除回收站项）', () {
+    test('剔除当前及之后的未决策 trashed 图，index 不动', () {
+      initSession(); // a/b/c, index=0
+      controller.pruneTrashedPhotos({'b.jpg'});
+      final s = controller.state;
+      expect(s.images.map((i) => i.relativePath), ['a.jpg', 'c.jpg']);
+      expect(s.currentIndex, 0);
+      expect(s.currentImage?.relativePath, 'a.jpg');
+    });
+
+    test('剔除 index 之前的图，index 前移保持指向原图', () {
+      initSession();
+      controller.goToIndex(2); // 指向 c
+      controller.pruneTrashedPhotos({'a.jpg'});
+      final s = controller.state;
+      expect(s.images.map((i) => i.relativePath), ['b.jpg', 'c.jpg']);
+      expect(s.currentIndex, 1, reason: '前面少了一张，index 前移仍指向 c');
+      expect(s.currentImage?.relativePath, 'c.jpg');
+    });
+
+    test('已决策的 trashed 图同样剔除，决策作废', () {
+      initSession();
+      controller.decide(DecisionAction.move, destKey: 'A'); // a 已决策, index=1
+      controller.pruneTrashedPhotos({'a.jpg'});
+      final s = controller.state;
+      expect(s.images.map((i) => i.relativePath), ['b.jpg', 'c.jpg']);
+      expect(s.decisions, isNot(contains('a.jpg')),
+          reason: '决策一并作废，不参与 Run');
+      expect(s.currentIndex, 0, reason: '前面少一张，index 前移');
+      expect(s.currentImage?.relativePath, 'b.jpg');
+    });
+
+    test('剔除后 undo 只作用于存活决策，不复活被作废的', () {
+      initSession();
+      controller.decide(DecisionAction.move, destKey: 'A'); // a, index=1
+      controller.decide(DecisionAction.move, destKey: 'S'); // b, index=2
+      controller.pruneTrashedPhotos({'b.jpg'});
+      expect(controller.state.decisions?.keys, ['a.jpg']);
+      final undone = controller.undo();
+      expect(undone, isTrue);
+      expect(controller.state.decisions, isEmpty);
+      expect(controller.state.currentImage?.relativePath, 'a.jpg');
+    });
+
+    test('剔除后 index 越界则 clamp 到末张', () {
+      initSession();
+      controller.goToIndex(2); // 指向 c（未决策）
+      controller.pruneTrashedPhotos({'c.jpg'});
+      final s = controller.state;
+      expect(s.images.map((i) => i.relativePath), ['a.jpg', 'b.jpg']);
+      expect(s.currentIndex, 1);
+      expect(s.currentImage?.relativePath, 'b.jpg');
+    });
+  });
 }

@@ -740,9 +740,9 @@ class GalleryController extends Notifier<GalleryState> {
   /// 缩略图缓存。返回 null 表示成功，否则返回错误信息。
   ///
   /// 注意：不可盲目信任 requestDelete 的返回值——部分 ROM（如 ColorOS）即使
-  /// AppOps 报告 MANAGE_MEDIA 已授权，实际 contentResolver.delete 仍会失败，
-  /// 但 Kotlin 端旧逻辑会返回 0（误报）。故此处用 exists(id) 二次确认文件是否
-  /// 真的消失，只有确认删除才更新本地 state，避免"缩略图消失但返回又出现"。
+  /// AppOps 报告 MANAGE_MEDIA 已授权，实际 contentResolver.delete 仍会失败。
+  /// Kotlin 端计数误报问题已随 minSdk 30 迁移修复（Done 携带真实删除数），
+  /// exists 二次确认作为防御性 workaround 刻意保留。
   Future<String?> deletePhoto(String id) async {
     try {
       await _channel.requestDelete([id]);
@@ -792,21 +792,32 @@ class GalleryController extends Notifier<GalleryState> {
   }
 
   /// 批量从回收站恢复。成功后本地移除 + 清缓存 + 重查相册列表。
+  ///
+  /// RESULT_OK 只代表用户确认了弹窗，不代表系统 untrash 执行成功（真机
+  /// 实证：路径被破坏的 trashed 行会静默失败）——逐 id exists 复查
+  ///（trashed 行对默认查询不可见），只移除真正恢复的；未恢复的保留在
+  /// 回收站列表并报错，不再静默吞掉。
   Future<String?> restorePhotos(List<String> ids) async {
     if (ids.isEmpty) return null;
-    final idSet = ids.toSet();
     try {
       await _channel.requestRestore(ids);
-      _markSelfMutation();
+      final restored = <String>[];
+      final stuck = <String>[];
       for (final id in ids) {
+        (await _channel.exists(id) ? restored : stuck).add(id);
+      }
+      if (restored.isEmpty) return 'restore_failed';
+      _markSelfMutation();
+      final restoredSet = restored.toSet();
+      for (final id in restored) {
         evictImageCache(id);
       }
-      _applyBucketDeltaBatch(ids, countDelta: 1);
+      _applyBucketDeltaBatch(restored, countDelta: 1);
       state = state.copyWith(
-        photos: state.photos.where((p) => !idSet.contains(p.id)).toList(),
+        photos: state.photos.where((p) => !restoredSet.contains(p.id)).toList(),
       );
       await loadBuckets();
-      return null;
+      return stuck.isEmpty ? null : 'restore_failed';
     } catch (e) {
       return e.toString();
     }

@@ -1,9 +1,7 @@
 package com.synxvi.visort.mediastore
 
 import android.app.Activity
-import android.app.RecoverableSecurityException
 import android.content.Intent
-import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.net.Uri
@@ -204,22 +202,10 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 val pending = pendingDeleteResult ?: return true
                 pendingDeleteResult = null
                 if (resultCode == Activity.RESULT_OK) {
-                    // Android 10：RecoverableSecurityException 授权只授写权，
-                    // 需重放删除；R+ createDeleteRequest 授权即系统直删。
-                    val repo = repository
-                    if (repo != null && repo.hasQDeletePending()) {
-                        // 重放是逐 URI delete 的磁盘 IO，下 ioExecutor
-                        ioExecutor.execute {
-                            val qRedone = repo.redoQDeleteIfPending()
-                            mainHandler.post {
-                                pending.success(if (qRedone >= 0) qRedone else pendingDeleteCount)
-                            }
-                        }
-                    } else {
-                        pending.success(pendingDeleteCount)
-                    }
+                    // minSdk 30：createDeleteRequest 授权即系统直删，
+                    // 全量弹窗成功数 = pendingDeleteCount（发起时锁定的张数）。
+                    pending.success(pendingDeleteCount)
                 } else {
-                    repository?.clearQDeletePending()
                     pending.error(MsError.DeleteCancelled.code, MsError.DeleteCancelled.message, null)
                 }
                 return true
@@ -419,11 +405,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         }
         pendingPermissionResult = result
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                act.requestPermissions(arrayOf(readPermission()), REQUEST_PERMISSION)
-            } else {
-                result.success(true) // 老版本 manifest 声明即授予
-            }
+            act.requestPermissions(arrayOf(readPermission()), REQUEST_PERMISSION)
         } catch (e: Exception) {
             pendingPermissionResult = null
             result.success(false)
@@ -436,9 +418,6 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     private fun handleRequestAccessMediaLocation(result: Result) {
         val act = activity ?: run {
             result.error(MsError.InvalidArg("Activity 未绑定").code, null, null); return
-        }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            result.success(true); return // Q 以下无位置剥离限制
         }
         if (ContextCompat.checkSelfPermission(
                 act.applicationContext,
@@ -593,9 +572,6 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         val repo = requireRepo() ?: run {
             result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            result.error(MsError.FavoriteUnsupported.code, MsError.FavoriteUnsupported.message, null); return
-        }
         @Suppress("UNCHECKED_CAST")
         val ids = (call.argument<List<String>>("ids") ?: emptyList())
         val favorite = call.argument<Boolean>("favorite") ?: true
@@ -631,9 +607,6 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         val repo = requireRepo() ?: run {
             result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            result.error(MsError.TrashUnsupported.code, MsError.TrashUnsupported.message, null); return
-        }
         @Suppress("UNCHECKED_CAST")
         val ids = (call.argument<List<String>>("ids") ?: emptyList())
         if (ids.isEmpty()) {
@@ -648,7 +621,8 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             result.error(MsError.QueryFailed("requestTrash 异常: ${e.message}").code, e.message, null); return
         }
         if (intentSender == null) {
-            result.error(MsError.TrashUnsupported.code, MsError.TrashUnsupported.message, null); return
+            // minSdk 30 下 createTrashRequest 恒可用：null 只会是内部构造异常
+            result.error(MsError.QueryFailed("requestTrash 未返回系统弹窗").code, null, null); return
         }
         pendingTrashResult = result
         try {
@@ -666,9 +640,6 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         val repo = requireRepo() ?: run {
             result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            result.error(MsError.TrashUnsupported.code, MsError.TrashUnsupported.message, null); return
-        }
         @Suppress("UNCHECKED_CAST")
         val ids = (call.argument<List<String>>("ids") ?: emptyList())
         if (ids.isEmpty()) {
@@ -683,7 +654,8 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             result.error(MsError.QueryFailed("requestRestore 异常: ${e.message}").code, e.message, null); return
         }
         if (intentSender == null) {
-            result.error(MsError.TrashUnsupported.code, MsError.TrashUnsupported.message, null); return
+            // minSdk 30 下 createTrashRequest 恒可用：null 只会是内部构造异常
+            result.error(MsError.QueryFailed("requestRestore 未返回系统弹窗").code, null, null); return
         }
         pendingRestoreResult = result
         try {
@@ -858,7 +830,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         //（数百张可达数秒，主线程执行 ANR）——下 ioExecutor；
         // 弹窗启动、pending 置位与 result 回调回主线程。
         ioExecutor.execute {
-            val intentSender: IntentSender? = try {
+            val dr = try {
                 repo.createDeleteRequest(ids)
             } catch (e: Exception) {
                 Log.e(TAG, "handleRequestDelete 异常: ${e.message}", e)
@@ -868,20 +840,23 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 return@execute
             }
             mainHandler.post {
-                Log.i(TAG, "handleRequestDelete: intentSender=${if (intentSender != null) "非null(走系统弹窗)" else "null(直接删/无图)"}")
-                if (intentSender == null) {
-                    // 老版本直接删除已完成，或无图可删
-                    result.success(if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) ids.size else 0)
-                    return@post
-                }
-                // 启动系统弹窗
-                pendingDeleteResult = result
-                pendingDeleteCount = ids.size
-                try {
-                    act.startIntentSenderForResult(intentSender, REQUEST_DELETE, null, 0, 0, 0)
-                } catch (e: Exception) {
-                    pendingDeleteResult = null
-                    result.error(MsError.QueryFailed("启动删除弹窗失败: ${e.message}").code, e.message, null)
+                when (dr) {
+                    is MediaStoreRepository.DeleteResult.Done ->
+                        // 直接完成（MANAGE_MEDIA 全量直删 / 无图可删）：
+                        // 上报实际删除数——此前恒报 0，已删文件被 Dart 记为
+                        // delete_failed（结果报告错误，重跑时文件已不存在）。
+                        result.success(dr.deleted)
+                    is MediaStoreRepository.DeleteResult.NeedsConsent -> {
+                        // 启动系统弹窗
+                        pendingDeleteResult = result
+                        pendingDeleteCount = ids.size
+                        try {
+                            act.startIntentSenderForResult(dr.intentSender, REQUEST_DELETE, null, 0, 0, 0)
+                        } catch (e: Exception) {
+                            pendingDeleteResult = null
+                            result.error(MsError.QueryFailed("启动删除弹窗失败: ${e.message}").code, e.message, null)
+                        }
+                    }
                 }
             }
         }

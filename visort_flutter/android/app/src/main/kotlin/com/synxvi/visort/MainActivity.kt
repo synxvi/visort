@@ -34,10 +34,9 @@ class MainActivity : FlutterActivity() {
      * - statusBarColor 透明后状态栏后面是窗口背景（launch_bg 深色），不回退白闪。
      */
     private fun applyEdgeToEdgeWindow() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            window.isStatusBarContrastEnforced = false
-            window.isNavigationBarContrastEnforced = false
-        }
+        // minSdk 30：isXxxContrastEnforced（API 29+）恒可用
+        window.isStatusBarContrastEnforced = false
+        window.isNavigationBarContrastEnforced = false
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility =
             android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
@@ -114,7 +113,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun applyFixedFrameRate() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        // minSdk 30：Surface.setFrameRate（API 30+）恒可用
         // ⚠️ onAttachedToWindow 时机太早：Flutter embedding 的 FlutterSurfaceView 此时
         // 尚未创建（延迟 attach），findSurfaceView 返回 null → 永不注册 callback →
         // 修复：post 到 decorView 队列末尾，此时 view 树已完整。
@@ -162,32 +161,26 @@ class MainActivity : FlutterActivity() {
             android.util.Log.w("VisortFPS", "setFrameRate failed: $e")
         }
         try {
-            if (Build.VERSION.SDK_INT >= 30) {
-                val surfaceControl = surfaceView.getSurfaceControl()
-                if (surfaceControl != null) {
-                    val t = android.view.SurfaceControl.Transaction()
-                    t.setFrameRate(
-                        surfaceControl,
-                        rate,
-                        Surface.FRAME_RATE_COMPATIBILITY_AT_LEAST,
-                        Surface.CHANGE_FRAME_RATE_ALWAYS,
-                    )
-                    t.apply()
-                    android.util.Log.d("VisortFPS", "surfaceControl.setFrameRate ok")
-                }
+            val surfaceControl = surfaceView.getSurfaceControl()
+            if (surfaceControl != null) {
+                val t = android.view.SurfaceControl.Transaction()
+                t.setFrameRate(
+                    surfaceControl,
+                    rate,
+                    Surface.FRAME_RATE_COMPATIBILITY_AT_LEAST,
+                    Surface.CHANGE_FRAME_RATE_ALWAYS,
+                )
+                t.apply()
+                android.util.Log.d("VisortFPS", "surfaceControl.setFrameRate ok")
             }
         } catch (e: Throwable) {
             android.util.Log.w("VisortFPS", "surfaceControl.setFrameRate failed: $e")
         }
     }
 
-    @Suppress("DEPRECATION")
     private fun pickHighestRefreshRate(): Float? {
-        val display: Display? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            this.display
-        } else {
-            windowManager.defaultDisplay
-        }
+        // minSdk 30：Context.getDisplay 恒可用（旧 defaultDisplay 路径已删）
+        val display: Display? = this.display
         return display?.supportedModes?.maxByOrNull { it.refreshRate }?.refreshRate
     }
 
@@ -263,7 +256,6 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun applyHighRefreshRate() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
         // 取一次 attributes，所有改动后一次性回写，避免中途回写覆盖。
         val lp = window.attributes
 
@@ -283,13 +275,9 @@ class MainActivity : FlutterActivity() {
         window.attributes = lp
     }
 
-    @Suppress("DEPRECATION")
     private fun pickHighRefreshModeId(): Int? {
-        val display: Display? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            this.display
-        } else {
-            windowManager.defaultDisplay
-        }
+        // minSdk 30：Context.getDisplay 恒可用（旧 defaultDisplay 路径已删）
+        val display: Display? = this.display
         val modes = display?.supportedModes ?: return null
         if (modes.isEmpty()) return null
         val current = display.mode ?: return null
