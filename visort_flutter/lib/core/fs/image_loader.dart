@@ -87,10 +87,10 @@ void evictViewerImageCache(String mediaStoreId, int targetWidth) {
   if (!Platform.isAndroid) return;
   final cache = PaintingBinding.instance.imageCache;
   final ref = imageRefFromMediaStoreId(mediaStoreId);
-  // 中间态 768（viewer 渐进层）+ 兼容旧 1024
-  cache.evict(_AndroidThumbnailProvider(ref: ref, size: 768));
-  cache.evict(_AndroidThumbnailProvider(ref: ref, size: 1024));
-  // 全图：无 targetWidth（旧条目）与带 targetWidth（下采样）都清。
+  // viewer 只按 computeViewerTargetWidth（960/动态）解码，从不直接建
+  // 768/1024 条目——旧固定 evict 是空转（Cache.evict 对不存在 key 返回
+  // false，白付 2 次对象构造 + key 哈希）。改只清真实键：无 targetWidth
+  //（旧条目）与带 targetWidth（下采样）都清。
   cache.evict(_AndroidBytesImageProvider(ref: ref));
   cache.evict(_AndroidBytesImageProvider(ref: ref, targetWidth: targetWidth));
 }

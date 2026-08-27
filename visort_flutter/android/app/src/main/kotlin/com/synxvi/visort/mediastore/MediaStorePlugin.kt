@@ -702,9 +702,10 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         // Dart int 经 StandardMessageCodec 解为 Integer/Long（视大小），
         // 统一按 Number 转 Long。
         val mtimes = (call.argument<List<Number>>("mtimes") ?: emptyList()).map { it.toLong() }
+        val mimes = call.argument<List<String>>("mimes") ?: emptyList()
         ioExecutor.execute {
             try {
-                val flags = repo.detectHdrs(ids, mtimes)
+                val flags = repo.detectHdrs(ids, mtimes, mimes)
                 mainHandler.post { result.success(flags) }
             } catch (e: Exception) {
                 mainHandler.post {

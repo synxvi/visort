@@ -43,6 +43,11 @@ class ScanController extends StateNotifier<ScanState> {
   final FileSystemRepository _fs;
   final SessionController _sessionController;
 
+  /// 扫描进行中标志：双击 Start/键盘连按触发的并发 scan 会把状态机弄乱
+  /// （两次 initFromScan 竞争 session）。已在进行直接返回 null 前的 busy
+  /// 提示由 UI 层用 status==scanning 判断；这里拦截第二份扫描。
+  bool _scanning = false;
+
   /// 执行扫描。
   /// [source] 源标识列表（Windows=目录路径 / 安卓=bucket id 列表）
   /// [sourceRoot] ImageRef.root 用的根标识（Windows=source.first / 安卓=MediaStore authority 常量）
@@ -57,44 +62,50 @@ class ScanController extends StateNotifier<ScanState> {
     required AppConfig config,
     List<FolderDescriptor>? prebuiltFolders,
   }) async {
-    state = const ScanState(status: ScanStatus.scanning);
+    if (_scanning) return null; // 重入：第二次点击不重复扫描（首扫进行中）
+    _scanning = true;
+    try {
+      state = const ScanState(status: ScanStatus.scanning);
 
-    final result = await _fs.scanImages(
-      source,
-      recursive: recursive,
-      sortBy: config.photoSortBy == SortBy.dateTrashed
-          ? SortBy.dateCreated // dateTrashed(DATE_EXPIRES) 仅回收站有值；普通相册全 NULL → keyset 游标失效死循环
-          : config.photoSortBy,
-      asc: config.photoSortAsc,
-    );
-    if (result.error != null) {
-      state = ScanState(status: ScanStatus.error, errorKey: result.error);
-      return result.error;
+      final result = await _fs.scanImages(
+        source,
+        recursive: recursive,
+        sortBy: config.photoSortBy == SortBy.dateTrashed
+            ? SortBy.dateCreated // dateTrashed(DATE_EXPIRES) 仅回收站有值；普通相册全 NULL → keyset 游标失效死循环
+            : config.photoSortBy,
+        asc: config.photoSortAsc,
+      );
+      if (result.error != null) {
+        state = ScanState(status: ScanStatus.error, errorKey: result.error);
+        return result.error;
+      }
+      if (result.images.isEmpty) {
+        state = const ScanState(status: ScanStatus.error, errorKey: 'no_images');
+        return 'no_images';
+      }
+
+      // 取当前 active profile 的文件夹模板
+      final profile = config.activeProfileData;
+      final templates = profile.folders;
+
+      // 初始化 session（sourceDir = sourceRoot，run 阶段用它重建 ImageRef.root）
+      _sessionController.initFromScan(
+        sourceDir: sourceRoot,
+        destinationParent: destinationParent,
+        images: result.images,
+        folderTemplates: templates,
+        prebuiltFolders: prebuiltFolders,
+        classifyMode: profile.classifyMode.name,
+      );
+
+      state = ScanState(
+        status: ScanStatus.done,
+        imageCount: result.images.length,
+      );
+      return null;
+    } finally {
+      _scanning = false;
     }
-    if (result.images.isEmpty) {
-      state = const ScanState(status: ScanStatus.error, errorKey: 'no_images');
-      return 'no_images';
-    }
-
-    // 取当前 active profile 的文件夹模板
-    final profile = config.activeProfileData;
-    final templates = profile.folders;
-
-    // 初始化 session（sourceDir = sourceRoot，run 阶段用它重建 ImageRef.root）
-    _sessionController.initFromScan(
-      sourceDir: sourceRoot,
-      destinationParent: destinationParent,
-      images: result.images,
-      folderTemplates: templates,
-      prebuiltFolders: prebuiltFolders,
-      classifyMode: profile.classifyMode.name,
-    );
-
-    state = ScanState(
-      status: ScanStatus.done,
-      imageCount: result.images.length,
-    );
-    return null;
   }
 
   void reset() {

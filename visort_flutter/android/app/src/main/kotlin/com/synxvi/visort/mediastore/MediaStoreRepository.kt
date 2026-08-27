@@ -10,6 +10,7 @@ import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
@@ -128,7 +129,9 @@ class MediaStoreRepository(private val context: Context) {
         while (cursor.moveToNext()) {
             if (idxTrash >= 0 && cursor.getInt(idxTrash) == 1) continue
             val bid = cursor.getString(idxId) ?: continue
-            val bname = cursor.getString(idxName) ?: "根目录"
+            val bname = cursor.getString(idxName) ?: ""
+            // BUCKET_DISPLAY_NAME 为 null（无桶名根级项）→ 空串，Dart 侧
+            // UI 按 i18n 'root_dir' 渲染。不在 Kotlin 产中文文案。
             val coverId = cursor.getString(idxCover)
             val dateAdded = if (cursor.isNull(idxDateAdded)) 0L else cursor.getLong(idxDateAdded) * 1000
             val dateModified = if (cursor.isNull(idxDateModified)) 0L else cursor.getLong(idxDateModified) * 1000
@@ -322,7 +325,7 @@ class MediaStoreRepository(private val context: Context) {
                             val uri = ContentUris.withAppendedId(
                                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
                             )
-                            heicVerifiedSize(uri, orient)?.let { (w, h) ->
+                            heicVerifiedSize(id, uri, orient, dateModified)?.let { (w, h) ->
                                 imgWidth = w; imgHeight = h
                             }
                         }
@@ -431,7 +434,7 @@ class MediaStoreRepository(private val context: Context) {
                     // HEIC 尺寸复核（同 scanImages，单图调用频率低，成本可忽略）
                     if (mime == "image/heic" || mime == "image/heif") {
                         val orient = if (cursor.isNull(6)) 0 else cursor.getInt(6)
-                        heicVerifiedSize(uri, orient)?.let { (w, h) ->
+                        heicVerifiedSize(id, uri, orient, modified)?.let { (w, h) ->
                             width = w; height = h
                         }
                     }
@@ -624,6 +627,11 @@ class MediaStoreRepository(private val context: Context) {
     /// (Q+ 已是旋转后显示尺寸)→ 位图与框宽高比不符。故解码后按 EXIF 方向
     /// Matrix 旋转,返回已是正立位图。网格路径 loadThumbnail 系统自动旋转,不受影响。
     fun readSampledImage(id: String, targetWidth: Int): Map<String, Any> {
+        // 防御性 clamp：targetWidth 由 Dart 侧按屏宽算（无上限），误传/异常
+        // DPR 会解出超大位图（ARGB_8888 ×4 字节/像素，直方 ROM OOM）。
+        // 上限 4096px：解码后 ∈ (target/2, target]，4096 宽 ≈ 33MP 内安全；
+        // 网格/查看器视觉需求最低 960。
+        val safeTarget = targetWidth.coerceIn(960, 4096)
         val longId = id.toLongOrNull() ?: throw MsError.InvalidArg("非法图片 id: $id")
         val uri = ContentUris.withAppendedId(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
@@ -659,7 +667,7 @@ class MediaStoreRepository(private val context: Context) {
         //    例:displayW=3072, target=2880 → sample=2(解码 1536);displayW=4096 → sample=2(解码 2048)。
         val displayW = if (rotationDegrees == 90 || rotationDegrees == 270) origH else origW
         var sampleSize = 1
-        while (displayW / sampleSize > targetWidth) {
+        while (displayW / sampleSize > safeTarget) {
             sampleSize *= 2
         }
         // ③ 按 inSampleSize 解码(只解 origW/sampleSize 像素,native libjpeg-turbo 快)
@@ -714,13 +722,26 @@ class MediaStoreRepository(private val context: Context) {
         }
     }
 
+    /// HEIC 尺寸缓存：id → (dateModified, w, h)。分页/进桶重复扫描时免重复
+    /// 流头读；文件被外部编辑（mtime 变）自动失效。进程内单写（ioExecutor
+    /// 串行化 scan），ConcurrentHashMap 防并发写桶链损坏。
+    private val heicSizeCache =
+        java.util.concurrent.ConcurrentHashMap<String, Triple<Long, Int, Int>>()
+
     /// HEIC/HEIF 尺寸复核：inJustDecodeBounds 读容器真实尺寸。
     ///
     /// BitmapFactory 对 HEIF 读的是 ispe box 原始尺寸（不解析 irot 旋转 box），
     /// 而 MediaStore Q+ 的 WIDTH/HEIGHT 是旋转后显示尺寸——覆盖前按
     /// [orientation]（MediaStore ORIENTATION 列）交换宽高保持同语义。
     /// API<28 无 HEIF 解码支持/损坏/读失败返回 null，调用方保留 MediaStore 原值。
-    private fun heicVerifiedSize(uri: Uri, orientation: Int): Pair<Int, Int>? {
+    private fun heicVerifiedSize(
+        id: String, uri: Uri, orientation: Int, dateModified: Long
+    ): Pair<Int, Int>? {
+        // 缓存命中且 mtime 一致 → 免流头读（REPLACE 范围 mtime 不敏感：文件
+        // 重写必然 mtime 前进；同 mtime 复写不翻尺寸的尾部编辑按稳定处理）。
+        heicSizeCache[id]?.let { (m, w, h) ->
+            if (m == dateModified) return w to h
+        }
         val bounds: Pair<Int, Int> = try {
             val stream = contentResolver.openInputStream(uri) ?: return null
             val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -732,7 +753,9 @@ class MediaStoreRepository(private val context: Context) {
             Log.w(TAG, "heicVerifiedSize 失败: ${e.message}")
             return null
         }
-        return if (orientation == 90 || orientation == 270) bounds.second to bounds.first else bounds
+        val rotated = if (orientation == 90 || orientation == 270) bounds.second to bounds.first else bounds
+        heicSizeCache[id] = Triple(dateModified, rotated.first, rotated.second)
+        return rotated
     }
 
     // ──────────── HDR 检测（JPEG Ultra HDR gainmap）────────────
@@ -774,7 +797,9 @@ class MediaStoreRepository(private val context: Context) {
         }
     }
 
-    /// 带缓存的 HDR 检测入口。
+    /// 带缓存的 HDR 检测入口。mime 门禁在先：非 JPEG（HEIC/PNG/WebP）不读
+    /// 文件头（heic 的 gainmap 需完整 ISO 14496，isHdrJpeg 也不支持）——
+    /// 直接 false，省一次 64KB 流读。
     private fun detectHdr(id: String, mime: String, dateModifiedMs: Long): Boolean {
         if (mime != "image/jpeg") return false
         hdrCache[id]?.let { (m, hdr) ->
@@ -791,9 +816,9 @@ class MediaStoreRepository(private val context: Context) {
     /// 列表。缓存命中零 IO；miss 读文件头并回写缓存。与 scanImages 分离
     /// ——网格数据先上屏，徽标数据到货后由 Dart 侧回填（aves cataloguing
     /// 同语义）。调用方须在后台线程执行（IO 密集）。
-    fun detectHdrs(ids: List<String>, mtimes: List<Long>): List<Boolean> {
+    fun detectHdrs(ids: List<String>, mtimes: List<Long>, mimes: List<String>): List<Boolean> {
         return ids.mapIndexed { i, id ->
-            detectHdr(id, "image/jpeg", mtimes.getOrElse(i) { 0L })
+            detectHdr(id, mimes.getOrElse(i) { "image/jpeg" }, mtimes.getOrElse(i) { 0L })
         }
     }
 
@@ -993,9 +1018,15 @@ class MediaStoreRepository(private val context: Context) {
 
     // ──────────── 缩略图磁盘缓存 ────────────
 
-    /// 命中条件：文件存在 &&（无 dateModifiedMs 校验 或 文件 mtime ≥ 源图 DATE_MODIFIED）。
-    /// 写入时把文件 mtime 对齐源图 DATE_MODIFIED（秒级值×1000 后的毫秒），
-    /// 图片被编辑后 dateModified 增大 → mtime 落后 → 此处判失效删文件重取。
+    /// 命中条件：文件存在 && 文件 mtime（=写入时间）≥ 源图 DATE_MODIFIED。
+    /// 写缓存时 mtime 保持【写入时间】（不 setLastModified 源时间）——这是
+    /// 关键：① 命中校验仍正确（外部编辑后源 dm 前进 > 写入时间 → miss 重解；
+    ///    时钟一致下编辑时刻必然晚于缓存写入时刻）；② trim 按 mtime 排序
+    ///    拿到真实「写入即 LRU」顺序（旧方案 mtime=源时间，老照片刚写入的
+    ///    缓存被当最旧先删——写删循环、缓存形同虚设）。
+    /// 性能红线（拖拽/滑动回归根因）：文件不存在（miss）时【零 DB 查询】
+    /// 直接返回——miss 在滚动高峰是常态，每张一次 contentResolver 单行
+    /// 查询会把缩略图加载拖慢一个数量级。
     private fun readThumbnailCache(
         id: Long,
         width: Int,
@@ -1003,23 +1034,16 @@ class MediaStoreRepository(private val context: Context) {
         dateModifiedMs: Long?,
         crop: Boolean = false,
     ): ByteArray? {
-        // crop=true：长图等比专用子目录（_iso；与 fit-inside 结果及 v1 方形
-        // 裁剪版的 _crop 目录都不混存——v1 缓存命中会把等比管线短路）
         val dirName = if (crop) "${width}x${height}_iso" else "${width}x$height"
         val file = File(File(thumbnailCacheDir, dirName), "$id.jpg")
-        if (!file.exists()) return null
-        var dm = dateModifiedMs
-        if (dm == null) {
-            // Dart 侧全部调用点未传 dateModifiedMs（历史事实）——自查源图
-            // DATE_MODIFIED 列参与校验：旧实现 dm==null 恒命中，外部 app
-            // 编辑照片后磁盘缓存永不失效，网格整会话显示编辑前旧图。
-            // 只在有缓存文件时付一次单行主键查询（<1ms）。
-            dm = queryDateModifiedMs(id)
-        }
+        if (!file.exists()) return null // miss：零查询
+        // 命中再自查源图 dm（此时文件确实存在，一次查询可接受；调用方传
+        // 值时省查询）
+        val dm = dateModifiedMs ?: queryDateModifiedMs(id)
         if (dm == null || file.lastModified() >= dm) {
             return try { file.readBytes() } catch (e: Exception) { null }
         }
-        file.delete()
+        file.delete() // 源图已编辑（dm 前进）：失效重解
         return null
     }
 
@@ -1051,18 +1075,27 @@ class MediaStoreRepository(private val context: Context) {
             val dirName = if (crop) "${width}x${height}_iso" else "${width}x$height"
             val dir = File(thumbnailCacheDir, dirName)
             dir.mkdirs()
+            // 单格式 ${id}.jpg；writeBytes 的 mtime=写入时间（trim LRU 正确，
+            // 命中校验见 readThumbnailCache）。不查 DB：写路径在滚动高峰是
+            // miss 主出口，每张一次 contentResolver 查询放大 IO 延迟。
             val file = File(dir, "$id.jpg")
             file.writeBytes(bytes)
-            // mtime 对齐源图 dateModified（毫秒）→ 命中校验依据；无校验来源时用当前时间
-            file.setLastModified(max(System.currentTimeMillis(), dateModifiedMs ?: 0L))
             trimThumbnailCache()
         } catch (e: Exception) {
             Log.w(TAG, "writeThumbnailCache 失败: ${e.message}")
         }
     }
 
+    /// 最近一次 trim 全目录扫描时刻（ms）。拖拽/滑动高峰每次写缓存都触发
+    /// walkTopDown 是 O(缓存文件数) 全目录遍历——几千文件下每写一张扫一遍
+    /// 直接拖慢滚动。节流：高峰最多 5s 一次（超限清理只延时最多 5s）。
+    private var lastTrimAt = 0L
+
     /// 容量上限：超出按 mtime 删最旧，直到达标。目录小（≤128MB）时跳过扫描。
     private fun trimThumbnailCache() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastTrimAt < TRIM_THROTTLE_MS) return
+        lastTrimAt = now
         // 缩略图实际写入 ${width}x${height}/ 子目录——顶层 listFiles 只见
         // 目录（isFile 过滤后为空、total 恒 0），旧实现永不触发清理、
         // 缓存无界增长。walkTopDown 递归统计并按最旧逐个淘汰。
@@ -1090,6 +1123,9 @@ class MediaStoreRepository(private val context: Context) {
 
         /// 磁盘缩略图缓存容量上限（128MB ≈ 数千张 300~500px JPEG）。
         private const val MAX_THUMBNAIL_CACHE_BYTES = 128L * 1024 * 1024
+
+        /// trim 全目录扫描最小间隔（ms）：写缓存高峰不每次触发 walkTopDown。
+        private const val TRIM_THROTTLE_MS = 5000L
 
         /// EXIF 内嵌缩略图适用的最大请求尺寸（px）：≤128 的占位层请求
         /// 优先走 EXIF（~5ms），更大请求直接 loadThumbnail（EXIF 图糊）。
@@ -1481,9 +1517,11 @@ class MediaStoreRepository(private val context: Context) {
         return success
     }
 
-    /// 构造授权请求的 IntentSender。
-    /// 策略：尝试 update（用真实 RELATIVE_PATH），捕获 SecurityException 获取授权 intentSender。
-    /// 授权通过后，Plugin 会重新调 doMoveToRelativePath 执行移动。
+    /// 构造批量写授权请求的 IntentSender。
+    /// minSdk 30（Android 11+）下 MediaStore.createWriteRequest 恒可用（最
+    /// 可靠路径——旧「update 试探 SecurityException 拿授权」的方案已随
+    /// minSdk 26→30 迁移删除）。授权通过后 Plugin 重新调 doMoveToRelativePath
+    /// 执行移动/重命名。
     @Throws(Exception::class)
     private fun buildWriteRequest(ids: List<String>): IntentSender? {
         // 先构造 URI 列表

@@ -120,7 +120,7 @@ class _PickerRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      bucket.name,
+                      bucket.name.isEmpty ? tr('root_dir') : bucket.name,
                       style: TextStyle(
                         fontFamily: 'Space Mono',
                         height: 1.2,

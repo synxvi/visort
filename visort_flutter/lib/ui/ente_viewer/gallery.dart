@@ -326,6 +326,12 @@ class GalleryState extends State<Gallery> {
                   columns: widget.crossAxisCount,
                   viewportRows: 5,
                   monotonicExtent: true,
+                  // 日期视图行程起点避让顶部吸附组头（+8 间隙）：
+                  // 手柄初始位在第一个日期标题栏下方，不叠加显示。
+                  // 沉浸网格无组头（showGroupHeader=false）传 0 不受影响。
+                  topInset: groups.groupType.showGroupHeader()
+                      ? (groupHeaderExtent ?? 32) + 8
+                      : 0,
                   // 日期视图（aves 拖动体验）：拖动显示当前组日期气泡，
                   // 松手吸附最近分组头；沉浸网格无分组不启用。
                   labelBuilder: groups.groupType.showGroupHeader()
@@ -409,6 +415,13 @@ class _PinnedGroupHeaderState extends State<PinnedGroupHeader>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _setBaseTopBoundary();
+        // 首帧后 controller 已 attach，立即算当前组显示 pinned 头——
+        // _headerHeightNotifier 恒 0.0（测量写入链路已不存在）且同值
+        // 不通知，500ms 刷新路径是死路；ScrollPosition 的 content-
+        // dimensions 通知在部分时序（视图切换重建）下不触发 → 切换
+        // 日期视图后 pinned 头不出现直到滚动（真机实证）。postFrame
+        // 主动调用覆盖全新 element 的所有进入路径。
+        _setCurrentGroupID();
       }
     });
     widget.headerHeightNotifier.addListener(_headerHeightNotifierListener);
@@ -418,6 +431,17 @@ class _PinnedGroupHeaderState extends State<PinnedGroupHeader>
   void didUpdateWidget(covariant PinnedGroupHeader oldWidget) {
     super.didUpdateWidget(oldWidget);
     _setCurrentGroupID();
+    // 视图切换（沉浸↔日期复用同一 Gallery element，didUpdateWidget 换绑
+    // controller）：同步调用时新 controller 尚未 attach 到新 CustomScrollView
+    //（positions.length != 1 → _scrollOffset null → 直接 return），且
+    // headerHeightNotifier 复用旧值不变（ValueNotifier 同值不通知，500ms
+    // 刷新路径也不触发）→ currentGroupId 保持 null，pinned 头直到用户滚动
+    // 才出现（用户反馈：切换日期视图第一行标题栏不与顶栏融合；从首页
+    // 直接进入正常——全新 element 的 postFrame 时机 controller 已 attach）。
+    // postFrame 重试一次，此时 ScrollView 已 attach，header 立即显示。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _setCurrentGroupID();
+    });
   }
 
   @override
@@ -447,8 +471,12 @@ class _PinnedGroupHeaderState extends State<PinnedGroupHeader>
     //（用户报"标题未正确替换"）；提前后 scroll ≥ 组offset-32 即显示当前
     // 组（normalized = scroll-32+64 = scroll+32 ≥ 组offset ⟺ scroll ≥
     // 组offset-32），吸附标题与第一行图片落点一致：不遮挡、同步切换。
+    //
+    // [visort 定制] 顶部 overscroll（刚进相册下拉橡皮筋，Bouncing 允许
+    // pixels<0）按顶部静止态处理（clamp 0）：保持第一组标题显示，
+    // 不随下拉消失（用户反馈"下拉不松手时日期标题栏别消失"）。
     final normalizedScrollOffset =
-        scrollOffset -
+        (scrollOffset < 0 ? 0.0 : scrollOffset) -
         widget.scrollOffsetBase -
         widget.headerHeightNotifier.value! +
         64;

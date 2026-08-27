@@ -17,6 +17,7 @@
 //   每处理一张发 progress，结束发 done
 
 import 'dart:async';
+import 'dart:developer' show log;
 import 'dart:math' as math;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -91,10 +92,13 @@ class RunController {
       // 流兜底：_runInner 任何未捕获异常（channel 层 PlatformException 等）
       // 若以 error 事件终止流，Results 屏 StreamBuilder 会永远停在执行中
       // 且 PopScope 困死用户——捕获后转为正常 done 事件 + run_failed 错误项。
+      // 原始异常打到 dart log（保留可诊断信息），reason 用纯 i18n key——
+      // results_screen 用 t(ref, e.reason) 翻译，拼接串会把 key 破坏直出英文。
+      log('run failed: $e');
       yield RunProgress(
         done: true,
         results: RunResults(
-          errors: [(file: 'run', reason: 'run_failed: $e')],
+          errors: [(file: 'run', reason: 'run_failed')],
         ),
       );
     } finally {

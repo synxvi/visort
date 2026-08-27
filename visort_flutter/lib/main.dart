@@ -12,6 +12,7 @@ import 'dart:io' show Platform;
 
 import 'dart:ui' show PlatformDispatcher;
 
+import 'package:flutter/gestures.dart' show debugPrintGestureArenaDiagnostics, debugPrintRecognizerCallbacksTrace;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,6 +26,13 @@ import 'core/window/window_state.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // [SDH 取证] 手势诊断（临时，排查手柄第一次拖不动）：
+  // arena 裁决序列 + recognizer 回调 trace，release 下同样生效。
+  if (Platform.isAndroid) {
+    debugPrintGestureArenaDiagnostics = true;
+    debugPrintRecognizerCallbacksTrace = true;
+  }
 
   // ──────────── 平台分叉初始化 ────────────
   if (Platform.isWindows) {

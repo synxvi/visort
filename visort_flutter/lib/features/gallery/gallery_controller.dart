@@ -429,6 +429,7 @@ class GalleryController extends Notifier<GalleryState> {
         final hdrs = await _channel.detectHdrs(
           batch.map((p) => p.id).toList(growable: false),
           batch.map((p) => p.dateModifiedMs).toList(growable: false),
+          batch.map((p) => p.mime).toList(growable: false),
         );
         if (token != _loadToken || state.bucketId != bucketId) return;
         final trueIds = <String>{
@@ -610,6 +611,7 @@ class GalleryController extends Notifier<GalleryState> {
   Future<String?> trashPhoto(String id) async {
     try {
       await _channel.requestTrash([id]);
+      _markSelfMutation();
       evictImageCache(id);
       // 先本地同步首页相册列表（count-1 + 封面推进），再移除 photos——
       // 此时 state.photos 仍含该照片，可定位其所属相册（收藏视图亦可用）。
@@ -636,6 +638,7 @@ class GalleryController extends Notifier<GalleryState> {
       // error（查询失败）保守按失败处理（不移除列表项）。
       final st = await _channel.existsStatus(id);
       if (st != MsExistsStatus.found) return 'restore_failed';
+      _markSelfMutation();
       evictImageCache(id);
       _applyBucketDelta(id, countDelta: 1);
       state = state.copyWith(
@@ -661,6 +664,7 @@ class GalleryController extends Notifier<GalleryState> {
       // 必须回滚，否则收藏状态与磁盘脱节。
       final ok = await _channel.requestFavorite([photo.id], newFav);
       if (!ok) throw StateError('favorite_not_confirmed');
+      _markSelfMutation();
       return null;
     } catch (e) {
       // 回滚
@@ -702,6 +706,7 @@ class GalleryController extends Notifier<GalleryState> {
         trashedOnly: view == GalleryView.trash,
       );
       if (token != _loadToken || state.view != view) return;
+      _flushPendingObserverEvents();
       if (page.images.isEmpty) {
         // 无新数据
         state = state.copyWith(
@@ -716,6 +721,7 @@ class GalleryController extends Notifier<GalleryState> {
       );
     } catch (e) {
       if (token != _loadToken) return;
+      _flushPendingObserverEvents();
       state = state.copyWith(loadingMore: false, error: 'load_failed');
     }
   }
@@ -773,6 +779,7 @@ class GalleryController extends Notifier<GalleryState> {
         return 'delete_failed';
       }
       // 确认删除成功：清理该图的所有缓存（缩略图 + 全图）
+      _markSelfMutation();
       evictImageCache(id);
       // 本地同步首页相册列表（count-1 + 封面推进）——删除可发生在回收站
       // 视图（bucketId 为 null），用 state.photos 里该照片定位相册。
@@ -916,6 +923,7 @@ class GalleryController extends Notifier<GalleryState> {
       // false=构造失败/未确认（取消走异常 FavoriteCancelled），回滚乐观更新。
       final ok = await _channel.requestFavorite(ids, favorite);
       if (!ok) throw StateError('favorite_not_confirmed');
+      _markSelfMutation();
       return null;
     } catch (e) {
       state = state.copyWith(
@@ -1052,21 +1060,57 @@ class GalleryController extends Notifier<GalleryState> {
   /// 在窗口内直接忽略，避免同一批变更刷新两遍。
   DateTime? _selfMutationUntil;
 
+  /// 分页（loadMore）期间积压的 observer 事件：delete 记 id 待精准移除，
+  /// 修改类记待重载——loadMore 完成后统一 flush（旧实现直接 return，
+  /// 外部删除的照片在分页完成后残留幽灵项）。
+  final Set<String> _pendingObserverDeletes = {};
+  bool _pendingObserverReload = false;
+
+  /// 首页 count/封面待校准标志：任何视图下外部删除（含其他桶）都影响首页
+  /// 相册数——防抖合并一次 loadBuckets（旧实现只在 albums 视图即时重查，
+  /// bucket/收藏视图下外部删除其他桶照片 → 首页 count 偏大直到下次进桶）。
+  bool _bucketsDirty = false;
+  Timer? _bucketsDebounce;
+
   void _markSelfMutation() {
     _selfMutationUntil = DateTime.now().add(const Duration(milliseconds: 600));
+  }
+
+  /// 防抖校准首页相册列表（count/封面）。自身操作回环的 delete 事件也走
+  /// 这里：本地已同步，silent 重查幂等无害。
+  void _scheduleBucketsRefresh() {
+    if (_bucketsDirty) return;
+    _bucketsDirty = true;
+    _bucketsDebounce?.cancel();
+    _bucketsDebounce = Timer(const Duration(milliseconds: 400), () {
+      _bucketsDirty = false;
+      loadBuckets(silent: true);
+    });
   }
 
   /// MediaStore 发生变更时静默刷新当前视图（相册列表或相册内）。
   /// 不触发 loading 闪烁；分页进行中则跳过避免打断。
   void _onMediaStoreChanged(MsChangeEvent event) {
     final now = DateTime.now();
-    if (_selfMutationUntil != null && now.isBefore(_selfMutationUntil!)) {
-      return; // 自身操作的系统回环，已本地同步
+    final inSelfWindow =
+        _selfMutationUntil != null && now.isBefore(_selfMutationUntil!);
+    // 分页进行中：事件不丢——delete 记 id 待精准移除，修改类记待重载，
+    // loadMore 完成后统一 flush（旧实现直接 return，外部删除的照片在
+    // 分页完成后残留幽灵项）。
+    if (state.loadingMore) {
+      final id = event.id;
+      if (event.type == MsChangeType.delete && id != null) {
+        _pendingObserverDeletes.add(id);
+      } else {
+        _pendingObserverReload = true;
+      }
+      return;
     }
-    if (state.loadingMore) return;
     switch (event.type) {
       case MsChangeType.delete:
-        // 精准删除：从当前列表移除该 id（仅当它在当前视图）
+        // 精准删除：从当前列表移除该 id（仅当它在当前视图）。幂等——自身
+        // 批量操作的 delete 回环（photos 已本地移除）走不到移除分支；
+        // 静默窗不吞 delete（外部删除不该被窗口吞掉，移除后防抖校准首页）。
         final id = event.id;
         if (id != null && state.photos.any((p) => p.id == id)) {
           state = state.copyWith(
@@ -1080,14 +1124,15 @@ class GalleryController extends Notifier<GalleryState> {
                     : b)
                 .toList(),
           );
-        } else if (state.view == GalleryView.albums) {
-          // 首页收到 item 删除 → 静默重查相册数
-          loadBuckets(silent: true);
         }
+        // 任何视图下的外部删除都影响首页 count/封面（含删除其他桶照片、
+        // 回收站视图删除）→ 防抖重查校准。
+        _scheduleBucketsRefresh();
         break;
       case MsChangeType.insert:
       case MsChangeType.update:
       case MsChangeType.refresh:
+        if (inSelfWindow) return; // 自身操作的系统回环，已本地同步
         // 修改类事件：先逐出变更 id 的 ImageCache 条目——外部 app 编辑
         // 照片后 provider key（id,size,squareCrop）不变，ImageCache 命中
         // 旧图；evict 后重扫的新 provider 才重新解码（Kotlin 磁盘缓存
@@ -1110,6 +1155,40 @@ class GalleryController extends Notifier<GalleryState> {
           }
         });
         break;
+    }
+  }
+
+  /// loadMore 完成后处理分页期间积压的 observer 事件：delete 精准移除
+  /// （_applyBucketDelta 同时校准桶 count/封面），修改类触发一次防抖重载。
+  void _flushPendingObserverEvents() {
+    if (_pendingObserverDeletes.isNotEmpty) {
+      final gone = _pendingObserverDeletes.toSet();
+      _pendingObserverDeletes.clear();
+      for (final id in gone) {
+        _applyBucketDelta(id, countDelta: -1);
+      }
+      state = state.copyWith(
+        photos: state.photos.where((p) => !gone.contains(p.id)).toList(),
+      );
+      _scheduleBucketsRefresh();
+    }
+    if (_pendingObserverReload) {
+      _pendingObserverReload = false;
+      _observerDebounce?.cancel();
+      _observerDebounce = Timer(const Duration(milliseconds: 400), () {
+        if (state.loadingMore) return;
+        switch (state.view) {
+          case GalleryView.favorites:
+            enterFavorites(silent: true);
+          case GalleryView.trash:
+            enterTrash(silent: true);
+          case GalleryView.bucket:
+            final id = state.bucketId;
+            if (id != null) enterBucket(id, silent: true);
+          case GalleryView.albums:
+            loadBuckets(silent: true);
+        }
+      });
     }
   }
 

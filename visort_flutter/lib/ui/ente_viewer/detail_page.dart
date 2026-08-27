@@ -28,6 +28,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
+import 'package:visort_flutter/ui/ente_viewer/thumbnail_widget.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart' show configProvider, t;
 import 'package:visort_flutter/core/theme/app_colors.dart';
@@ -1675,7 +1676,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
         .orCancel
         .then((_) {
           if (mounted) _onDetailsDismissed();
-        });
+        })
+        // .orCancel 在面板动画被切（快速关闭重建、翻页重置）时抛 TickerCanceled，
+        // 属预期取消——吞掉避免 unhandled async error 污染日志。
+        .onError((_, __) {});
   }
 
   /// 详情面板关闭收尾。
@@ -1920,6 +1924,21 @@ class _ThumbLineStrip extends StatelessWidget {
           padding: EdgeInsets.symmetric(horizontal: pad),
           itemCount: photos.length,
           itemBuilder: (ctx, i) {
+            // 近邻预载（±2）：快速滑动时条项构建（懒加载）到跟前，缩略图
+            // 已在加载/缓存 → 无明显黑屏（系统相册同款体验）。precacheImage
+            // 幂等：已缓存立即 complete，加载中合并 listener，重复调用无害。
+            for (final n in [i - 2, i - 1, i + 1, i + 2]) {
+              if (n >= 0 && n < photos.length) {
+                precacheImage(
+                  buildThumbnailProvider(
+                    imageRefFromMediaStoreId(photos[n].id),
+                    size: _kThumbLoadSize,
+                    squareCrop: true,
+                  ),
+                  ctx,
+                );
+              }
+            }
             Widget item = _buildStripItem(
               photos[i],
               centerIndex,
@@ -1991,14 +2010,28 @@ Widget _buildStripItem(
                   border: isCenter
                       ? Border.all(color: AppColors.text, width: 1.5)
                       : null,
-                  image: DecorationImage(
-                    image: buildThumbnailProvider(
-                      imageRefFromMediaStoreId(info.id),
-                      size: _kThumbLoadSize,
-                      squareCrop: true, // 方形 cover item
-                    ),
-                    fit: BoxFit.cover,
+                ),
+                // Image + frameBuilder 占位：旧 DecorationImage 在未加载帧
+                // 渲染空白（黑屏）；frameBuilder 首帧前垫占位色块，加载完
+                // 渐入，快速滑动不再闪黑。
+                child: Image(
+                  image: buildThumbnailProvider(
+                    imageRefFromMediaStoreId(info.id),
+                    size: _kThumbLoadSize,
+                    squareCrop: true, // 方形 cover item
                   ),
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  frameBuilder: (c, child, frame, wasSync) {
+                    if (wasSync || frame != null) return child;
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        ThumbnailPlaceHolder(),
+                        child,
+                      ],
+                    );
+                  },
                 ),
               ),
             ),

@@ -558,6 +558,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
         _photoViewController.scale != null;
     if (!shouldFixPosition) return;
     final prevImageInfo = await _resolveImageInfo(previewImageProvider);
+    if (!mounted) return; // await 期间 dispose：下文重建 controller/订阅已无意义
     final finalImageInfo = await _resolveImageInfo(finalImageProvider);
     final previousScale = _photoViewController.scale!;
     final previousRelativeScale = _initialScale != null && _initialScale! > 0

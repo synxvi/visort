@@ -121,18 +121,24 @@ class HomeController {
   /// 对应前端 KEY_ORDER（index.html:1258）
   static const keyOrder = 'ASDFQWER1234';
 
-  String allocateKey(List<FolderTemplate> existing) {
-    final used = existing.map((e) => e.key.toUpperCase()).toSet();
-    // 保留键（action keys + space）也算占用，但此处仅知道 folder keys，
-    // action key 冲突由 updateActionKeys 兜底；这里只避免 folder 间冲突
-    for (final k in keyOrder.split('')) {
-      if (!used.contains(k)) return k;
-    }
-    // 回退 A-Z 剩余
-    for (var code = 65; code <= 90; code++) {
-      final k = String.fromCharCode(code);
-      if (!used.contains(k)) return k;
-    }
-    return '?';
+  String allocateKey(List<FolderTemplate> existing) =>
+      allocateFolderKey(existing);
+}
+
+/// 顶层纯函数：新增文件夹时自动分配快捷键。实例方法委托此函数——
+/// 纯逻辑便于单测（HomeController 依赖 WidgetRef，构造需 widget 上下文）。
+/// 按 [HomeController.keyOrder]='ASDFQWER1234' 取未占用，回退 A-Z 剩余。
+String allocateFolderKey(List<FolderTemplate> existing) {
+  final used = existing.map((e) => e.key.toUpperCase()).toSet();
+  // 保留键（action keys + space）也算占用，但此处仅知道 folder keys，
+  // action key 冲突由 updateActionKeys 兜底；这里只避免 folder 间冲突
+  for (final k in HomeController.keyOrder.split('')) {
+    if (!used.contains(k)) return k;
   }
+  // 回退 A-Z 剩余
+  for (var code = 65; code <= 90; code++) {
+    final k = String.fromCharCode(code);
+    if (!used.contains(k)) return k;
+  }
+  return '?';
 }

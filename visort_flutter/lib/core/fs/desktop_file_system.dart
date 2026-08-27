@@ -14,6 +14,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:visort_flutter/core/config/models.dart';
+import 'package:visort_flutter/core/i18n/i18n.dart';
 
 import 'file_system_repository.dart';
 import 'image_ref.dart';
@@ -25,7 +26,7 @@ class DesktopFileSystem implements FileSystemRepository {
   Future<List<String>> pickDirectories() async {
     // file_picker 12：getDirectoryPath 改静态方法（原 FilePicker.platform 已移除）
     final result = await FilePicker.getDirectoryPath(
-      dialogTitle: 'Select directory',
+      dialogTitle: tr('select_directory'),
     );
     // 单目录包成单元素 list（用户取消返回空 list）
     return result == null ? const [] : [result];

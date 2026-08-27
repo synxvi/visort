@@ -176,6 +176,7 @@ const Map<String, String> stringsEn = {
   // ───────── Sort ─────────
   'move_to': 'Move to →',
   'root_dir': 'Root',
+  'select_directory': 'Select directory',
   'resume_btn': 'Resume',
   'resume_found_title': 'Unfinished session found',
   'resume_found_body_a': 'Total ',

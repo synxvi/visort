@@ -269,7 +269,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       result.add(
         FolderDescriptor(
           key: keyIdx < _keyOrder.length ? _keyOrder[keyIdx] : '?',
-          label: bucket.name,
+          label: bucket.name.isEmpty ? t(ref, 'root_dir') : bucket.name,
           path: relPath ?? 'Pictures/${bucket.name}',
         ),
       );
@@ -1990,7 +1990,9 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            widget.bucket.name,
+                            widget.bucket.name.isEmpty
+                                ? tr('root_dir')
+                                : widget.bucket.name,
                             style: TextStyle(
                               fontFamily: 'Space Mono',
                               height: 1.2,
@@ -2227,7 +2229,9 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
             onTap: _openAlbum,
             behavior: HitTestBehavior.opaque,
             child: Text(
-              widget.bucket.name,
+              widget.bucket.name.isEmpty
+                  ? tr('root_dir')
+                  : widget.bucket.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(

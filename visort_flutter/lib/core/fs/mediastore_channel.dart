@@ -394,12 +394,15 @@ class MediaStoreChannel {
 
   /// 批量 HDR 检测（后台补测通道，Kotlin ioExecutor 读文件头 + 进程内
   /// 缓存）。与 scanImages 分离：网格先上屏，徽标数据到货后回填。
-  /// [ids]/[mtimes] 并行数组，返回同序布尔列表。
-  Future<List<bool>> detectHdrs(List<String> ids, List<int> mtimes) async {
+  /// [ids]/[mtimes]/[mimes] 并行数组，返回同序布尔列表。mimes 供 Kotlin
+  /// mime 门禁——非 JPEG（HEIC/PNG 等）直接 false，不白读文件头 64KB。
+  Future<List<bool>> detectHdrs(
+      List<String> ids, List<int> mtimes, List<String> mimes) async {
     try {
       final raw = await _channel.invokeMethod<List<dynamic>>('detectHdrs', {
         'ids': ids,
         'mtimes': mtimes,
+        'mimes': mimes,
       });
       return (raw ?? const []).map((e) => e == true).toList();
     } on PlatformException catch (e) {

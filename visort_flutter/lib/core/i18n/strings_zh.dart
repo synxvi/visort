@@ -171,6 +171,7 @@ const Map<String, String> stringsZh = {
   // ───────── Sort ─────────
   'move_to': '移动到 →',
   'root_dir': '根目录',
+  'select_directory': '选择目录',
   'resume_btn': '继续',
   'resume_found_title': '发现未完成的整理',
   'resume_found_body_a': '共 ',
