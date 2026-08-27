@@ -219,6 +219,7 @@ class GalleryController extends Notifier<GalleryState> {
       _changeSub?.cancel();
       _changeSub = null;
       _observerDebounce?.cancel();
+      _bucketsDebounce?.cancel();
       for (final t in _snapshotFlushTimers.values) {
         t.cancel();
       }
