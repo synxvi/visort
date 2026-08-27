@@ -198,11 +198,17 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
     _loadMeta(img);
   }
 
+  /// 元信息竞态守卫：键盘连按快速翻图时旧图 readMeta 晚归会覆盖新图
+  /// （photo_details_sheet 7ec73b7 同款 bug 的漏改点）。
+  int _loadGeneration = 0;
+
   void _loadMeta(ImageRef? img) async {
     if (img == null) return;
     final fs = ref.read(fileSystemRepositoryProvider);
+    final gen = ++_loadGeneration;
     try {
       final meta = await fs.readMeta(img);
+      if (gen != _loadGeneration) return; // 已翻页，旧结果作废
       if (mounted) setState(() => _meta = meta);
       // 预加载下一张（跨平台）
       final session = ref.read(sessionControllerProvider);
@@ -405,12 +411,16 @@ class _AndroidTopInfo extends ConsumerStatefulWidget {
 class _AndroidTopInfoState extends ConsumerState<_AndroidTopInfo> {
   ImageMeta? _meta;
   String? _currentImgId;
+  /// 同 _ImageAreaState._loadMeta 的竞态守卫（generation）。
+  int _loadGeneration = 0;
 
   void _loadMeta(ImageRef? img) async {
     if (img == null) return;
     final fs = ref.read(fileSystemRepositoryProvider);
+    final gen = ++_loadGeneration;
     try {
       final meta = await fs.readMeta(img);
+      if (gen != _loadGeneration) return; // 已翻页，旧结果作废
       if (mounted) setState(() => _meta = meta);
     } catch (_) {}
   }

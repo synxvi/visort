@@ -87,6 +87,7 @@ class SessionState {
     this.folders = const [],
     this.decisions,
     this.classifyMode,
+    this.appliedIds = const {},
   });
 
   /// 源目录根标识（Windows=路径 / 安卓=tree URI）
@@ -112,6 +113,13 @@ class SessionState {
   /// toAlbum 会话时根目录按钮会按当前 toNewDir 配置错误出现/消失，
   /// 见 sort_screen 根目录按钮判断）。null = 旧版会话无此列，UI 回退当前配置。
   final String? classifyMode;
+
+  /// Run 已成功执行的决策 fileId 集（moved+deleted）。Run 完成后回写，
+  /// Review 重跑时跳过——已执行项重放会因源已不存在误报
+  /// move_failed/source_missing（评审 P2）。**纯内存不落盘**：重启后
+  /// 恢复的会话 applied 为空，重跑行为回退旧语义（可接受：同会话
+  /// Results→Review→Run 是主路径；避免 DB schema 变更风险）。
+  final Set<String> appliedIds;
 
   bool get isEmpty => images.isEmpty;
   int get totalCount => images.length;
@@ -141,6 +149,7 @@ class SessionState {
     List<FolderDescriptor>? folders,
     Map<String, Decision>? decisions,
     String? classifyMode,
+    Set<String>? appliedIds,
   }) {
     return SessionState(
       sourceDir: sourceDir ?? this.sourceDir,
@@ -151,6 +160,7 @@ class SessionState {
       folders: folders ?? this.folders,
       decisions: decisions ?? this.decisions,
       classifyMode: classifyMode ?? this.classifyMode,
+      appliedIds: appliedIds ?? this.appliedIds,
     );
   }
 }

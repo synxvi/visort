@@ -248,10 +248,10 @@ class GalleryController extends Notifier<GalleryState> {
         asc: state.photoSortAsc,
       );
       if (buckets.isEmpty) {
-        state = state.copyWith(buckets: const []);
+        state = state.copyWith(buckets: const [], clearError: true);
         return;
       }
-      state = state.copyWith(buckets: buckets);
+      state = state.copyWith(buckets: buckets, clearError: true);
     } catch (e) {
       state = state.copyWith(error: 'load_failed');
     }
@@ -373,6 +373,7 @@ class GalleryController extends Notifier<GalleryState> {
       nextCursor: page.nextCursor,
       loadingMore: false,
       firstPageLoaded: true,
+      clearError: true,
     );
     _putSnapshot(bucketId,
         _BucketSnapshot(page.images, page.nextCursor,
@@ -619,7 +620,7 @@ class GalleryController extends Notifier<GalleryState> {
       await loadBuckets();
       return null;
     } catch (e) {
-      return e.toString();
+      return _cancelKeyOrRaw(e);
     }
   }
 
@@ -628,6 +629,13 @@ class GalleryController extends Notifier<GalleryState> {
   Future<String?> restorePhoto(String id) async {
     try {
       await _channel.requestRestore([id]);
+      // RESULT_OK 后 exists 复查（对齐批量 restorePhotos 的防御）：trashed
+      // 行对默认查询不可见——仍 false 说明系统 untrash 未生效（恢复映射
+      // 断裂的病态行），不能当成功移出列表（否则照片从回收站静默消失）。
+      // 三态复查：found=恢复成功；notFound（仍 trashed）=恢复未生效；
+      // error（查询失败）保守按失败处理（不移除列表项）。
+      final st = await _channel.existsStatus(id);
+      if (st != MsExistsStatus.found) return 'restore_failed';
       evictImageCache(id);
       _applyBucketDelta(id, countDelta: 1);
       state = state.copyWith(
@@ -636,7 +644,7 @@ class GalleryController extends Notifier<GalleryState> {
       await loadBuckets();
       return null;
     } catch (e) {
-      return e.toString();
+      return _cancelKeyOrRaw(e);
     }
   }
 
@@ -649,7 +657,10 @@ class GalleryController extends Notifier<GalleryState> {
           .toList(),
     );
     try {
-      await _channel.requestFavorite([photo.id], newFav);
+      // 返回 false=构造失败/未确认（取消走异常 FavoriteCancelled）——
+      // 必须回滚，否则收藏状态与磁盘脱节。
+      final ok = await _channel.requestFavorite([photo.id], newFav);
+      if (!ok) throw StateError('favorite_not_confirmed');
       return null;
     } catch (e) {
       // 回滚
@@ -658,7 +669,7 @@ class GalleryController extends Notifier<GalleryState> {
             .map((p) => p.id == photo.id ? _copyWithFavorite(p, !newFav) : p)
             .toList(),
       );
-      return e.toString();
+      return _cancelKeyOrRaw(e);
     }
   }
 
@@ -675,6 +686,10 @@ class GalleryController extends Notifier<GalleryState> {
     if (view == GalleryView.albums || state.loadingMore || cursor == null) {
       return;
     }
+    // 竞态守卫：await 期间用户可能切桶/切视图（enter* 会 ++_loadToken 并重写
+    // photos）——旧视图的第二页返回后若无条件追加，会把 A 桶的照片拼进
+    // B 桶网格并用 A 的游标覆盖 nextCursor。与 enter* 同款 token 校验。
+    final token = _loadToken;
     state = state.copyWith(loadingMore: true);
     try {
       final page = await _channel.scanImages(
@@ -686,17 +701,21 @@ class GalleryController extends Notifier<GalleryState> {
         favoritesOnly: view == GalleryView.favorites,
         trashedOnly: view == GalleryView.trash,
       );
+      if (token != _loadToken || state.view != view) return;
       if (page.images.isEmpty) {
         // 无新数据
-        state = state.copyWith(loadingMore: false, nextCursor: null);
+        state = state.copyWith(
+            loadingMore: false, nextCursor: null, clearError: true);
         return;
       }
       state = state.copyWith(
         photos: [...state.photos, ...page.images],
         loadingMore: false,
         nextCursor: page.nextCursor,
+        clearError: true,
       );
     } catch (e) {
+      if (token != _loadToken) return;
       state = state.copyWith(loadingMore: false, error: 'load_failed');
     }
   }
@@ -746,9 +765,11 @@ class GalleryController extends Notifier<GalleryState> {
   Future<String?> deletePhoto(String id) async {
     try {
       await _channel.requestDelete([id]);
-      // 二次确认：文件是否真的被删除（防御 ROM 误报）
-      if (await _channel.exists(id)) {
-        // 文件仍在 → 删除未生效，不更新本地 state
+      // 二次确认：文件是否真的被删除（防御 ROM 误报）。三态——
+      // found=仍在（未生效）；notFound=已消失；error=查询失败保守
+      // 按"未确认"处理（旧吞错把查询失败当"已删除"，本地列表误移除）。
+      final st = await _channel.existsStatus(id);
+      if (st != MsExistsStatus.notFound) {
         return 'delete_failed';
       }
       // 确认删除成功：清理该图的所有缓存（缩略图 + 全图）
@@ -763,11 +784,26 @@ class GalleryController extends Notifier<GalleryState> {
       await loadBuckets();
       return null;
     } catch (e) {
-      return e.toString();
+      return _cancelKeyOrRaw(e);
     }
   }
 
   // ───────────────────────── 批量操作 ─────────────────────────
+
+  /// 用户取消系统弹窗（正常动作，非失败）→ 类型化 i18n key；其余异常原样
+  /// 串。调用方对 *_cancelled 静默（用户主动取消），对失败 key/原文走
+  /// toast。旧实现取消与失败混在 e.toString() 里，UI 统一误报
+  /// 「回收站需要 Android 10+」（minSdk 30 下永假）。
+  String _cancelKeyOrRaw(Object e) {
+    if (e is! MsException) return e.toString();
+    return switch (e.code) {
+      MsErrorCode.trashCancelled => 'trash_cancelled',
+      MsErrorCode.deleteCancelled => 'delete_cancelled',
+      MsErrorCode.favoriteCancelled => 'favorite_cancelled',
+      MsErrorCode.restoreCancelled => 'restore_cancelled',
+      _ => e.toString(),
+    };
+  }
 
   /// 批量移入回收站（一次系统弹窗确认全部）。
   /// 成功后本地移除全部 + 清缓存 + 重查相册列表。返回 null 成功，否则错误信息。
@@ -787,7 +823,7 @@ class GalleryController extends Notifier<GalleryState> {
       await loadBuckets();
       return null;
     } catch (e) {
-      return e.toString();
+      return _cancelKeyOrRaw(e);
     }
   }
 
@@ -804,7 +840,10 @@ class GalleryController extends Notifier<GalleryState> {
       final restored = <String>[];
       final stuck = <String>[];
       for (final id in ids) {
-        (await _channel.exists(id) ? restored : stuck).add(id);
+        // found=已恢复；notFound/error 都保守留列表（error 不可当"未恢复"
+        // 证据删除，但也不可当"已恢复"移除）。
+        final st = await _channel.existsStatus(id);
+        (st == MsExistsStatus.found ? restored : stuck).add(id);
       }
       if (restored.isEmpty) return 'restore_failed';
       _markSelfMutation();
@@ -819,7 +858,7 @@ class GalleryController extends Notifier<GalleryState> {
       await loadBuckets();
       return stuck.isEmpty ? null : 'restore_failed';
     } catch (e) {
-      return e.toString();
+      return _cancelKeyOrRaw(e);
     }
   }
 
@@ -833,10 +872,12 @@ class GalleryController extends Notifier<GalleryState> {
       final gone = <String>[];
       final stuck = <String>[];
       for (final id in ids) {
-        if (await _channel.exists(id)) {
-          stuck.add(id);
-        } else {
+        final st = await _channel.existsStatus(id);
+        // notFound=已删除；found/error 都保守留列表（error 不可当删除证据）。
+        if (st == MsExistsStatus.notFound) {
           gone.add(id);
+        } else {
+          stuck.add(id);
         }
       }
       if (gone.isEmpty) return 'delete_failed';
@@ -852,32 +893,39 @@ class GalleryController extends Notifier<GalleryState> {
       await loadBuckets();
       return stuck.isEmpty ? null : 'delete_failed';
     } catch (e) {
-      return e.toString();
+      return _cancelKeyOrRaw(e);
     }
   }
 
-  /// 批量设置收藏状态（乐观更新，失败回滚——批量取消收藏时全部原值一致，
-  /// 回滚为取反即可）。
+  /// 批量设置收藏状态（乐观更新，失败回滚）。回滚按原值快照恢复——
+  /// 混合选中集（部分已收藏）下旧「!favorite 取反」会把原本已收藏的
+  /// 项翻成未收藏（与磁盘脱节直到下次重扫）；UI 允许混合集触发本操作。
   Future<String?> setFavorites(List<String> ids, bool favorite) async {
     if (ids.isEmpty) return null;
     final idSet = ids.toSet();
+    final originFavById = {
+      for (final p in state.photos)
+        if (idSet.contains(p.id)) p.id: p.isFavorite
+    };
     state = state.copyWith(
       photos: state.photos
           .map((p) => idSet.contains(p.id) ? _copyWithFavorite(p, favorite) : p)
           .toList(),
     );
     try {
-      await _channel.requestFavorite(ids, favorite);
+      // false=构造失败/未确认（取消走异常 FavoriteCancelled），回滚乐观更新。
+      final ok = await _channel.requestFavorite(ids, favorite);
+      if (!ok) throw StateError('favorite_not_confirmed');
       return null;
     } catch (e) {
-      // 回滚
       state = state.copyWith(
         photos: state.photos
-            .map((p) =>
-                idSet.contains(p.id) ? _copyWithFavorite(p, !favorite) : p)
+            .map((p) => idSet.contains(p.id)
+                ? _copyWithFavorite(p, originFavById[p.id] ?? !favorite)
+                : p)
             .toList(),
       );
-      return e.toString();
+      return _cancelKeyOrRaw(e);
     }
   }
 
@@ -1040,6 +1088,11 @@ class GalleryController extends Notifier<GalleryState> {
       case MsChangeType.insert:
       case MsChangeType.update:
       case MsChangeType.refresh:
+        // 修改类事件：先逐出变更 id 的 ImageCache 条目——外部 app 编辑
+        // 照片后 provider key（id,size,squareCrop）不变，ImageCache 命中
+        // 旧图；evict 后重扫的新 provider 才重新解码（Kotlin 磁盘缓存
+        // 已自查 DATE_MODIFIED 同步失效）。insert 无旧缓存，evict 空转无害。
+        if (event.id != null) evictImageCache(event.id!);
         // 新增/修改/兜底：防抖合并后按当前视图(单一枚举)重载对应第一页/相册数
         _observerDebounce?.cancel();
         _observerDebounce = Timer(const Duration(milliseconds: 400), () {

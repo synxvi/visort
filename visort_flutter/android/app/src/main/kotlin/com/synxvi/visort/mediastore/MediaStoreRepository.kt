@@ -100,7 +100,11 @@ class MediaStoreRepository(private val context: Context) {
                 aggregateBuckets(cursor, buckets)
             }
         } catch (e: Exception) {
+            // 上抛而非吞掉返回空列表：空列表会被 Dart 当「图库为空」渲染
+            // 首页空画廊（UI 撒谎、无重试入口）。Plugin 层 catch 转 error，
+            // Dart 显示加载失败态可重试。
             Log.w(TAG, "listBuckets 异常: ${e.message}")
+            throw e
         }
         Log.i(TAG, "listBuckets: 共 ${buckets.size} 个相册（sortBy=$sortBy, asc=$asc）")
         return buckets
@@ -338,23 +342,37 @@ class MediaStoreRepository(private val context: Context) {
                 }
             }
         } catch (e: Exception) {
+            // 上抛而非吞掉返回空页：空页+nextCursor=null 会被 Dart 当
+            // 「无更多数据」，相册分页本会话静默截断（后续照片全部不可达、
+            // 无错误无重试）。Plugin 层 catch 转 error，Dart 显示失败态。
             Log.w(TAG, "scanImages 异常: ${e.message}")
+            throw e
         }
 
-        // dateTrashed + asc:DESC 查询后反转结果实现升序。回收站通常单页(<60),
-        // 反转即正确;反转后游标方向不匹配,多页场景不再分页(nextCursor=null,降级,罕见)。
+        // dateTrashed + asc：ColorOS 上 DATE_EXPIRES 直接 ASC 查询返回空
+        //（真机实证）→ 恒 DESC 查询取最新页再整体反转出升序窗口。
+        // 游标推进修复：DESC 查询的 keyset 条件是"比上一页最后一条更旧"，
+        // 反转后本页最后一条（最旧）即是查询序最后一条——用它 encode 游标
+        // 让下一页继续向前取，旧项不再永久不可达。窗口语义局限（非全局
+        // 升序分页，而是"最近 N 条按升序排"，>60 条回收站时最旧项仍
+        // 滞后一页可达）随设备支持 ASC 查询后消除。
         if (sortBy == "dateTrashed" && asc && results.size > 1) {
             results.reverse()
-            nextCursor = null
         }
         Log.i(TAG, "scanImages: 本页 ${results.size} 张（limit=$limit, cursor=$afterCursor, hasMore=${nextCursor != null}, sortBy=$sortBy, asc=$asc）")
         return ScanPage(results, nextCursor)
     }
 
     /// 解析 keyset 游标 "sortValue|id"。
+    /// 用 lastIndexOf 从右切：id 是 MediaStore _ID 纯数字串永不含 '|'，
+    /// 而 name 排序时 sortValue=DISPLAY_NAME 合法可含 '|'（"a|b.jpg"）——
+    /// 旧 indexOf 取第一个 '|' 会把 "a|b|123" 切成 ("a", "b|123")，
+    /// 下一页 keyset 条件错乱（跳页/重复）。
+    /// sortValue 为空（NULL 列已规格化 ""）时返回 null——分页保守终止，
+    /// 不会重复。
     private fun parseCursor(cursor: String?): CursorKey? {
         if (cursor.isNullOrEmpty()) return null
-        val sep = cursor.indexOf('|')
+        val sep = cursor.lastIndexOf('|')
         if (sep <= 0 || sep >= cursor.length - 1) return null
         return CursorKey(cursor.substring(0, sep), cursor.substring(sep + 1))
     }
@@ -990,12 +1008,35 @@ class MediaStoreRepository(private val context: Context) {
         val dirName = if (crop) "${width}x${height}_iso" else "${width}x$height"
         val file = File(File(thumbnailCacheDir, dirName), "$id.jpg")
         if (!file.exists()) return null
-        val dm = dateModifiedMs
+        var dm = dateModifiedMs
+        if (dm == null) {
+            // Dart 侧全部调用点未传 dateModifiedMs（历史事实）——自查源图
+            // DATE_MODIFIED 列参与校验：旧实现 dm==null 恒命中，外部 app
+            // 编辑照片后磁盘缓存永不失效，网格整会话显示编辑前旧图。
+            // 只在有缓存文件时付一次单行主键查询（<1ms）。
+            dm = queryDateModifiedMs(id)
+        }
         if (dm == null || file.lastModified() >= dm) {
             return try { file.readBytes() } catch (e: Exception) { null }
         }
         file.delete()
         return null
+    }
+
+    /// 查单图 DATE_MODIFIED（毫秒）；查询失败/无值返回 null（不阻断缓存命中）。
+    private fun queryDateModifiedMs(id: Long): Long? {
+        val uri = ContentUris.withAppendedId(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id
+        )
+        return try {
+            contentResolver.query(
+                uri, arrayOf(MediaStore.Images.Media.DATE_MODIFIED), null, null, null
+            )?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) * 1000 else null
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun writeThumbnailCache(
@@ -1088,17 +1129,23 @@ class MediaStoreRepository(private val context: Context) {
             Log.i(TAG, "createDeleteRequest (MANAGE_MEDIA): $deleted/${uris.size}, 失败=${failed.size}")
             // 全部删除成功 → 无需弹窗；否则对失败的 URI 走系统弹窗 fallback
             if (failed.isEmpty()) return DeleteResult.Done(deleted)
-            return DeleteResult.NeedsConsent(systemDeleteRequest(failed))
+            // alreadyDeleted 携带直删数：取消弹窗时上层据此如实上报部分成功
+            return DeleteResult.NeedsConsent(systemDeleteRequest(failed), deleted)
         }
 
         return DeleteResult.NeedsConsent(systemDeleteRequest(uris))
     }
 
     /// 删除结果：Done=已直接完成（含实际删除数）；NeedsConsent=需系统弹窗。
-    /// 与 [MoveResult] 同构。
+    /// [alreadyDeleted]=发起弹窗前 MANAGE_MEDIA 直删成功的数量。用户取消
+    /// 弹窗时这部分**已物理删除**——上层必须拿到该数（取消但已删>0 时
+    /// 上报成功数而非 CANCELLED），否则本地列表残留幽灵条目、结果误报。
     sealed class DeleteResult {
         data class Done(val deleted: Int) : DeleteResult()
-        data class NeedsConsent(val intentSender: IntentSender) : DeleteResult()
+        data class NeedsConsent(
+            val intentSender: IntentSender,
+            val alreadyDeleted: Int = 0
+        ) : DeleteResult()
     }
 
     /// 构造系统级删除弹窗（createDeleteRequest，批量一次弹窗）。
@@ -1114,12 +1161,16 @@ class MediaStoreRepository(private val context: Context) {
         val uri = ContentUris.withAppendedId(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id.toLongOrNull() ?: -1L
         )
+        // 查询失败上抛而非吞成 false：exists 的消费方（删除/恢复复查）把
+        // false 当"已删除/未恢复"——查询失败被当删除证据会导致本地列表
+        // 误移除（破坏性方向）。Plugin 层转 error，Dart 按三态保守处理。
         return try {
             contentResolver.query(
                 uri, arrayOf(MediaStore.Images.Media._ID), null, null, null
             )?.use { it.moveToFirst() } ?: false
         } catch (e: Exception) {
-            false
+            Log.w(TAG, "exists 查询失败 id=$id: ${e.message}")
+            throw e
         }
     }
 
@@ -1159,7 +1210,13 @@ class MediaStoreRepository(private val context: Context) {
     /// move_failed，但其中自有文件早已物理移走）。
     sealed class MoveResult {
         data class Done(val movedIds: List<String>) : MoveResult()
-        data class NeedsConsent(val intentSender: IntentSender) : MoveResult()
+        /// [alreadyMoved]=发起弹窗前已直移成功的自有文件 id 集。
+        /// 用户取消弹窗时这些文件**已经物理移走**——上层必须拿到该子集
+        /// 才能如实报部分成功；丢失会让本地状态与磁盘脱节（丢已移动状态）。
+        data class NeedsConsent(
+            val intentSender: IntentSender,
+            val alreadyMoved: List<String> = emptyList()
+        ) : MoveResult()
     }
 
     fun moveToRelativePath(ids: List<String>, relativePath: String): MoveResult {
@@ -1184,9 +1241,10 @@ class MediaStoreRepository(private val context: Context) {
                 ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId)
             }
             return try {
-                // createWriteRequest 在 MANAGE_MEDIA 授权下不弹窗，返回的 PendingIntent 直接启动
+                // createWriteRequest 在 MANAGE_MEDIA 授权下不弹窗，返回的 PendingIntent 直接启动。
+                // alreadyMoved 携带第一轮直移子集：取消时上层据此报部分成功。
                 val intentSender = MediaStore.createWriteRequest(contentResolver, uris).intentSender
-                MoveResult.NeedsConsent(intentSender)
+                MoveResult.NeedsConsent(intentSender, moved)
             } catch (e: Exception) {
                 Log.w(TAG, "moveToRelativePath createWriteRequest 异常: ${e.message}")
                 MoveResult.Done(moved)
@@ -1196,7 +1254,7 @@ class MediaStoreRepository(private val context: Context) {
         // 无 MANAGE_MEDIA → createWriteRequest 会弹窗
         return try {
             val sender = buildWriteRequest(ids)
-            if (sender != null) MoveResult.NeedsConsent(sender) else MoveResult.Done(moved)
+            if (sender != null) MoveResult.NeedsConsent(sender, moved) else MoveResult.Done(moved)
         } catch (e: Exception) {
             Log.w(TAG, "moveToRelativePath buildWriteRequest 异常: ${e.message}")
             MoveResult.Done(moved)
@@ -1367,6 +1425,8 @@ class MediaStoreRepository(private val context: Context) {
             val srcUri = ContentUris.withAppendedId(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
             )
+            var dstUri: Uri? = null
+            var published = false
             try {
                 // 源元数据（DISPLAY_NAME / MIME_TYPE）
                 val src = contentResolver.query(
@@ -1384,7 +1444,7 @@ class MediaStoreRepository(private val context: Context) {
                     put(MediaStore.Images.Media.RELATIVE_PATH, normalizedPath)
                     put(MediaStore.Images.Media.IS_PENDING, 1)
                 }
-                val dstUri = contentResolver.insert(collection, values) ?: continue
+                dstUri = contentResolver.insert(collection, values) ?: continue
                 var copied = false
                 contentResolver.openInputStream(srcUri)?.use { input ->
                     contentResolver.openOutputStream(dstUri)?.use { output ->
@@ -1398,13 +1458,23 @@ class MediaStoreRepository(private val context: Context) {
                         put(MediaStore.Images.Media.IS_PENDING, 0)
                     }
                     contentResolver.update(dstUri, done, null, null)
+                    published = true
                     success++
-                } else {
-                    // 拷贝失败：清理 pending 占位条目，不留残尸
-                    contentResolver.delete(dstUri, null, null)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "copyToRelativePath item $id 异常: ${e.message}")
+            } finally {
+                // 已 insert 但未成功发布的 pending 占位条目必须清理——
+                // 孤儿 IS_PENDING=1 条目对默认查询不可见但占 MediaStore 行
+                //（旧代码仅拷贝失败路径清理，openInputStream/update 抛异常
+                // 的路径漏删，泄漏不可见残尸条目）。
+                if (dstUri != null && !published) {
+                    try {
+                        contentResolver.delete(dstUri, null, null)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "copyToRelativePath 清理 pending 条目失败: ${e.message}")
+                    }
+                }
             }
         }
         Log.i(TAG, "copyToRelativePath 完成: $success/${ids.size} → $normalizedPath")

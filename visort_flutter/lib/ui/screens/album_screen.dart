@@ -88,7 +88,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   // ── 批量选择模式：长按 cell 进入，勾选后底部操作栏执行批量操作 ──
   bool _selectMode = false;
   final Set<String> _selectedIds = {};
-
+  /// 批量操作进行中（await 系统弹窗/IO 期间）：批量栏、⋮ 菜单、各批量
+  /// 入口全部禁用——旧实现期间全 UI 可交互，同批 id 可被二次提交或交叉
+  /// 并发（trash 中又 move / 收藏乐观更新与删除互相覆盖回滚）。
+  bool _batchProcessing = false;
   // ── 勾选态右上 ⋮ 菜单（复制/移动/重命名入口，首页 ⋮ 同款非模态浮层）──
   final GlobalKey _menuBtnKey = GlobalKey();
   NonModalMenuController? _menuCtl;
@@ -471,7 +474,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
               ),
               const SizedBox(height: 12),
               SelectableText(
-                gallery.error!,
+                // error 存 i18n key（load_failed 等），渲染处翻译（P3：旧直出英文 key）。
+                t(ref, gallery.error!),
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontFamily: 'Space Mono',
@@ -482,9 +486,18 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
               ),
               const SizedBox(height: 16),
               OutlinedButton(
-                onPressed: () => ref
-                    .read(galleryControllerProvider.notifier)
-                    .enterBucket(widget.bucketId),
+                // 重试按视图分发：收藏/回收站视图走 enterBucket('') 会把 view
+                // 切成 bucket 且查空——视图错乱 + 网格清空（P2）。
+                onPressed: () {
+                  final c = ref.read(galleryControllerProvider.notifier);
+                  if (widget.trashedOnly) {
+                    c.enterTrash();
+                  } else if (widget.favoritesOnly) {
+                    c.enterFavorites();
+                  } else {
+                    c.enterBucket(widget.bucketId);
+                  }
+                },
                 child: Text(t(ref, 'retry')),
               ),
             ],
@@ -630,7 +643,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   }
 
   Widget _buildBatchBar(GalleryState gallery) {
-    final enabled = _selectedIds.isNotEmpty;
+    final enabled = _selectedIds.isNotEmpty && !_batchProcessing;
     Widget op(IconData icon, String label, Color color, VoidCallback? onTap) =>
         Expanded(
           child: TextButton.icon(
@@ -638,8 +651,6 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             icon: Icon(icon, size: 18),
             label: Text(
               label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 12),
             ),
             style: TextButton.styleFrom(foregroundColor: color),
@@ -719,8 +730,18 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         ref.read(galleryControllerProvider).photos.map((p) => p.id).toSet();
     return _selectedIds.where(photoIds.contains).toList();
   }
+  /// 批量操作 busy 包装：确认弹窗后实际提交期间置位 _batchProcessing
+  ///（批量栏/菜单/各入口禁用，见 enabled 与早退守卫），finally 复位。
+  Future<void> _runBatchGuarded(Future<void> Function() action) async {
+    if (_batchProcessing) return;
+    setState(() => _batchProcessing = true);
+    try {
+      await action();
+    } finally {
+      if (mounted) setState(() => _batchProcessing = false);
+    }
+  }
 
-  /// 批量移入回收站（普通相册/收藏视图的「批量删除」）。
   Future<void> _runBatchTrash() async {
     final ids = _currentSelectedIds();
     if (ids.isEmpty) {
@@ -735,15 +756,19 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       confirmText: t(ref, 'confirm'),
     ).confirmed;
     if (confirmed != true || !mounted) return;
-    final err = await ref
-        .read(galleryControllerProvider.notifier)
-        .trashPhotos(ids);
-    if (!mounted) return;
-    _exitSelectMode();
-    toast(
-      context,
-      err == null ? t(ref, 'trashed') : t(ref, 'trash_unsupported'),
-    );
+    await _runBatchGuarded(() async {
+      final err = await ref
+          .read(galleryControllerProvider.notifier)
+          .trashPhotos(ids);
+      if (!mounted) return;
+      _exitSelectMode();
+      // 取消弹窗静默；失败提示真实原因（旧统一「回收站需要 Android 10+」永假）。
+      if (err == null) {
+        toast(context, t(ref, 'trashed'));
+      } else if (err != 'trash_cancelled') {
+        toast(context, t(ref, 'trash_failed'));
+      }
+    });
   }
 
   /// 批量从回收站恢复。
@@ -761,12 +786,15 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       confirmColor: AppColors.accent,
     ).confirmed;
     if (confirmed != true || !mounted) return;
-    final err = await ref
-        .read(galleryControllerProvider.notifier)
-        .restorePhotos(ids);
-    if (!mounted) return;
-    _exitSelectMode();
-    toast(context, err == null ? t(ref, 'restored') : t(ref, 'restore_failed'));
+    await _runBatchGuarded(() async {
+      final err = await ref
+          .read(galleryControllerProvider.notifier)
+          .restorePhotos(ids);
+      if (!mounted) return;
+      _exitSelectMode();
+      toast(
+          context, err == null ? t(ref, 'restored') : t(ref, 'restore_failed'));
+    });
   }
 
   /// 批量彻底删除（回收站视图）。
@@ -784,12 +812,14 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       confirmText: t(ref, 'confirm'),
     ).confirmed;
     if (confirmed != true || !mounted) return;
-    final err = await ref
-        .read(galleryControllerProvider.notifier)
-        .deletePhotos(ids);
-    if (!mounted) return;
-    _exitSelectMode();
-    toast(context, err == null ? t(ref, 'deleted') : t(ref, 'delete_failed'));
+    await _runBatchGuarded(() async {
+      final err = await ref
+          .read(galleryControllerProvider.notifier)
+          .deletePhotos(ids);
+      if (!mounted) return;
+      _exitSelectMode();
+      toast(context, err == null ? t(ref, 'deleted') : t(ref, 'delete_failed'));
+    });
   }
 
   /// 批量收藏（普通相册；与单张收藏切换一致不弹窗，乐观更新）。
@@ -799,15 +829,17 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       _exitSelectMode();
       return;
     }
-    final err = await ref
-        .read(galleryControllerProvider.notifier)
-        .setFavorites(ids, true);
-    if (!mounted) return;
-    _exitSelectMode();
-    toast(
-      context,
-      err == null ? t(ref, 'favorited') : t(ref, 'favorite_failed'),
-    );
+    await _runBatchGuarded(() async {
+      final err = await ref
+          .read(galleryControllerProvider.notifier)
+          .setFavorites(ids, true);
+      if (!mounted) return;
+      _exitSelectMode();
+      toast(
+        context,
+        err == null ? t(ref, 'favorited') : t(ref, 'favorite_failed'),
+      );
+    });
   }
 
   /// 批量取消收藏（收藏视图；与单张收藏切换一致不弹窗，乐观更新）。
@@ -817,17 +849,19 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       _exitSelectMode();
       return;
     }
-    final err = await ref
-        .read(galleryControllerProvider.notifier)
-        .setFavorites(ids, false);
-    if (!mounted) return;
-    // 操作完成退出多选（对齐 _runBatchFavorite/删除/恢复；此前缺失 →
-    // 取消收藏后勾选态残留）。
-    _exitSelectMode();
-    toast(
-      context,
-      err == null ? t(ref, 'unfavorited') : t(ref, 'favorite_failed'),
-    );
+    await _runBatchGuarded(() async {
+      final err = await ref
+          .read(galleryControllerProvider.notifier)
+          .setFavorites(ids, false);
+      if (!mounted) return;
+      // 操作完成退出多选（对齐 _runBatchFavorite/删除/恢复；此前缺失 →
+      // 取消收藏后勾选态残留）。
+      _exitSelectMode();
+      toast(
+        context,
+        err == null ? t(ref, 'unfavorited') : t(ref, 'favorite_failed'),
+      );
+    });
   }
 
   // ─────────────── 勾选态 ⋮ 菜单：复制/移动/重命名 ───────────────
@@ -835,6 +869,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// 勾选态右上 ⋮ 菜单（首页 overflow 菜单同款非模态浮层）。
   /// 重命名仅单选可用（多选批量重命名需要模板页，暂不提供）。
   void _showBatchMenu() {
+    // busy 期间不弹菜单（批量提交中所有入口禁用）。
+    if (_batchProcessing) return;
     // toggle：菜单已展开则收回（与首页 _showOverflowMenu 同款）。
     if (_menuCtl != null && !_menuCtl!.isClosed) {
       _menuCtl!.close();
@@ -938,17 +974,19 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     if (ids.isEmpty) return;
     final bucket = await pushAlbumPicker(context, titleKey: 'copy_to_album');
     if (bucket == null || !mounted) return;
-    final err = await ref
-        .read(galleryControllerProvider.notifier)
-        .copyPhotosToAlbum(ids, bucket.id);
-    if (!mounted) return;
-    if (err != null) {
-      toast(context, _errText(err, 'copy_failed'));
-      return;
-    }
-    // 原图不动（列表不移除），退出勾选态即可。
-    _exitSelectMode();
-    toast(context, t(ref, 'copied'));
+    await _runBatchGuarded(() async {
+      final err = await ref
+          .read(galleryControllerProvider.notifier)
+          .copyPhotosToAlbum(ids, bucket.id);
+      if (!mounted) return;
+      if (err != null) {
+        toast(context, _errText(err, 'copy_failed'));
+        return;
+      }
+      // 原图不动（列表不移除），退出勾选态即可。
+      _exitSelectMode();
+      toast(context, t(ref, 'copied'));
+    });
   }
 
   /// 批量移至相册：相册选择页选目标 → 改 RELATIVE_PATH（系统弹窗/ManageMedia
@@ -958,16 +996,18 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     if (ids.isEmpty) return;
     final bucket = await pushAlbumPicker(context, titleKey: 'move_to_album');
     if (bucket == null || !mounted) return;
-    final err = await ref
-        .read(galleryControllerProvider.notifier)
-        .movePhotosToAlbum(ids, bucket.id);
-    if (!mounted) return;
-    if (err != null) {
-      toast(context, _errText(err, 'move_failed'));
-      return;
-    }
-    _exitSelectMode();
-    toast(context, t(ref, 'moved_toast'));
+    await _runBatchGuarded(() async {
+      final err = await ref
+          .read(galleryControllerProvider.notifier)
+          .movePhotosToAlbum(ids, bucket.id);
+      if (!mounted) return;
+      if (err != null) {
+        toast(context, _errText(err, 'move_failed'));
+        return;
+      }
+      _exitSelectMode();
+      toast(context, t(ref, 'moved_toast'));
+    });
   }
 
   /// 重命名当前唯一选中项（对话框 + DISPLAY_NAME 更新）。

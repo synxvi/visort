@@ -157,6 +157,10 @@ class _FakeMediaStoreChannel extends MediaStoreChannel {
       // 对齐真机语义：trashed 行对默认查询不可见（restorePhotos 复查依赖）
       !_trashedIds.contains(id) &&
       (stickyIds.contains(id) || !_deletedIds.contains(id));
+
+  @override
+  Future<MsExistsStatus> existsStatus(String id) async =>
+      await exists(id) ? MsExistsStatus.found : MsExistsStatus.notFound;
 }
 
 MsImageInfo _info(String id, {String bucket = 'b1', int added = 0}) =>

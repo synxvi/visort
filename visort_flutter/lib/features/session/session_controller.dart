@@ -281,6 +281,15 @@ class SessionController extends Notifier<SessionState> {
     _store.saveNewSession(state);
   }
 
+  /// 标记决策已被 Run 执行（moved+deleted 成功项）。Review 重跑时
+  /// RunController 跳过 appliedIds——已执行项不再重放误报
+  /// move_failed/source_missing。纯内存标记（不落盘：恢复会话语义
+  /// 回退旧行为，评审 P2 主路径为同会话 Results→Review→Run）。
+  void markApplied(Set<String> fileIds) {
+    if (fileIds.isEmpty) return;
+    state = state.copyWith(appliedIds: {...state.appliedIds, ...fileIds});
+  }
+
   /// 丢弃持久化会话(横条滑除)。不动内存活动会话——清的只是「中断记录」;
   /// 之后的正常扫描/Run 照旧(新扫描覆写,Run 后清库)。
   Future<void> discardPersistedSession() => _store.clear();

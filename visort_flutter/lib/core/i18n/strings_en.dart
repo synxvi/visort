@@ -273,6 +273,7 @@ const Map<String, String> stringsEn = {
   'restored': 'Restored',
   'restore_failed': 'Failed to restore',
   'trash_unsupported': 'Trash requires Android 10+',
+  'trash_failed': 'Failed to move to trash',
 
   // ───────── 通用 · 相册管理 ─────────
   'gallery_manage': 'Gallery',

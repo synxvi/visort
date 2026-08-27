@@ -57,6 +57,9 @@ class MsException implements Exception {
   String toString() => 'MsException($code): $message';
 }
 
+/// exists 三态结果：error=查询失败（不可当"已删除/未恢复"证据）。
+enum MsExistsStatus { found, notFound, error }
+
 /// 用户取消删除（保留向后兼容的具名异常）。
 class MsDeleteCancelledException extends MsException {
   const MsDeleteCancelledException()
@@ -537,10 +540,23 @@ class MediaStoreChannel {
     }
   }
 
-  /// 存在性检查
+  /// 存在性检查三态：found / notFound / error（查询失败上抛 MsException）。
+  /// 旧实现把查询失败吞成 false——删除复查方向把它当"已删除"证据，
+  /// 本地列表误移除（破坏性）。Kotlin 两层吞错已解除。
+  Future<MsExistsStatus> existsStatus(String id) async {
+    try {
+      return await _channel.invokeMethod<bool>('exists', {'id': id}) == true
+          ? MsExistsStatus.found
+          : MsExistsStatus.notFound;
+    } on PlatformException catch (e) {
+      throw _convertError(e);
+    }
+  }
+
+  /// 存在性检查（布尔薄包装；仅用于"失败按不存在处理"无破坏性的场景）。
   Future<bool> exists(String id) async {
     try {
-      return await _channel.invokeMethod<bool>('exists', {'id': id}) ?? false;
+      return await existsStatus(id) == MsExistsStatus.found;
     } catch (_) {
       return false;
     }

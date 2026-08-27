@@ -267,6 +267,7 @@ const Map<String, String> stringsZh = {
   'restored': '已恢复',
   'restore_failed': '恢复失败',
   'trash_unsupported': '回收站需要 Android 10+',
+  'trash_failed': '移入回收站失败',
 
   // ───────── 通用 · 相册管理 ─────────
   'gallery_manage': '相册管理',

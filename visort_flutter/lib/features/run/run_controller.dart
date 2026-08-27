@@ -23,6 +23,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/db/database_service.dart';
 import 'package:visort_flutter/core/db/run_log_store.dart';
 import 'package:visort_flutter/core/fs/file_system_repository.dart';
+import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/core/fs/fs_provider.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
 import 'package:visort_flutter/features/session/session_models.dart';
@@ -54,9 +55,13 @@ class RunResults {
 }
 
 class RunController {
-  RunController(this._fs, [this._runLog]);
+  RunController(this._fs, [this._runLog, this.onApplied]);
 
   final FileSystemRepository _fs;
+
+  /// Run 完成后回写成功项（moved+deleted 的 fileId 集）——SessionController
+  /// 据此记 appliedIds，Review 重跑跳过已执行项（防重放误报）。
+  final void Function(Set<String> applied)? onApplied;
 
   /// Run 历史落库(P3);null = 不记录(纯内存测试/降级)。
   final RunLogStore? _runLog;
@@ -152,6 +157,13 @@ class RunController {
         currentFile: fileId,
       );
 
+      // 已应用（上次 Run 成功执行过）→ 本次重跑跳过，不再重放——否则
+      // 源已不存在（移走/删除）会误报 move_failed/source_missing。
+      if (session.appliedIds.contains(fileId)) {
+        skipped.add(fileId);
+        continue;
+      }
+
       // skip
       if (decision.action == DecisionAction.skip) {
         skipped.add(fileId);
@@ -244,6 +256,9 @@ class RunController {
       errors: errors,
     );
 
+    // 回写成功项 → appliedIds（Review 重跑跳过已执行项）。
+    onApplied?.call({...moved.map((m) => m.file), ...deleted});
+
     // Run 历史审计(P3):结束事件前落一行摘要。写库失败被 store 吞掉,
     // 绝不影响结果下发;空决策的提前 return 不经过此处,不记账。
     await _runLog?.insert(
@@ -283,5 +298,7 @@ final runControllerProvider = Provider<RunController>((ref) {
   return RunController(
     ref.watch(fileSystemRepositoryProvider),
     RunLogStore(ref.watch(databaseServiceProvider).database),
+    (applied) =>
+        ref.read(sessionControllerProvider.notifier).markApplied(applied),
   );
 });

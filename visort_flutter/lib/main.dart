@@ -93,31 +93,39 @@ Future<void> main() async {
 // ───────────────────────── Windows 初始化 ─────────────────────────
 
 Future<void> _setupWindows() async {
-  await windowManager.ensureInitialized();
-  await windowManager.setTitle('Visort');
-  await windowManager.setMinimumSize(const Size(900, 600));
+  try {
+    await windowManager.ensureInitialized();
+    await windowManager.setTitle('Visort');
+    await windowManager.setMinimumSize(const Size(900, 600));
 
-  // 恢复上次窗口状态（大小 + 位置 + 最大化）
-  final windowService = WindowStateService();
-  final bounds = await windowService.load();
-  if (bounds != null) {
-    await windowManager.setBounds(Rect.fromLTWH(
-      bounds.offsetX,
-      bounds.offsetY,
-      bounds.width,
-      bounds.height,
-    ));
-    if (bounds.isMaximized) {
-      await windowManager.maximize();
+    // 恢复上次窗口状态（大小 + 位置 + 最大化）
+    final windowService = WindowStateService();
+    final bounds = await windowService.load();
+    if (bounds != null) {
+      await windowManager.setBounds(Rect.fromLTWH(
+        bounds.offsetX,
+        bounds.offsetY,
+        bounds.width,
+        bounds.height,
+      ));
+      if (bounds.isMaximized) {
+        await windowManager.maximize();
+      }
+    } else {
+      // 首次启动：默认尺寸 + 居中
+      await windowManager.setSize(const Size(1280, 800));
+      await windowManager.center();
     }
-  } else {
-    // 首次启动：默认尺寸 + 居中
-    await windowManager.setSize(const Size(1280, 800));
-    await windowManager.center();
-  }
 
-  // 注册窗口监听：resize/move 结束后异步保存（带防抖）
-  windowManager.addListener(_WindowPersistListener(windowService));
+    // 注册窗口监听：resize/move 结束后异步保存（带防抖）
+    windowManager.addListener(_WindowPersistListener(windowService));
+  } catch (e) {
+    // 兜底：窗口恢复读的是持久化 JSON（显示器变更后非法坐标等），
+    // setBounds 等任一失败若冒泡到 main 顶层则 runApp 永不执行——
+    // 应用整体无法启动。跳过窗口恢复降级启动（默认窗口尺寸），
+    // 与文件内其余初始化（DB/prefs）「失败静默降级」策略一致。
+    debugPrint('[_setupWindows] 窗口初始化失败，降级默认启动: $e');
+  }
 }
 
 // ───────────────────────── Android 初始化 ─────────────────────────

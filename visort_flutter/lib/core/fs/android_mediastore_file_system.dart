@@ -57,23 +57,37 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
     try {
       final sort = sortBy ?? SortBy.dateCreated;
       final all = <MsImageInfo>[];
+      // 每桶独立 try：多相册扫描时任一桶失败（SD 卡拔出/桶被并发删除/
+      // 单次 QUERY_FAILED）不应把已扫的其他桶全部丢弃——错误粒度=单桶，
+      // 失败桶跳过并记日志，其余照常返回（旧实现异常冒泡到最外层，
+      // 整扫返回空 + scan_failed，用户必须全部重试）。
+      var failedBuckets = 0;
       for (final bucket in roots) {
-        String? cursor;
-        do {
-          final page = await _channel.scanImages(
-            [bucket],
-            afterCursor: cursor,
-            limit: 1000,
-            sortBy: sort,
-            asc: asc,
-          );
-          all.addAll(page.images);
-          final prevCursor = cursor;
-          cursor = page.nextCursor;
-          // 防死循环：cursor 不推进时跳出（如 dateTrashed 排序下普通相册
-          // DATE_EXPIRES 全 NULL → keyset 游标 sortValue 为空、永不变）。
-          if (cursor != null && cursor == prevCursor) break;
-        } while (cursor != null);
+        try {
+          String? cursor;
+          do {
+            final page = await _channel.scanImages(
+              [bucket],
+              afterCursor: cursor,
+              limit: 1000,
+              sortBy: sort,
+              asc: asc,
+            );
+            all.addAll(page.images);
+            final prevCursor = cursor;
+            cursor = page.nextCursor;
+            // 防死循环：cursor 不推进时跳出（如 dateTrashed 排序下普通相册
+            // DATE_EXPIRES 全 NULL → keyset 游标 sortValue 为空、永不变）。
+            if (cursor != null && cursor == prevCursor) break;
+          } while (cursor != null);
+        } catch (e) {
+          failedBuckets++;
+          debugPrint('[scan] 相册桶 $bucket 扫描失败，跳过: $e');
+        }
+      }
+      // 全部桶失败才报整体失败（部分成功仍有可用数据）。
+      if (roots.isNotEmpty && failedBuckets == roots.length) {
+        return ScanResult(images: const [], error: 'scan_failed');
       }
       final images = all
           .map(
@@ -181,7 +195,14 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
 
   @override
   Future<bool> exists(ImageRef ref) async {
-    return await _channel.exists(ref.relativePath);
+    try {
+      return await _channel.existsStatus(ref.relativePath) ==
+          MsExistsStatus.found;
+    } catch (_) {
+      // 查询失败不可当"不存在"——run 删除预检据此误报 source_missing
+      //（破坏性方向）。按"存在"处理，让实际删除动作给出真实结果。
+      return true;
+    }
   }
 
   @override

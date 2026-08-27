@@ -53,25 +53,30 @@ Future<void> precacheNextImage(
 
 /// 清理指定 MediaStore _ID 的所有图片缓存（缩略图 + 全图）。
 ///
-/// 删除图片后调用，避免旧缩略图残留。在安卓端遍历常见缩略图 size +
-/// 全图 provider 逐个 evict；Windows 端 FileImage 按 ref evict。
+/// 删除/移动/恢复图片后调用，避免旧缩略图残留。ImageCache 无公开 key
+/// 遍历 API（cache.keys 不存在），只能按 key 构造逐个 evict——而 key 是
+/// (id, size, dateModifiedMs, squareCrop) 四元组：真实条目遍布
+/// 96(filmstrip)/256/512(网格)/300(封面)/动态 cell size × 两种 squareCrop
+///（旧固定表 [200,256,300,384]+squareCrop:false 与真实 key 0% 命中，
+/// 删除后旧缩略图永不清理）。改用注册表：buildThumbnailProvider 把
+/// (size, squareCrop) 变体记入 _usedThumbVariants，evict 全量重放。
+/// dateModifiedMs 当前无调用者传值（恒 null），不参与变体注册。
+final Set<(int, bool)> _usedThumbVariants = {};
+
 void evictImageCache(String mediaStoreId) {
+  if (!Platform.isAndroid) return;
   final cache = PaintingBinding.instance.imageCache;
-  if (Platform.isAndroid) {
-    // 缩略图：常见 size 逐个清理（_AndroidThumbnailProvider key = id+size）
-    for (final size in const [200, 256, 300, 384]) {
-      cache.evict(
-        _AndroidThumbnailProvider(
-          ref: imageRefFromMediaStoreId(mediaStoreId),
-          size: size,
-        ),
-      );
-    }
-    // 全图（_AndroidBytesImageProvider key = id+targetWidth，targetWidth=null）
-    cache.evict(
-      _AndroidBytesImageProvider(ref: imageRefFromMediaStoreId(mediaStoreId)),
-    );
+  final ref = imageRefFromMediaStoreId(mediaStoreId);
+  for (final (size, crop) in _usedThumbVariants) {
+    cache.evict(_AndroidThumbnailProvider(
+      ref: ref,
+      size: size,
+      squareCrop: crop,
+    ));
   }
+  // 全图：无 targetWidth 条目（带 targetWidth 的 viewer 变体由
+  // evictViewerImageCache 在关闭时按具体宽度清理）。
+  cache.evict(_AndroidBytesImageProvider(ref: ref));
 }
 
 /// 清理 viewer 浏览用的图片缓存（1024 垫底缩略图 + 全图），**不动网格 300
@@ -272,6 +277,9 @@ ImageProvider buildThumbnailProvider(
   bool squareCrop = false,
 }) {
   if (Platform.isAndroid) {
+    // 注册 (size, squareCrop) 变体——evictImageCache 按注册表重放构造
+    // key 逐出（动态 cell size 等无法枚举的档位自动入表）。
+    _usedThumbVariants.add((size, squareCrop));
     return _AndroidThumbnailProvider(
       ref: ref,
       size: size,

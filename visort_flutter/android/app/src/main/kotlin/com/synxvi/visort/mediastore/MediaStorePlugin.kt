@@ -88,6 +88,11 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     private var pendingMoveResult: Result? = null
     private var pendingMoveIds: List<String> = emptyList()
     private var pendingMoveRelativePath: String = ""
+    /// 弹窗发起前已直移成功的自有文件 id 集（部分成功契约，见 MoveResult）
+    private var pendingMoveAlreadyMoved: List<String> = emptyList()
+    /// 删除弹窗发起前的 MANAGE_MEDIA 直删数 / 弹窗涉及的 URI 数（契约同上）
+    private var pendingDeleteDirectCount: Int = 0
+    private var pendingDeleteConsentCount: Int = 0
 
     /// 待处理的重命名请求（他人文件授权弹窗异步）
     private var pendingRenameResult: Result? = null
@@ -185,6 +190,9 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         pendingMoveResult = null
         pendingMoveIds = emptyList()
         pendingMoveRelativePath = ""
+        pendingMoveAlreadyMoved = emptyList()
+        pendingDeleteDirectCount = 0
+        pendingDeleteConsentCount = 0
         pendingFavoriteResult?.error("DETACHED", "Activity 已分离", null)
         pendingFavoriteResult = null
         pendingTrashResult?.error("DETACHED", "Activity 已分离", null)
@@ -198,13 +206,20 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
         when (requestCode) {
             REQUEST_DELETE -> {
-                Log.i(TAG, "onActivityResult REQUEST_DELETE: resultCode=$resultCode (OK=${Activity.RESULT_OK}), pending=${pendingDeleteResult != null}")
+                Log.i(TAG, "onActivityResult REQUEST_DELETE: resultCode=$resultCode (OK=${Activity.RESULT_OK}), pending=${pendingDeleteResult != null})")
                 val pending = pendingDeleteResult ?: return true
                 pendingDeleteResult = null
                 if (resultCode == Activity.RESULT_OK) {
-                    // minSdk 30：createDeleteRequest 授权即系统直删，
-                    // 全量弹窗成功数 = pendingDeleteCount（发起时锁定的张数）。
-                    pending.success(pendingDeleteCount)
+                    // minSdk 30：createDeleteRequest 授权即系统直删。
+                    // 实际删除数 = 弹窗前 MANAGE_MEDIA 直删数 + 弹窗 URI 数
+                    //（部分直删 + 弹窗的组合下，旧协议只报 ids.size 或取消，
+                    // 已直删部分被误报/丢失——本地列表残留幽灵条目）。
+                    pending.success(pendingDeleteDirectCount + pendingDeleteConsentCount)
+                } else if (pendingDeleteDirectCount > 0) {
+                    // 用户取消弹窗，但直删子集已物理删除——如实上报部分
+                    // 成功（Dart 侧 exists 复查会正确移除并提示部分失败），
+                    // 不再抛 CANCELLED 让本地状态与磁盘脱节。
+                    pending.success(pendingDeleteDirectCount)
                 } else {
                     pending.error(MsError.DeleteCancelled.code, MsError.DeleteCancelled.message, null)
                 }
@@ -214,24 +229,31 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 val pending = pendingMoveResult ?: return true
                 val ids = pendingMoveIds
                 val relPath = pendingMoveRelativePath
+                val alreadyMoved = pendingMoveAlreadyMoved
                 pendingMoveResult = null
                 pendingMoveIds = emptyList()
                 pendingMoveRelativePath = ""
+                pendingMoveAlreadyMoved = emptyList()
 
                 if (resultCode == Activity.RESULT_OK) {
                     // 授权通过，执行真正的 update（之前 update 因权限失败只返回了 intentSender）。
                     // 全量重放是磁盘 IO，下 ioExecutor；result 回主线程。
                     val repo = repository
                     if (repo == null) {
-                        pending.success(emptyList<String>())
+                        pending.success(alreadyMoved)
                     } else {
                         ioExecutor.execute {
+                            // 全量重放幂等（已直移的再 update 同一路径无副作用），
+                            // 返回集含第一轮直移子集，无需与 alreadyMoved 合并。
                             val movedIds = repo.doMoveToRelativePath(ids, relPath)
                             mainHandler.post { pending.success(movedIds) }
                         }
                     }
                 } else {
-                    pending.success(emptyList<String>()) // 用户取消
+                    // 用户取消弹窗，但弹窗前直移的自有文件已物理移走——
+                    // 如实返回该子集（上层据此报部分成功并同步本地状态），
+                    // 不再返回空集造成"已移走却无任何反馈"的丢状态。
+                    pending.success(alreadyMoved)
                 }
                 return true
             }
@@ -575,9 +597,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         @Suppress("UNCHECKED_CAST")
         val ids = (call.argument<List<String>>("ids") ?: emptyList())
         val favorite = call.argument<Boolean>("favorite") ?: true
-        if (ids.isEmpty()) {
-            result.success(true); return
-        }
+
         if (pendingFavoriteResult != null) {
             result.error(MsError.InvalidArg("已有收藏请求进行中").code, null, null); return
         }
@@ -587,7 +607,10 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             result.error(MsError.QueryFailed("requestFavorite 异常: ${e.message}").code, e.message, null); return
         }
         if (intentSender == null) {
-            result.success(true); return
+            // minSdk 30 下 createFavoriteRequest 恒可用：null 只会是内部构造
+            // 异常——报 error 而非 success(true)（旧误报会让 Dart 乐观更新
+            // 不回滚，收藏状态与磁盘脱节）。
+            result.error(MsError.QueryFailed("requestFavorite 未返回系统弹窗").code, null, null); return
         }
         pendingFavoriteResult = result
         try {
@@ -800,10 +823,15 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             result.error(MsError.InvalidArg("id 缺失").code, null, null); return
         }
         ioExecutor.execute {
+            // 不吞错：查询失败转 error（旧 catch→false 让 Dart 把失败当
+            // "文件不存在"——删除复查方向据此误删列表项）。
             val exists = try {
                 repo.exists(id)
             } catch (e: Exception) {
-                false
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("exists 查询失败: ${e.message}").code, e.message, null)
+                }
+                return@execute
             }
             mainHandler.post { result.success(exists) }
         }
@@ -847,9 +875,13 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                         // delete_failed（结果报告错误，重跑时文件已不存在）。
                         result.success(dr.deleted)
                     is MediaStoreRepository.DeleteResult.NeedsConsent -> {
-                        // 启动系统弹窗
+                        // 启动系统弹窗。记录直删数与弹窗 URI 数——弹窗结果
+                        // 分支据此合成真实删除数（见 onActivityResult）。
                         pendingDeleteResult = result
-                        pendingDeleteCount = ids.size
+                        pendingDeleteDirectCount = dr.alreadyDeleted
+                        // 弹窗只覆盖直删失败的子集：ids.size - alreadyDeleted
+                        // （旧协议记 ids.size，部分直删 + 授权的组合会虚报）。
+                        pendingDeleteConsentCount = ids.size - dr.alreadyDeleted
                         try {
                             act.startIntentSenderForResult(dr.intentSender, REQUEST_DELETE, null, 0, 0, 0)
                         } catch (e: Exception) {
@@ -921,10 +953,12 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                         result.success(mr.movedIds)
                     }
                     is MediaStoreRepository.MoveResult.NeedsConsent -> {
-                        // 需要用户授权（其他 app 的文件）——记录参数，授权通过后重新 doMove
+                        // 需要用户授权（其他 app 的文件）——记录参数，授权通过后重新 doMove。
+                        // alreadyMoved=弹窗前直移子集，取消时据此上报部分成功。
                         pendingMoveResult = result
                         pendingMoveIds = ids
                         pendingMoveRelativePath = relativePath
+                        pendingMoveAlreadyMoved = mr.alreadyMoved
                         try {
                             act.startIntentSenderForResult(mr.intentSender, REQUEST_MOVE, null, 0, 0, 0)
                         } catch (e: Exception) {

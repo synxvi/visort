@@ -213,7 +213,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         if (mounted) toast(context, t(ref, 'no_new_subdirs'));
         return;
       }
-      await home.updateFolders(templates);
+      // updateFolders 校验失败返回 i18n error key（不抛异常）——必须检查：
+      // allocateKey 不感知 action keys，undo/delete/skip 快捷键被改成
+      // A/S/D 时分配的 key 会与 action 冲突，校验必失败；旧实现丢弃
+      // 返回值直接 toast「导入成功」，实际 folders 未持久化（重启即丢）。
+      final err = await home.updateFolders(templates);
+      if (err != null) {
+        if (mounted) toast(context, t(ref, err));
+        return;
+      }
       if (mounted) toast(context, t(ref, 'imported_count', [imported]));
     } catch (_) {
       if (mounted) toast(context, t(ref, 'import_failed'));

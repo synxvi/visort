@@ -473,7 +473,10 @@ class _ZoomableImageState extends State<ZoomableImage> {
             }
           })
           .catchError((_) {
-            if (gen == _loadGeneration) _loadingLargeThumbnail = false;
+            // 失败保持"已尝试"终态（不复位 _loadingLargeThumbnail）：
+            // 复位会让下一帧 build 重新 precacheImage → 再失败 → 无限
+            // 重试循环（setState 风暴 + 反复解码空转）。重试仅由换图
+            //（didUpdateWidget generation++ 复位全部加载标志）触发。
           });
     }
     if (!_loadingFinalImage && !_loadedFinalImage) {
@@ -495,7 +498,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
           })
           .catchError((Object e) {
             if (gen != _loadGeneration) return;
-            _loadingFinalImage = false;
+            // 同 large 分支：不复位 _loadingFinalImage，保持终态防无限
+            // 重试；损坏图停留期间仅显示缩略图回退，不再空转。
             if (mounted) {
               // 原图解码失败（损坏/超时）：回退大缩略图显示，不崩不黑屏。
               setState(() => _showingThumbnailFallback = true);

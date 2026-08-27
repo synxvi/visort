@@ -126,6 +126,8 @@ class _DetailPageState extends ConsumerState<DetailPage>
   late List<MsImageInfo> _thumbFiles;
   bool _shouldDisableScroll = false;
   bool _swipeLocked = false;
+  /// 条→主图 drive 代际：兜底 timer 只清当前 drive 的 flag（P3）。
+  int _thumbDriveToken = 0;
 
   final ValueNotifier<bool> enableFullScreenNotifier = ValueNotifier(false);
   final ValueNotifier<bool> isZoomedNotifier = ValueNotifier(false);
@@ -1063,6 +1065,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   /// 缩略图条滚动停止（fling 减速结束）：吸附最近项到正中 + 联动主图。
   void _onThumbScrollEnd() {
+    if (_deletingInProgress) return;
     final ctrl = _thumbScrollCtrl;
     if (ctrl == null || !ctrl.hasClients || _thumbSyncing) return;
     final target = _thumbComputeCenter();
@@ -1079,6 +1082,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   /// 点按缩略图单项 → 主图跳转 + 缩略图条吸附居中。
   void _onThumbTap(int i) {
+    // 删除动画窗口：条仍可点按会打断删除流程（白框已被推到 next，点按
+    // 目标与动画目标打架）——直接忽略。
+    if (_deletingInProgress) return;
     if (i == _selectedIndexNotifier.value) return;
     _onThumbPageChanged(i);
     final ctrl = _thumbScrollCtrl;
@@ -1116,9 +1122,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
     if (_pageController.hasClients) {
       _pagerDrivenByThumb = true;
       // 兜底:万一主图 animateToPage 未触发 target onPageChanged,超时复位防 flag 卡死。
+      // token 守卫：快速连续点条时旧 timer 不再清掉新 drive 的 flag
+      //（否则中间页 onPageChanged 不再被吞 → 条回弹抖动）。
+      final token = ++_thumbDriveToken;
       Future.delayed(
         _kThumbSyncDuration + const Duration(milliseconds: 80),
-        () => _pagerDrivenByThumb = false,
+        () {
+          if (token == _thumbDriveToken) _pagerDrivenByThumb = false;
+        },
       );
       _pageController.animateToPage(
         i,
@@ -1231,7 +1242,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
     if (confirmed != true) return;
     final err = await controller.trashPhoto(current.id);
     if (err != null) {
-      if (mounted) toast(context, t(ref, 'trash_unsupported'));
+      // 用户取消系统弹窗是正常动作，静默返回；真实失败才提示
+      //（旧实现统一「回收站需要 Android 10+」，minSdk 30 下永假误导）。
+      if (err != 'trash_cancelled' && mounted) {
+        toast(context, t(ref, 'trash_failed'));
+      }
       return;
     }
     _removeCurrentAndAdvance(t(ref, 'deleted'));
@@ -1544,6 +1559,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
     final next = index < _files.length - 1 ? index + 1 : index - 1;
     _deletingInProgress = true;
     _suppressThumbScroll = true;
+    // 300ms 动画窗口锁主图 physics（_swipeLocked 旧字段从未接线=死代码）：
+    // 用户滑动会打断 animateToPage → .then 提前 removeAt 与手势目标打架，
+    // 选中态/白框/主图三处错位。锁后手势全部失效，动画必然走完。
+    setState(() => _swipeLocked = true);
 
     // ─ 条：平移补位动画 ─
     _thumbDeleteIndex = index;
@@ -1567,6 +1586,20 @@ class _DetailPageState extends ConsumerState<DetailPage>
           )
           .then((_) {
             if (!mounted) return;
+            final arrived = _pageController.page?.round() ?? -1;
+            if (arrived != next) {
+              // 动画被中断（理论不可达：physics 已锁；防御未知 ROM/手势
+              // 竞争）：数据照删（MediaStore 已物理删除，不删会残留幽灵
+              // 项），同帧 jump 校正选中态，无动画终态收敛。
+              setState(() => _files.removeAt(index));
+              final newIndex = min(index, _files.length - 1);
+              _selectedIndexNotifier.value = newIndex;
+              widget.onIndexChanged?.call(newIndex);
+              if (_pageController.hasClients) {
+                _pageController.jumpToPage(newIndex);
+              }
+              return;
+            }
             setState(() => _files.removeAt(index));
             final newIndex = min(index, _files.length - 1);
             _selectedIndexNotifier.value = newIndex;
@@ -1580,6 +1613,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
           .whenComplete(() {
             _deletingInProgress = false;
             _suppressThumbScroll = false;
+            if (mounted) setState(() => _swipeLocked = false);
           }),
     );
     toast(context, message);

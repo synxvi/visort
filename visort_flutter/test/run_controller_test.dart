@@ -219,4 +219,30 @@ void main() {
     expect(rows.first.errors, isEmpty);
     await db.close();
   });
+
+  test('appliedIds 已执行项重跑跳过（Review 重跑防误报）', () async {
+    fs.existing
+      ..add(r'D:\src/a.jpg')
+      ..add(r'D:\src/b.jpg')
+      ..add(r'D:\src/c.jpg');
+    final decisions = <String, Decision>{
+      'a.jpg': Decision.move(
+          destKey: 'A', destLabel: 'General', destPath: r'D:\Dest\General'),
+      'b.jpg': Decision.delete(),
+      'c.jpg': Decision.skip(),
+    };
+    // a/b 已成功执行过（源实际已不存在）→ 重跑必须跳过而非误报。
+    var applied = <String>{};
+    final runner = RunController(fs, null, (ids) => applied = ids);
+    final events = await runner
+        .run(_buildSession(decisions).copyWith(appliedIds: {'a.jpg', 'b.jpg'}))
+        .toList();
+    final results = events.last.results!;
+    expect(results.skipped, ['a.jpg', 'b.jpg', 'c.jpg']);
+    expect(results.errors, isEmpty);
+    expect(results.moved, isEmpty);
+    expect(results.deleted, isEmpty);
+    // 成功项回写回调（此处空跑无成功项；契约验证回调存在）
+    expect(applied, isEmpty);
+  });
 }
