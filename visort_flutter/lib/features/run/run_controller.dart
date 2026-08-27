@@ -82,6 +82,16 @@ class RunController {
     _running = true;
     try {
       yield* _runInner(session);
+    } catch (e) {
+      // 流兜底：_runInner 任何未捕获异常（channel 层 PlatformException 等）
+      // 若以 error 事件终止流，Results 屏 StreamBuilder 会永远停在执行中
+      // 且 PopScope 困死用户——捕获后转为正常 done 事件 + run_failed 错误项。
+      yield RunProgress(
+        done: true,
+        results: RunResults(
+          errors: [(file: 'run', reason: 'run_failed: $e')],
+        ),
+      );
     } finally {
       _running = false;
     }

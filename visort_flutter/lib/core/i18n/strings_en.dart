@@ -123,6 +123,7 @@ const Map<String, String> stringsEn = {
   'key_conflict_action': 'Conflict between undo / delete / skip shortcut keys',
   'folder_key_used_action': 'Key already used by an action shortcut (undo / delete / skip)',
   'run_in_progress': 'Applying changes, please wait…',
+  'run_failed': 'Run failed',
   'run_already_running': 'A run is already in progress',
   'config_reset_notice': 'Config was corrupted and has been reset; the original was backed up',
   'folder_name_invalid_char': 'Folder name contains invalid characters',
@@ -297,6 +298,7 @@ const Map<String, String> stringsEn = {
   'copy_failed': 'Copy failed',
   'moved_toast': 'Moved',
   'move_cancelled': 'Move cancelled',
+  'move_partial': 'Some photos were not moved',
 
   // ───────── P1a · 回收站对话框 ─────────
   'delete_permanently': 'Delete permanently',

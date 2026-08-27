@@ -122,6 +122,7 @@ const Map<String, String> stringsZh = {
   'folder_key_used_action': '该键已被操作键占用（撤销 / 删除 / 跳过）',
   'photo_count': '{0} 张照片',
   'run_in_progress': '正在执行变更，请稍候…',
+  'run_failed': '执行失败',
   'run_already_running': '已有一次执行正在进行中',
   'config_reset_notice': '配置文件损坏已重置，原配置已备份',
   'folder_name_invalid_char': '文件夹名含非法字符（/ \\ : * ? " < > |）',
@@ -291,6 +292,7 @@ const Map<String, String> stringsZh = {
   'copy_failed': '复制失败',
   'moved_toast': '已移动',
   'move_cancelled': '已取消移动',
+  'move_partial': '部分照片未移动',
 
   // ───────── P1a · 回收站对话框 ─────────
   'delete_permanently': '彻底删除',

@@ -461,11 +461,14 @@ class MediaStoreRepository(private val context: Context) {
             Log.w(TAG, "getMetadata DATA 查询失败: ${e.message}")
         }
 
-        // 1) ExifInterface 读 JPEG EXIF + GPS
+        // 1) ExifInterface 读 JPEG EXIF + GPS。
+        // 组懒建：无条件 getOrPut 会让 PNG/WebP 等无 EXIF 格式也产生
+        // 空 "EXIF" 组——既污染 Dart 侧返回，又使下方 metadata-extractor
+        // 兜底的 result.isEmpty() 恒 false（兜底永不可达，真机实证）。
         try {
             contentResolver.openInputStream(uri)?.use { input ->
                 val exif = androidx.exifinterface.media.ExifInterface(input)
-                val exifGroup = result.getOrPut("EXIF") { mutableMapOf() }
+                val exifGroup = mutableMapOf<String, String>()
                 fun put(key: String, v: String?) {
                     if (!v.isNullOrEmpty()) exifGroup[key] = v
                 }
@@ -481,6 +484,7 @@ class MediaStoreRepository(private val context: Context) {
                 // 曝光补偿 EV(对标系统相册图片参数卡 ISO|EV|快门|光圈|焦距 五项)。
                 // 值形如 "-3/10"(有理数,Dart 侧 formatEv 格式化为 "-0.3")。
                 put("ExposureBiasValue", exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_EXPOSURE_BIAS_VALUE))
+                if (exifGroup.isNotEmpty()) result["EXIF"] = exifGroup
                 val latLng = exif.latLong
                 if (latLng != null) {
                     val gps = result.getOrPut("GPS") { mutableMapOf() }
@@ -492,8 +496,10 @@ class MediaStoreRepository(private val context: Context) {
             Log.w(TAG, "getMetadata ExifInterface 失败: ${e.message}")
         }
 
-        // 2) metadata-extractor 兜底（无 EXIF 的格式）。仅当 ExifInterface 未取到字段时启用。
-        if (result.isEmpty()) {
+        // 2) metadata-extractor 兜底（PNG/WebP/IPTC/XMP 等无 ExifInterface
+        // 字段的格式）。条件看 EXIF/GPS 是否取到——FILE.Path 几乎恒有值，
+        // 不能作为"有元数据"的证据（旧 isEmpty 判断因此永假，兜底不可达）。
+        if (result["EXIF"] == null && result["GPS"] == null) {
             try {
                 contentResolver.openInputStream(uri)?.use { input ->
                     val md = com.drew.imaging.ImageMetadataReader.readMetadata(input)

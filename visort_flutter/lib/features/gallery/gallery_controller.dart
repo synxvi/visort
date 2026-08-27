@@ -885,7 +885,13 @@ class GalleryController extends Notifier<GalleryState> {
 
   /// 批量移至指定相册（getBucketRelativePath 解析目标 → requestMove 改
   /// RELATIVE_PATH）。成功后本地移除 + 清缓存 + 重查相册列表。
-  /// 返回 null 成功；'move_failed' / 'move_cancelled' 失败。
+  /// 返回 null 成功；'move_failed' / 'move_cancelled' / 部分成功时
+  /// 'move_partial' 失败提示。
+  ///
+  /// requestMove 返回**实际成功**的 id 集（自有文件直移 + 他人文件授权
+  /// 后的子集）——本地移除/桶数同步必须只作用于该子集；对全量 ids 操作
+  /// 会把用户拒绝授权的未移动照片也移出网格（丢图假象，静默窗又压住
+  /// ContentObserver 回环，退出重进才恢复）。
   Future<String?> movePhotosToAlbum(List<String> ids, String bucketId) async {
     if (ids.isEmpty) return null;
     try {
@@ -894,17 +900,18 @@ class GalleryController extends Notifier<GalleryState> {
       final moved = await _channel.requestMove(ids, rel);
       if (moved.isEmpty) return 'move_cancelled';
       _markSelfMutation();
-      for (final id in ids) {
+      final movedSet = moved.toSet();
+      for (final id in movedSet) {
         evictImageCache(id);
       }
-      // 先同步桶数（需 photos 定位所属相册），再移除本地列表。
-      final idSet = ids.toSet();
-      _applyBucketDeltaBatch(ids, countDelta: -1);
+      // 先同步桶数（需 photos 定位所属相册），再移除本地列表——全部用
+      // moved 子集，未移动的照片留在网格中（用户可见、可重试）。
+      _applyBucketDeltaBatch(moved, countDelta: -1);
       state = state.copyWith(
-        photos: state.photos.where((p) => !idSet.contains(p.id)).toList(),
+        photos: state.photos.where((p) => !movedSet.contains(p.id)).toList(),
       );
       await loadBuckets();
-      return null;
+      return moved.length == ids.length ? null : 'move_partial';
     } catch (e) {
       return e.toString();
     }

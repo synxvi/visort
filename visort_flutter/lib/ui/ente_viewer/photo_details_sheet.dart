@@ -48,6 +48,9 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
   Map<String, String> _gps = const {};
   String? _filePath;
   ScrollController? _ownCtrl;
+  /// 异步竞态守卫：面板开着手动翻页时新旧 _load 并发，慢返回的旧图
+  /// 结果会覆盖新图（相机/ISO/GPS 与文件名混排）。generation 只采纳最新。
+  int _loadGeneration = 0;
 
   @override
   void initState() {
@@ -55,20 +58,37 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
     _load();
   }
 
+  @override
+  void didUpdateWidget(covariant PhotoDetailsSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 面板展开时 PageView 仍可翻页（physics 未锁），info 随之更新——
+    // 异步加载的 EXIF/GPS/路径必须跟着重载，否则新照片名称配旧照片数据。
+    // 平滑策略：不清旧值、不切 loading——清值会让图片参数卡（条件渲染）
+    // 整块消失再出现 = 布局跳动；loading 态更是整面板闪烁。旧值保留至
+    // 新值到达后由 generation 命中同帧替换（本地查询通常 <300ms，翻页
+    // 注意力在图片上，瞬时旧值无感）；文件名/时间为 widget 即时字段，
+    // 翻页当帧即换。
+    if (oldWidget.info.id != widget.info.id) {
+      _load();
+    }
+  }
   /// ACCESS_MEDIA_LOCATION 首问闸门：详情面板首次打开请求一次，
   /// 授权后 EXIF 精确 GPS 不再被系统剥离（本次面板可能仍空，下次生效）。
   static bool? _amlAsked;
+
 
   Future<void> _load() async {
     if (!(_amlAsked ?? false)) {
       _amlAsked = true;
       unawaited(const MediaStoreChannel().requestAccessMediaLocation());
     }
+    final generation = ++_loadGeneration;
     try {
       final results = await Future.wait([
         const MediaStoreChannel().readMeta(widget.info.id),
         const MediaStoreChannel().getMetadata(widget.info.id),
       ]);
+      if (generation != _loadGeneration) return; // 已翻页，旧结果作废
       _meta = results[0] as MsMetaInfo;
       final md = results[1] as Map<String, Map<String, String>>;
       _exif = md['EXIF'] ?? const {};
@@ -77,7 +97,9 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
     } catch (_) {
       // 失败不阻塞:卡片按缺省占位渲染。
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && generation == _loadGeneration) {
+        setState(() => _loading = false);
+      }
     }
   }
 

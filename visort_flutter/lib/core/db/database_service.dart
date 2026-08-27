@@ -1,14 +1,18 @@
-// SQLite 底座(P0)—— 数据级持久化的 open / 版本迁移 / 降级
+// SQLite 底座(P0)—— 数据级持久化的 open
 //
 // 设计要点(见 docs/SQLITE_ROADMAP.md §4 P0):
 //   - 安卓: sqflite 默认 method-channel factory(系统 SQLite);
 //     Windows: databaseFactory = databaseFactoryFfi(原生库由 sqlite3_flutter_libs 捆绑)。
-//   - 降级红线: open/migrate 全程 try-catch,失败保持 _db = null——所有 store
+//   - 降级红线: open 全程 try-catch,失败保持 _db = null——所有 store
 //     拿到 null 后 noop,app 行为回到无持久化现状,永不因 DB 故障崩溃。
 //   - 时序: main() 以 unawaited 预热 init();store 一律经 [database] getter
 //     (幂等,未初始化会自行 await init),与预热双保险,无竞态。
-//   - 迁移: 手写 onCreate/onUpgrade,无 codegen(项目铁律)。每阶段升一版,
-//     升级路径在此追加,不改动历史分支。
+//   - 版本策略(2026-08 简化): 无存量用户,每次构建 DB 均为初始状态,
+//     不维护迁移路径——schema 变更直接改 [createAll] 全量 DDL 并升
+//     kDbVersion;老版本库由 sqflite 默认 onDowngrade(删库重建)兜底。
+//     (历史教训: v5 曾把新列写进 _createSortTables 又在 onUpgrade 里
+//     ALTER 同名列, v1/v2 库升级必炸 duplicate column——迁移路径整体
+//     废弃后此类问题不复存在。)
 
 import 'dart:io' show Platform;
 
@@ -18,16 +22,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart' as sqflite;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-/// 数据库版本史(与 docs/SQLITE_ROADMAP.md §3 一一对应):
-///   v1 (P1): bucket_snapshot / bucket_photo —— 相册桶快照,替代 visort_snap_* prefs
-///   v2:     hdr_cache —— HDR 检测结果磁盘缓存(Kotlin 进程内 hdrCache 的
-///           落盘层,mtime 校验同语义;冷启动二次进桶零文件 IO)
-///   v3 (P2): sort_session / sort_image / sort_decision —— 整理会话持久化
-///           (决策/索引/扫描结果,进程死亡不丢;单活跃会话 id 恒为 1)
-///   v4 (P3): run_log —— Run 执行历史审计(RunController.run 结束写摘要行)
-///   v5:     sort_session.classify_mode —— 会话快照的整理模式;恢复的
-///           会话按快照模式渲染根目录按钮,不再误读当前首页配置
-const int kDbVersion = 5;
+/// 数据库版本。无存量用户策略(见文件头):schema 变更时直接升此号并
+/// 改 createAll 全量 DDL,不写迁移——高版本老库降级由 sqflite 默认
+/// onDowngrade(删库重建)处理。
+const int kDbVersion = 1;
 
 final databaseServiceProvider =
     Provider<DatabaseService>((ref) => DatabaseService());
@@ -58,7 +56,6 @@ class DatabaseService {
         options: sqflite.OpenDatabaseOptions(
           version: kDbVersion,
           onCreate: _onCreate,
-          onUpgrade: _onUpgrade,
         ),
       );
     } catch (_) {
@@ -78,35 +75,9 @@ class DatabaseService {
     await createAll(db);
   }
 
-  static Future<void> _onUpgrade(
-      sqflite.Database db, int oldVersion, int newVersion) async {
-    // v1 → v2: HDR 检测磁盘缓存(真机上已存在的 v1 库走此路径)。
-    if (oldVersion < 2) {
-      await db.execute('''
-        CREATE TABLE hdr_cache (
-          id               TEXT PRIMARY KEY,
-          date_modified_ms INTEGER NOT NULL,
-          is_hdr           INTEGER NOT NULL
-        ) WITHOUT ROWID
-      ''');
-    }
-    // v2 → v3: 整理会话三表(P2)。
-    if (oldVersion < 3) {
-      await _createSortTables(db);
-    }
-    // v3 → v4: Run 执行历史(P3)。
-    if (oldVersion < 4) {
-      await _createRunLogTable(db);
-    }
-    // v4 → v5: 会话快照的整理模式(恢复会话根目录按钮按快照模式渲染)。
-    if (oldVersion < 5) {
-      await db.execute(
-          'ALTER TABLE sort_session ADD COLUMN classify_mode TEXT');
-    }
-  }
 
   /// 建当前版本的全部表(测试的内存库复用同一 schema,保证不漂移)。
-  /// 升版时此方法更新为「最新全量」,onUpgrade 补历史增量。
+  /// 升版时此方法更新为「最新全量」并升 kDbVersion,无迁移路径。
   static Future<void> createAll(sqflite.Database db) async {
     // ── v1 (P1): 相册桶快照 ──
     // snapshot 行携带分页游标与排序(快照总是某排序下的列表前缀);
@@ -153,7 +124,7 @@ class DatabaseService {
     await _createRunLogTable(db);
   }
 
-  /// v3 会话三表(onCreate 与 onUpgrade 共用,保证 schema 一致)。
+  /// v3 会话三表(createAll 全量建表用,保证 schema 一致)。
   ///
   /// session 行 id 恒为 1(单活跃会话:新扫描整体覆写旧的);image_id 桌面=
   /// 相对路径、安卓=MediaStore _ID(跨重启稳定);decision.seq 为决策插入序
@@ -196,7 +167,7 @@ class DatabaseService {
     ''');
   }
 
-  /// v4 Run 历史表(onCreate 与 onUpgrade 共用)。
+  /// v4 Run 历史表(createAll 全量建表用)。
   /// session_id 可空:单活跃会话模型下恒写 1,会话被新扫描覆写/清理后
   /// 日志行仅存摘要语义(计数 + errors),不悬挂关联查询。
   static Future<void> _createRunLogTable(sqflite.Database db) async {

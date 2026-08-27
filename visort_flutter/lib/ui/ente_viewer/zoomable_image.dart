@@ -143,7 +143,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
       final newIdx = widget.pageIndex;
       if (oldIdx != newIdx) {
         final handlers = _inherited?.doubleTapHandlers;
-        if (handlers != null && oldIdx != null) {
+        // 只清自己注册的项：同索引槽位可能已被替换页（删除补位场景）
+        // 重新注册——无条件 remove 会误删新 handler，双击从此失灵。
+        if (handlers != null &&
+            oldIdx != null &&
+            handlers[oldIdx] == _handleTopDoubleTap) {
           handlers.remove(oldIdx);
         }
         if (handlers != null && newIdx != null) {
@@ -319,8 +323,12 @@ class _ZoomableImageState extends State<ZoomableImage> {
   @override
   void dispose() {
     final idx = widget.pageIndex;
-    if (idx != null) {
-      _inherited?.doubleTapHandlers.remove(idx);
+    final handlers = _inherited?.doubleTapHandlers;
+    // 只清自己注册的项：删除补位时本 State 的 dispose 在帧末 finalizeTree
+    // 执行，晚于替换页 didChangeDependencies 的注册——无条件 remove 会把
+    // 替换页刚注册的 handler 清掉，当前页及相邻页顶层双击静默失灵。
+    if (idx != null && handlers != null && handlers[idx] == _handleTopDoubleTap) {
+      handlers.remove(idx);
     }
     _zoomStreamSubscription?.cancel();
     _photoViewController.dispose();

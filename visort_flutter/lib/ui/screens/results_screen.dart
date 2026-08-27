@@ -36,22 +36,26 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> {
       body: StreamBuilder<RunProgress>(
         stream: _runStream,
         builder: (ctx, snap) {
-          final done = snap.hasData && snap.data!.done == true;
+          final failed = snap.hasError;
+          final done = !failed && snap.hasData && snap.data!.done == true;
           // 执行中禁止退出：StreamBuilder dispose 会取消订阅，async* 流在
           // 下个 yield 点终止——批量 move/delete 根本不会执行，用户已确认
-          // Run 却静默落空。done 后恢复返回（Continue/返回键均可离开）。
+          // Run 却静默落空。done/失败后恢复返回（Continue/返回键均可离开）；
+          // 失败也必须放行——否则流异常时用户被 PopScope 永久困死在转圈页。
           return PopScope(
-            canPop: done,
+            canPop: done || failed,
             onPopInvokedWithResult: (didPop, _) {
               if (!didPop) toast(context, t(ref, 'run_in_progress'));
             },
-            child: !done
-                ? _ExecutingView(
-                    current: snap.data?.current,
-                    total: snap.data?.total,
-                    currentFile: snap.data?.currentFile,
-                  )
-                : _DoneView(results: snap.data!.results!),
+            child: failed
+                ? _ErrorView(error: snap.error)
+                : !done
+                    ? _ExecutingView(
+                        current: snap.data?.current,
+                        total: snap.data?.total,
+                        currentFile: snap.data?.currentFile,
+                      )
+                    : _DoneView(results: snap.data!.results!),
           );
         },
       ),
@@ -108,6 +112,53 @@ class _ExecutingView extends ConsumerWidget {
                       color: AppColors.muted)),
             ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 流异常视图（run 流顶层兜底之外的最后防线）：可退出，不再困死。
+class _ErrorView extends ConsumerWidget {
+  const _ErrorView({this.error});
+  final Object? error;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Scaffold(
+      backgroundColor: AppColors.bg,
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 600),
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('⚠',
+                    style: TextStyle(fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                        fontSize: 48, color: AppColors.danger)),
+                const SizedBox(height: 16),
+                Text(t(ref, 'run_failed'),
+                    style: const TextStyle(
+                        fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 32)),
+                const SizedBox(height: 8),
+                if (error != null)
+                  Text('$error',
+                      style: const TextStyle(
+                          fontFamily: 'Space Mono', fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                          color: AppColors.muted)),
+                const SizedBox(height: 32),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  child: Text(t(ref, 'back')),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
