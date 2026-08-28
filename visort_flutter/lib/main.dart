@@ -10,6 +10,8 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'package:visort_flutter/core/fs/idle_precache.dart';
+
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/gestures.dart' show debugPrintGestureArenaDiagnostics, debugPrintRecognizerCallbacksTrace;
@@ -72,6 +74,13 @@ Future<void> main() async {
   // store 一律经 DatabaseService.database 幂等 getter 兜底,慢一点也不出错。
   // 失败静默降级为纯内存(降级红线,见 database_service.dart)。
   unawaited(container.read(databaseServiceProvider).init());
+
+  // ──────────── 空闲预缓存激活(安卓) ────────────
+  // read 一次激活 provider（attach 生命周期监听 + 配额推送 Kotlin +
+  // 常驻低频扫描循环）。桌面端无 MediaStore 通道，跳过。
+  if (Platform.isAndroid) {
+    container.read(idlePrecacheProvider);
+  }
 
   // 手动注册 SpaceMono 字体:FontManifest 注册在本机 release 下不生效(字体 asset
   // 能加载、文件等宽、FontManifest 正确,但 Flutter 渲染时 fallback 成系统 sans)。

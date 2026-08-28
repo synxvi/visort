@@ -38,6 +38,10 @@ abstract final class RequestPriority {
 
   /// 网格清晰层（256/512）：快滚中挂起，停稳/慢滚时集中补。
   static const int sizedThumbnail = 200;
+
+  /// 空闲预缓存（全相册 screenNail 预生成）：比一切用户请求低——任何
+  /// 用户解码天然插队；配合 IdlePrecacheService 的交互静默检测双保险。
+  static const int idlePrecache = 300;
 }
 
 class _Task<T> {
@@ -82,6 +86,10 @@ class ServicePolicy {
   /// 并发门：6（aves 取 4；实测 4 下快滚补清晰偏慢提到 6，Kotlin 12
   /// 线程池前仍有余量）。
   static const int maxConcurrent = 6;
+
+  /// 管线空闲判定（空闲预缓存的前置条件）：队列、挂起区、在跑任务
+  /// 全空——预生成绝不与用户解码抢槽。
+  bool get idle => _queue.isEmpty && _suspended.isEmpty && _running == 0;
 
   final List<_Task<dynamic>> _queue = [];
   final List<_Task<dynamic>> _suspended = [];

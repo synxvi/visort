@@ -11,9 +11,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
+import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
+import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
+import 'package:visort_flutter/shared/widgets/toast.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -101,6 +104,9 @@ class SettingsScreen extends ConsumerWidget {
               ),
             ],
           ),
+          // ── 缓存 ──
+          _SectionHeader(t(ref, 'settings_section_cache')),
+          const _CacheSection(),
         ],
       ),
     );
@@ -306,5 +312,241 @@ class _PickerRow<T> extends StatelessWidget {
       if (tp.width > maxText) maxText = tp.width;
     }
     return 14 * 2 + 16 + 8 + maxText + 2;
+  }
+}
+
+// ───────────────── 缓存组：空闲预缓存开关 + 配额档位 + 占用/清除 ─────────────────
+
+/// 配额档位（MB）：Slider 离散档，默认 1GB。
+const List<int> _kQuotaSteps = [256, 512, 1024, 2048];
+
+String _fmtBytes(int bytes, WidgetRef ref) {
+  final mb = bytes / (1024 * 1024);
+  if (mb < 1) return '${(bytes / 1024).round()} KB';
+  if (mb < 1024) return '${mb.toStringAsFixed(mb < 10 ? 1 : 0)} MB';
+  return '${(mb / 1024).toStringAsFixed(1)} GB';
+}
+
+String _fmtQuota(int mb) => mb >= 1024 ? '${mb ~/ 1024} GB' : '$mb MB';
+
+class _CacheSection extends ConsumerStatefulWidget {
+  const _CacheSection();
+
+  @override
+  ConsumerState<_CacheSection> createState() => _CacheSectionState();
+}
+
+class _CacheSectionState extends ConsumerState<_CacheSection> {
+  final MediaStoreChannel _channel = const MediaStoreChannel();
+  ({int full, int thumb})? _usage;
+  bool _clearing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshUsage();
+  }
+
+  Future<void> _refreshUsage() async {
+    final usage = await _channel.imageCacheBytes();
+    if (mounted) setState(() => _usage = usage);
+  }
+
+  /// 关开关：弹窗提醒全量缓存将自动清除 → 确认后关开关 + 清 full 缓存。
+  Future<void> _onSwitchToOff() async {
+    final fullMb = _usage == null
+        ? ''
+        : '（${_fmtBytes(_usage!.full, ref)}）';
+    final confirmed = await showConfirmSheet(
+      context,
+      title: t(ref, 'settings_precache_off_title'),
+      desc: t(ref, 'settings_precache_off_desc') + fullMb,
+      cancelText: t(ref, 'cancel'),
+      confirmText: t(ref, 'confirm'),
+    ).confirmed;
+    if (confirmed != true || !mounted) return;
+    await _updateConfig(precacheEnabled: false);
+    await _channel.clearImageCaches(clearThumb: false);
+    await _refreshUsage();
+  }
+
+  /// 手动清除：full + thumb 全清（释放最大存储）。
+  Future<void> _onClearAll() async {
+    if (_clearing) return;
+    final total = _usage == null ? 0 : _usage!.full + _usage!.thumb;
+    final confirmed = await showConfirmSheet(
+      context,
+      title: t(ref, 'settings_clear_cache_title'),
+      desc: t(ref, 'settings_clear_cache_desc') +
+          '（${_fmtBytes(total, ref)}）',
+      cancelText: t(ref, 'cancel'),
+      confirmText: t(ref, 'confirm'),
+    ).confirmed;
+    if (confirmed != true || !mounted) return;
+    setState(() => _clearing = true);
+    final freed = await _channel.clearImageCaches(clearThumb: true);
+    if (!mounted) return;
+    setState(() => _clearing = false);
+    await _refreshUsage();
+    toast(context, t(ref, 'settings_cache_cleared') +
+        ' ${_fmtBytes(freed.full + freed.thumb, ref)}');
+  }
+
+  Future<void> _updateConfig({bool? precacheEnabled, int? precacheQuotaMb}) async {
+    final updated = ref.read(configProvider).copyWith(
+          precacheEnabled: precacheEnabled,
+          precacheQuotaMb: precacheQuotaMb,
+        );
+    ref.read(configProvider.notifier).state = updated;
+    await ref.read(profilesServiceProvider).save(updated);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final config = ref.watch(configProvider);
+    final stepIdx = _kQuotaSteps.indexOf(config.precacheQuotaMb);
+    final safeIdx = stepIdx < 0 ? 2 : stepIdx; // 未知值回退默认 1GB 档
+    final usage = _usage;
+    return _SettingsCard(
+      children: [
+        // 开关行：InkWell+Row+Switch（wallpaper_crop_page 同款模式）。
+        InkWell(
+          onTap: () {
+            if (config.precacheEnabled) {
+              _onSwitchToOff();
+            } else {
+              _updateConfig(precacheEnabled: true);
+            }
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Row(
+              children: [
+                Text(t(ref, 'settings_precache'),
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontFamily: 'Space Mono',
+                      height: 1.2,
+                      fontFamilyFallback: AppFonts.cjkFallback,
+                      fontSize: 14,
+                    )),
+                const Spacer(),
+                Switch(
+                  value: config.precacheEnabled,
+                  activeColor: AppColors.accent,
+                  onChanged: (v) => v
+                      ? _updateConfig(precacheEnabled: true)
+                      : _onSwitchToOff(),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // 配额档位：4 档离散 Slider（256MB/512MB/1GB/2GB）。
+        if (config.precacheEnabled)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: Row(
+              children: [
+                Text(t(ref, 'settings_precache_quota'),
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontFamily: 'Space Mono',
+                      height: 1.2,
+                      fontFamilyFallback: AppFonts.cjkFallback,
+                      fontSize: 14,
+                    )),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 3,
+                      activeTrackColor: AppColors.accent,
+                      inactiveTrackColor: AppColors.border,
+                      thumbColor: AppColors.accent,
+                      overlayShape: const RoundSliderOverlayShape(
+                          overlayRadius: 14),
+                      showValueIndicator: ShowValueIndicator.never,
+                    ),
+                    child: Slider(
+                      value: safeIdx.toDouble(),
+                      max: (_kQuotaSteps.length - 1).toDouble(),
+                      divisions: _kQuotaSteps.length - 1,
+                      onChanged: (v) => _updateConfig(
+                          precacheQuotaMb: _kQuotaSteps[v.round()]),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 52,
+                  child: Text(_fmtQuota(_kQuotaSteps[safeIdx]),
+                      textAlign: TextAlign.end,
+                      style: const TextStyle(
+                          fontFamily: 'Space Mono',
+                          fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                          color: AppColors.muted,
+                          fontSize: 13)),
+                ),
+              ],
+            ),
+          ),
+        // 占用显示行：进入设置页查一次 + 清除后刷新。
+        InkWell(
+          onTap: _refreshUsage,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              children: [
+                Text(t(ref, 'settings_cache_usage'),
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontFamily: 'Space Mono',
+                      height: 1.2,
+                      fontFamilyFallback: AppFonts.cjkFallback,
+                      fontSize: 14,
+                    )),
+                const Spacer(),
+                Text(
+                  usage == null ? '…' : _fmtBytes(usage.full + usage.thumb, ref),
+                  style: const TextStyle(
+                      fontFamily: 'Space Mono',
+                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                      color: AppColors.muted,
+                      fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // 手动清除行（full + thumb 全清）。
+        InkWell(
+          onTap: _onClearAll,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              children: [
+                Text(t(ref, 'settings_clear_cache'),
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontFamily: 'Space Mono',
+                      height: 1.2,
+                      fontFamilyFallback: AppFonts.cjkFallback,
+                      fontSize: 14,
+                    )),
+                const Spacer(),
+                if (_clearing)
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  const Icon(Icons.chevron_right,
+                      color: AppColors.muted, size: 20),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }

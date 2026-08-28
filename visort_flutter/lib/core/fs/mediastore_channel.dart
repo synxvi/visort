@@ -543,6 +543,60 @@ class MediaStoreChannel {
     }
   }
 
+  // ──────────── 空闲预缓存（全相册 screenNail 预生成） ────────────
+
+  /// 空闲预生成单张全图缓存（只落盘不拷像素不跨 channel 传大 buffer）。
+  /// 返回码：0=已生成 1=缓存已存在跳过 3=失败（源图缺失/损坏）。
+  Future<int> precacheFullImage(String id, {required int targetWidth}) async {
+    try {
+      return await _channel.invokeMethod<int>('precacheFullImage',
+          {'id': id, 'targetWidth': targetWidth}) ??
+          3;
+    } on PlatformException {
+      return 3;
+    }
+  }
+
+  /// 设置全图缓存配额（字节）并立即 LRU 收紧。64MB~2GB。
+  Future<void> setFullCacheQuota(int bytes) async {
+    try {
+      await _channel.invokeMethod<void>(
+          'setFullCacheQuota', {'bytes': bytes});
+    } on PlatformException {
+      // 静默：配额设置失败不影响功能（下轮再设）
+    }
+  }
+
+  /// 清空图片磁盘缓存。clearThumb=true 连缩略图一起清（手动清理按钮）。
+  /// 返回 {full: 释放字节, thumb: 释放字节}。
+  Future<({int full, int thumb})> clearImageCaches(
+      {bool clearThumb = false}) async {
+    try {
+      final raw = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+          'clearImageCaches', {'clearThumb': clearThumb});
+      return (
+        full: ((raw?['full'] as num?) ?? 0).toInt(),
+        thumb: ((raw?['thumb'] as num?) ?? 0).toInt(),
+      );
+    } on PlatformException {
+      return (full: 0, thumb: 0);
+    }
+  }
+
+  /// 统计图片磁盘缓存占用 {full, thumb}（字节）。
+  Future<({int full, int thumb})> imageCacheBytes() async {
+    try {
+      final raw = await _channel
+          .invokeMethod<Map<dynamic, dynamic>>('imageCacheBytes');
+      return (
+        full: ((raw?['full'] as num?) ?? 0).toInt(),
+        thumb: ((raw?['thumb'] as num?) ?? 0).toInt(),
+      );
+    } on PlatformException {
+      return (full: 0, thumb: 0);
+    }
+  }
+
   /// 存在性检查三态：found / notFound / error（查询失败上抛 MsException）。
   /// 旧实现把查询失败吞成 false——删除复查方向把它当"已删除"证据，
   /// 本地列表误移除（破坏性）。Kotlin 两层吞错已解除。

@@ -238,6 +238,8 @@ class AppConfig {
     this.homeLayout = HomeLayout.grid,
     this.homeGridColumns = 4,
     this.photoGridColumns = 4,
+    this.precacheEnabled = true,
+    this.precacheQuotaMb = 1024,
   });
 
   /// 所有 Profile（name → Profile）。
@@ -275,6 +277,13 @@ class AppConfig {
   /// 相册内照片网格列数（2–5）。
   final int photoGridColumns;
 
+  /// 空闲预缓存开关：交互静默 + 解码管线空闲时后台预生成全相册
+  /// screenNail（full 档盘缓存），加快浏览。关闭时由设置页清空全量缓存。
+  final bool precacheEnabled;
+
+  /// 空闲预缓存磁盘配额（MB）。档位见设置页（256MB~2GB），默认 1GB。
+  final int precacheQuotaMb;
+
   /// 当前激活 Profile 的数据（便捷访问）。
   Profile get activeProfileData =>
       profiles[activeProfile] ?? profiles.values.first;
@@ -305,6 +314,8 @@ class AppConfig {
     HomeLayout? homeLayout,
     int? homeGridColumns,
     int? photoGridColumns,
+    bool? precacheEnabled,
+    int? precacheQuotaMb,
   }) =>
       AppConfig(
         profiles: profiles ?? this.profiles,
@@ -320,6 +331,8 @@ class AppConfig {
         homeLayout: homeLayout ?? this.homeLayout,
         homeGridColumns: homeGridColumns ?? this.homeGridColumns,
         photoGridColumns: photoGridColumns ?? this.photoGridColumns,
+        precacheEnabled: precacheEnabled ?? this.precacheEnabled,
+        precacheQuotaMb: precacheQuotaMb ?? this.precacheQuotaMb,
       );
 
   /// 序列化为 JSON（可逆，见 [fromJson]）。
@@ -336,6 +349,8 @@ class AppConfig {
         'home_layout': homeLayout.name,
         'home_grid_columns': homeGridColumns,
         'photo_grid_columns': photoGridColumns,
+        'precache_enabled': precacheEnabled,
+        'precache_quota_mb': precacheQuotaMb,
         'profiles': {
           for (final e in profiles.entries) e.key: e.value.toJson(),
         },
@@ -398,6 +413,8 @@ class AppConfig {
       photoGridColumns:
           (json['photo_grid_columns'] ?? json['photoGridColumns'] as int?) ??
               4,
+      precacheEnabled: (json['precache_enabled'] as bool?) ?? true,
+      precacheQuotaMb: (json['precache_quota_mb'] as int?) ?? 1024,
     );
   }
 }

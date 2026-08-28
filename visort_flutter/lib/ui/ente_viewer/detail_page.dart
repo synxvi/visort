@@ -1970,24 +1970,40 @@ class _ThumbLineStrip extends StatelessWidget {
           padding: EdgeInsets.symmetric(horizontal: pad),
           itemCount: photos.length,
           itemBuilder: (ctx, i) {
-            // 当前构建项预取 512（contain 等比，与 viewer 渐进 large 同
+            // 当前构建项预取 large（contain 等比，与 viewer 渐进 large 同
             // key）：对标系统相册「全相册 MINI 缩略图预生成」——条滚过的图
-            // 512 即在缓存/在途，主图跟随切页首帧直接 512 级（96 兜底只剩
-            // 512 在途的 1-2 帧窗口），观感「跟随且不糊」。打点实证 512
+            // large 即在缓存/在途，主图跟随切页首帧直接 large 级（96 兜底
+            // 只剩 large 在途的 1-2 帧窗口），观感「跟随且不糊」。打点实证
             // run ~15-25ms、6 门下甩滑百张排空 <0.5s，且 p200 不挡主图/条
             // 96 的优先级。
             precacheImage(
               buildThumbnailProvider(
                 imageRefFromMediaStoreId(photos[i].id),
-                size: 512,
+                size: kViewerLargeThumbSize,
                 squareCrop: false,
               ),
               ctx,
             );
-            // 近邻预载（±2，仅 96px）：快速滑动时条项构建（懒加载）到跟前，
-            // 缩略图已在加载/缓存 → 无明显黑屏（系统相册同款体验）。
-            // precacheImage 幂等：已缓存立即 complete，加载中合并 listener。
-            for (final n in [i - 2, i - 1, i + 1, i + 2]) {
+            // 近邻预载：±1 用 large 等比（与当前项同档、与 viewer 渐进 large
+            // 同 key）——甩条滚动中/停稳页必有 large 预热，主图起步档从 cell
+            //（346 方形裁剪，竖图 ~7 倍垂直放大 = 甩动糊感来源）升为
+            // large 等比（640 档 1.8 倍放大）。±2 保持 96 方形兜底（黑屏防线，
+            // 请求量不涨）。打点实证 run 3-17ms（512 档）、q 峰 83 排空 <0.5s，
+            // 每条目仅 +1 个 large 请求；precacheImage 幂等：已缓存立即
+            // complete，加载中合并 listener。
+            for (final n in [i - 1, i + 1]) {
+              if (n >= 0 && n < photos.length) {
+                precacheImage(
+                  buildThumbnailProvider(
+                    imageRefFromMediaStoreId(photos[n].id),
+                    size: kViewerLargeThumbSize,
+                    squareCrop: false,
+                  ),
+                  ctx,
+                );
+              }
+            }
+            for (final n in [i - 2, i + 2]) {
               if (n >= 0 && n < photos.length) {
                 precacheImage(
                   buildThumbnailProvider(

@@ -258,7 +258,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 原图到货后无大小跳变。方形版（centerCrop 裁切 + 方形 childSize）会让
     // 过渡期横图视野变小/竖图裁切放大，宽高比交替的序列（竖→横→竖连续
     // 删除）频繁可见（真机实证）。
-    final large = buildThumbnailProvider(_ref, size: 512, squareCrop: false);
+    final large = buildThumbnailProvider(
+      _ref,
+      size: kViewerLargeThumbSize,
+      squareCrop: false,
+    );
     final cell = buildThumbnailProvider(_ref, size: _cellThumbSize(), squareCrop: true);
     bool completed(ImageProvider p) => _probeSyncComplete(p);
     String picked = 'none';
@@ -463,7 +467,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
         child: Center(
           child: Image(
             // 等比（同 large key），错误兜底显示也不裁切变形。
-            image: buildThumbnailProvider(_ref, size: 512, squareCrop: false),
+            image: buildThumbnailProvider(
+              _ref,
+              size: kViewerLargeThumbSize,
+              squareCrop: false,
+            ),
             fit: BoxFit.contain,
           ),
         ),
@@ -548,7 +556,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
       final gen = _loadGeneration;
       // 等比 512（与 _pickCachedProvider 的 large 同 key，翻页预加载即补位
       // 缓存命中）：过渡期 childSize 宽高比与原图一致，无大小跳变。
-      final large = buildThumbnailProvider(_ref, size: 512, squareCrop: false);
+      final large = buildThumbnailProvider(
+        _ref,
+        size: kViewerLargeThumbSize,
+        squareCrop: false,
+      );
       precacheImage(large, context)
           .then((_) {
             if (!mounted || gen != _loadGeneration) return;
