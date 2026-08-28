@@ -28,6 +28,12 @@ class ZoomTransform {
 
 enum FullScreenRequestReason { userInteraction, playbackStateChange }
 
+/// 底栏缩略图条单项的解码尺寸（px）：detail_page 条渲染与 zoomable_image
+/// 加载兜底**共用同一 ImageCache key**（provider = (id, size, squareCrop)）——
+/// 条滚过的图必已解码，viewer 主图兜底直接命中（快甩到远处时主图区不再
+/// 黑屏等待）。改此值必须两端同改（key 不匹配 = 兜底永远 miss）。
+const int kFilmstripThumbLoadSize = 96;
+
 // ───────────────── [visort 追加] 沉浸退出后恢复无背景系统栏 ─────────────────
 // 手势条（小横条）无背景：导航栏透明色用 alpha=0 但 RGB 非零的 workaround
 // （部分 ROM 把全零当「未设置」而回退半透明 scrim；同 main.dart

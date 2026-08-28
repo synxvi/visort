@@ -180,6 +180,7 @@ class _AndroidBytesImageProvider
                 key.ref.relativePath,
                 targetWidth: tw,
               ),
+              tag: 'full${tw}:${key.ref.id}',
             )
             .timeout(const Duration(seconds: 5));
         final sBuffer = await ui.ImmutableBuffer.fromUint8List(r.pixels);
@@ -382,6 +383,7 @@ class _AndroidThumbnailProvider
           dateModifiedMs: key.dateModifiedMs,
           squareCrop: key.squareCrop,
         ),
+        tag: 'thumb${key.size}${key.squareCrop ? 's' : ''}:${key.ref.id}',
       );
     } catch (_) {
       bytes = Uint8List(0);

@@ -88,8 +88,9 @@ const double _kThumbItemH = 32.0;
 const double _kThumbRadiusCenter = 4.0;
 const double _kThumbRadiusNormal = 2.5;
 
-/// 缩略图加载尺寸(px):复用 buildThumbnailProvider,两级渐进(128 占位→96 清晰)。
-const int _kThumbLoadSize = 96;
+/// 缩略图加载尺寸(px)：与 zoomable_image 加载兜底共用 key（见
+/// detail_page_state.kFilmstripThumbLoadSize），单点定义防漂移。
+const int _kThumbLoadSize = kFilmstripThumbLoadSize;
 
 /// 缩略图条→主图联动动画时长(主图翻页跟随缩略图条滚动停止/点按)。
 const Duration _kThumbSyncDuration = Duration(milliseconds: 220);
@@ -183,6 +184,19 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 缩略图条驱动主图 animateToPage 期间标记:主图跨多页时中间页 onPageChanged 据此
   /// 忽略,不回弹缩略图条。到达 target 复位,另有超时兜底。
   bool _pagerDrivenByThumb = false;
+
+  // ── 快甩防抖（对标系统相册）：条甩动中主图不逐页跟跳 ──
+  // 跟手联动若在甩动中逐居中变化 jumpToPage，主图每跳一页都落到
+  // 零缓存的全新图（第一张可用图排在几十个条解码请求之后）→ 主图区
+  // 连续黑屏、越甩越追不上。改为：甩动态（滚动速度高）只更新条高亮，
+  // 主图保持当前图；速度回落（滞回阈值）或停止后一次性切到位。
+  double _thumbLastOffset = 0;
+  DateTime _thumbLastAt = DateTime.now();
+  /// 平滑速度（px/s，EMA）。itemExtent=32，1000px/s ≈ 31 项/秒。
+  double _thumbVel = 0;
+  /// 甩动态：速度 > 进入阈值（1200）置位、< 退出阈值（500）复位（滞回
+  /// 防边界抖动来回切图）。置位期间跳过主图联动。
+  bool _thumbFlinging = false;
 
   /// [photo_view fork] X 边缘溢出翻页动画进行中：期间忽略重复回调防连翻。
   bool _edgePageAnimating = false;
@@ -334,6 +348,29 @@ class _DetailPageState extends ConsumerState<DetailPage>
       evictViewerImageCache(id, tw);
     }
     _viewedFullIds.clear();
+  }
+
+  /// 浏览中增量清理：翻页时把已远离当前页（>±3）的 viewer 大图逐出
+  /// ImageCache。长时间翻看几十上百张时，4MB/张 的原图条目会持续挤占
+  /// 缓存（上限 96-160MB）——网格缩略图被 LRU 逐出，pop 返回后整屏重新
+  /// 解码 = 「网格界面加载慢」。窗口内的保留（±3 立即翻回零重解码），
+  /// 其余随走随清，pop 时缓存主体仍是网格缩略图。
+  void _trimDistantViewerCache(int currentIndex) {
+    final tw = _viewerTargetWidthPx;
+    if (tw == null || _viewedFullIds.length <= 8) return;
+    final ids = _files;
+    final distant = <String>[];
+    for (final id in _viewedFullIds) {
+      var i = 0;
+      for (; i < ids.length; i++) {
+        if (ids[i].id == id) break;
+      }
+      if (i == ids.length || (i - currentIndex).abs() > 3) distant.add(id);
+    }
+    for (final id in distant) {
+      evictViewerImageCache(id, tw);
+      _viewedFullIds.remove(id);
+    }
   }
 
   void _removeChromeEntry() {
@@ -660,6 +697,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
             _selectedIndexNotifier.value = index;
             widget.onIndexChanged?.call(index);
             _syncThumbTo(index);
+            _trimDistantViewerCache(index);
           },
           physics: _shouldDisableScroll || _swipeLocked
               ? const NeverScrollableScrollPhysics()
@@ -1051,17 +1089,38 @@ class _DetailPageState extends ConsumerState<DetailPage>
     final ctrl = _thumbScrollCtrl;
     final ci = _thumbCenterIndex;
     if (ctrl == null || ci == null || !ctrl.hasClients) return;
+    _updateThumbFlingState(ctrl);
     final newCenter = _thumbComputeCenter();
     if (newCenter == ci.value) return;
     ci.value = newCenter; // 高亮跟手（含删除推入动画：白框翻到滚入项）
     // 程序滚动（_thumbSyncing）与删除流程（_suppressThumbScroll）：
     // 只跟手高亮，不回打主图（主图有自己的滑动动画）。
     if (_thumbSyncing || _suppressThumbScroll) return;
+    // 快甩态：主图不逐页跟跳（见 _thumbFlinging 注释）——只更新高亮，
+    // 减速回落或停止后由本方法恢复 / _onThumbScrollEnd 一次切到位。
+    if (_thumbFlinging) return;
     if (newCenter == _selectedIndexNotifier.value) return;
     // 跟手联动主图：直接赋值 + jumpToPage 即时切换。
     _selectedIndexNotifier.value = newCenter;
     widget.onIndexChanged?.call(newCenter);
     if (_pageController.hasClients) _pageController.jumpToPage(newCenter);
+  }
+
+  /// 条滚动速度跟踪 + 甩动态滞回切换（EMA 平滑帧级差分噪声）。
+  void _updateThumbFlingState(ScrollController ctrl) {
+    final now = DateTime.now();
+    final dtUs = now.difference(_thumbLastAt).inMicroseconds;
+    if (dtUs <= 0) return;
+    final v =
+        (ctrl.offset - _thumbLastOffset).abs() / (dtUs / 1e6);
+    _thumbVel = _thumbVel * 0.6 + v * 0.4;
+    _thumbLastOffset = ctrl.offset;
+    _thumbLastAt = now;
+    if (!_thumbFlinging && _thumbVel > 1200) {
+      _thumbFlinging = true;
+    } else if (_thumbFlinging && _thumbVel < 500) {
+      _thumbFlinging = false;
+    }
   }
 
   /// 缩略图条滚动停止（fling 减速结束）：吸附最近项到正中 + 联动主图。

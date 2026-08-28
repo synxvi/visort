@@ -178,11 +178,11 @@ class _ImageWrapperState extends State<ImageWrapper> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return _buildLoading(context);
+      return _withHero(_buildLoading(context));
     }
 
     if (_lastException != null) {
-      return _buildError(context);
+      return _withHero(_buildError(context));
     }
 
     final scaleBoundaries = ScaleBoundaries(
@@ -238,6 +238,23 @@ class _ImageWrapperState extends State<ImageWrapper> {
     }
     return PhotoViewDefaultError(
       decoration: widget.backgroundDecoration,
+    );
+  }
+
+  /// [visort fork] loading/error 分支同样包 Hero（与 core._buildHero 同
+  /// 属性）：heroAttributes 原本只挂在已加载的 PhotoViewCore 上——图片
+  /// 未就绪（快甩到未渲染过的远处）时 pop，源端无 Hero = flight 不启动，
+  /// 返回飞行动画被吞。三分支互斥，无同 tag 重复。
+  Widget _withHero(Widget child) {
+    final attributes = widget.heroAttributes;
+    if (attributes == null) return child;
+    return Hero(
+      tag: attributes.tag,
+      createRectTween: attributes.createRectTween,
+      flightShuttleBuilder: attributes.flightShuttleBuilder,
+      placeholderBuilder: attributes.placeholderBuilder,
+      transitionOnUserGestures: attributes.transitionOnUserGestures,
+      child: child,
     );
   }
 }

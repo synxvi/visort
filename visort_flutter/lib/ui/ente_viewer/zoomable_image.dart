@@ -32,6 +32,17 @@ import 'gallery_groups.dart' show GalleryGroups;
 /// ente 常量（core/constants.dart dragSensitivity = 8）：上滑详情/下滑关闭阈值。
 const double _kDragSensitivity = 8.0;
 
+/// 重加载（512 缩略图 + 下采样原图）起跳延迟。
+///
+/// 缩略图条快甩联动主图（跟手 jumpToPage / 停止后 animateToPage 扫过）
+/// 时，途经页 build 即触发本页 512+原图 precache——几十个早已无观众的
+/// 重量级请求（原图 ~1MP 解码，优先级 50）灌满 ServicePolicy 6 槽门，
+/// 当前页与缩略图条（96px，优先级 100）反而在队尾 → 主图黑屏、条占位
+/// 符连片，停稳后还要等积压排空。延迟 150ms 起跳：路过页在窗口内被
+/// dispose/换图（generation++）即取消，零入队；正常翻页（±1 预建页常驻
+/// >150ms）预取语义不变。
+const Duration _kHeavyLoadDelay = Duration(milliseconds: 150);
+
 class ZoomableImage extends StatefulWidget {
   final MsImageInfo photo;
 
@@ -85,6 +96,9 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// 加载代际：换图（didUpdateWidget）时自增；旧图 precache 回调按代际
   /// 丢弃，防止删除补位后旧图 large/final 迟到覆盖新图 provider。
   int _loadGeneration = 0;
+
+  /// 重加载（512 + 原图 precache）起跳延迟计时器：见 [_kHeavyLoadDelay]。
+  Timer? _heavyLoadTimer;
   ImageProvider? _imageProvider;
   bool _loadedSmallThumbnail = false;
   bool _loadingLargeThumbnail = false;
@@ -162,6 +176,9 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 通常已完成三级加载（原图在 cache）→ 直接原图，同帧显示、无
     // "缩略图回退再渐进"闪烁；未命中则退 512/cell，观感同首次渐进。
     _loadGeneration++;
+    // 换图：旧图的重加载延迟作废（gen 校验也会拦，主动取消更省）。
+    _heavyLoadTimer?.cancel();
+    _heavyLoadTimer = null;
     // 复位三级链状态（复用 State 上残留旧图的 provider/加载 flag 会阻塞
     // _loadLocalImage 对缺失级别的重启加载；miss 时旧 provider 还会继续
     // 显示被删那张图）。_pickCachedProvider 按 cache 重新分级。
@@ -253,10 +270,28 @@ class _ZoomableImageState extends State<ZoomableImage> {
       _loadedLargeThumbnail = true;
       _loadedSmallThumbnail = true;
     } else if (allowCellThumb) {
-      // cell 兜底：网格正在显示 = live 条目（已完成），首帧同步有图；
-      // 极端场景（占位图都未出就点开）loading 一帧、无 flight，可接受。
-      _imageProvider = cell;
-      _loadedSmallThumbnail = true;
+      // strip 兜底级：与底栏缩略图条条目同一 key（kFilmstripThumbLoadSize）——
+      // 条滚过的图必已完成解码，同步命中。快甩到网格未渲染过的远处时
+      //（cell 无缓存）主图区从「黑屏等解码」变「糊图即显」，停稳后 512/
+      // 原图到达替换。等比解码（fit-inside/长图等比路径），aspect 与原图
+      // 一致，无 contain 大小跳变。
+      final strip = buildThumbnailProvider(
+        _ref,
+        size: kFilmstripThumbLoadSize,
+        squareCrop: true,
+      );
+      if (completed(strip)) {
+        _imageProvider = strip;
+        _loadedSmallThumbnail = true;
+      } else if (PaintingBinding.instance.imageCache.containsKey(cell)) {
+        // cell 兜底：网格显示过/正在加载（含 pending）才落——无条件赋值会
+        // 让 PhotoView resolve 缓存外 cell 即发起解码（见 _probeSyncComplete
+        /// 守卫注释的洪泛链）。
+        _imageProvider = cell;
+        _loadedSmallThumbnail = true;
+      }
+      // 两者皆无：保持 null 走 loading 分支（Hero 常在），重加载延迟起跳
+      // 后 full(p50) 在无拥塞队列 ~200ms 出图。
     }
     // 补位路径（allowCellThumb=false）full/large 均未就绪时不落方形 cell：
     // 保持 null 走 loadingBuilder（按 _photo 宽高比显示占位框，无裁切
@@ -270,13 +305,22 @@ class _ZoomableImageState extends State<ZoomableImage> {
 
   /// 探测 provider 在 ImageCache 中是否已有【已完成】的解码条目。
   ///
+  /// ⚠️ 只读探测——[containsKey] 前置守卫是关键：resolve 对缓存外 provider
+  /// 会经 ImageCache.putIfAbsent **发起真实解码**（真机打点实证：快甩时
+  /// 每个途经页在 _pickCachedProvider 探测 full/512/strip96 三个 key 就地
+  /// 灌入 3 个无观众请求，队列深至 431-508，当前页 FIFO 排队 1.7-2s =
+  /// 「主图黑屏/第一张转圈」的根因）。无条目直接 false 不发起；有条目
+  /// （含 pending，如 _openViewer push 前 precache）resolve 只挂 listener。
+  ///
   /// ImageCache 无公开的 pending/completed 状态查询（statusProvider 非公开
   /// API），利用机制本身判定：已完成 completer 的 addListener 会【同步】
-  /// 回调（synchronousCall=true）；pending 条目（如 _openViewer push 前
-  /// precache 刚发起的原图）不会同步回调 → false。探测 listener 无论同步/
-  /// 异步/出错触发都立即摘除，不留悬挂监听（挂着的 listener 会阻止
-  /// completer 释放）。
+  /// 回调（synchronousCall=true）；pending 条目不会同步回调 → false。探测
+  /// listener 无论同步/异步/出错触发都立即摘除，不留悬挂监听（挂着的
+  /// listener 会阻止 completer 释放）。
   bool _probeSyncComplete(ImageProvider provider) {
+    if (!PaintingBinding.instance.imageCache.containsKey(provider)) {
+      return false; // 缓存外：不发起新加载
+    }
     final stream = provider.resolve(const ImageConfiguration());
     final completer = stream.completer;
     if (completer == null) return false;
@@ -322,6 +366,10 @@ class _ZoomableImageState extends State<ZoomableImage> {
 
   @override
   void dispose() {
+    // 路过页被扫过销毁：重加载延迟取消（快甩守门的关键路径——timer 内
+    // gen/mounted 双校验本也能拦，主动取消少一次唤醒）。
+    _heavyLoadTimer?.cancel();
+    _heavyLoadTimer = null;
     final idx = widget.pageIndex;
     final handlers = _inherited?.doubleTapHandlers;
     // 只清自己注册的项：删除补位时本 State 的 dispose 在帧末 finalizeTree
@@ -398,15 +446,29 @@ class _ZoomableImageState extends State<ZoomableImage> {
         ),
       );
     } else if (_showingThumbnailFallback) {
-      content = Center(
-        child: Image(
-          // 等比（同 large key），错误兜底显示也不裁切变形。
-          image: buildThumbnailProvider(_ref, size: 512, squareCrop: false),
-          fit: BoxFit.contain,
+      // Hero 必须常在（与 PhotoView heroAttributes 同 tag）：原图解码失败的
+      // 回退态直接 pop 时，无源端 Hero = flight 不启动（返回动画被吞）。
+      // 飞行 shuttle 由网格端 Hero 的 flightShuttleBuilder 提供（toHero.child
+      // = 网格缩略图），这里只需 tag 配对存在。
+      content = Hero(
+        tag: 'photo_${_photo.id}',
+        transitionOnUserGestures: true,
+        child: Center(
+          child: Image(
+            // 等比（同 large key），错误兜底显示也不裁切变形。
+            image: buildThumbnailProvider(_ref, size: 512, squareCrop: false),
+            fit: BoxFit.contain,
+          ),
         ),
       );
     } else {
-      content = const Center(child: _DelayedLoadingIndicator());
+      // 加载态（连 strip/cell 都未就绪的极短窗口）：同上补 Hero——快甩到
+      // 远处立即返回时源端有 Hero，pop 飞行照常起飞（显示网格缩略图飞回）。
+      content = Hero(
+        tag: 'photo_${_photo.id}',
+        transitionOnUserGestures: true,
+        child: const Center(child: _DelayedLoadingIndicator()),
+      );
     }
 
     // 垂直手势（ente 原版）：缩放中禁用；下滑关闭、上滑详情。阈值 8px。
@@ -441,7 +503,9 @@ class _ZoomableImageState extends State<ZoomableImage> {
   }
 
   /// 三级加载（ente 同款顺序）：
-  /// 1) cell 同款缩略图（cache 命中首帧）→ 2) 大缩略图(512) → 3) 下采样原图。
+  /// 1) cell 同款缩略图（cache 命中首帧，同步廉价）→ 2) 大缩略图(512) →
+  /// 3) 下采样原图。2/3 为重加载，延迟 [_kHeavyLoadDelay] 起跳（快甩路过
+  /// 页零入队，见其 doc）；已起跳/终态由 _loading 标志幂等，不再重排 timer。
   void _loadLocalImage(BuildContext context) {
     if (!_loadedSmallThumbnail &&
         !_loadedLargeThumbnail &&
@@ -453,6 +517,21 @@ class _ZoomableImageState extends State<ZoomableImage> {
         _notifyReadyOnce();
       }
     }
+    if (_heavyLoadTimer != null) return;
+    // 已起跳或已就绪（含失败终态：不复位标志防无限重试，见 catchError）。
+    if (_loadingLargeThumbnail || _loadingFinalImage || _loadedFinalImage) {
+      return;
+    }
+    final gen = _loadGeneration;
+    _heavyLoadTimer = Timer(_kHeavyLoadDelay, () {
+      _heavyLoadTimer = null;
+      if (!mounted || gen != _loadGeneration) return;
+      _fireHeavyLoads(context);
+    });
+  }
+
+  /// 延迟窗结束真正发起 512 + 原图 precache（页仍在树上 = 观众还在）。
+  void _fireHeavyLoads(BuildContext context) {
     if (!_loadingLargeThumbnail &&
         !_loadedLargeThumbnail &&
         !_loadedFinalImage) {

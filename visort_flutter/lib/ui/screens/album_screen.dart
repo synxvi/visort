@@ -85,6 +85,14 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   int _openViewerIndex = 0;
   double _openScrollOffset = 0;
 
+  /// viewer 翻页→网格返回定位节流：缩略图条快甩时 onIndexChanged 每个居中
+  /// 变化都触发（跟手联动），逐次 jumpTo = 网格整屏重建 + 一批 cell 缩略图
+  /// 解码请求（viewer 盖着全是白费）——与 viewer 途经页洪泛一起挤爆解码
+  /// 队列。leading 立即 + trailing 150ms 兜底：甩动中最多每 150ms 跳一次，
+  /// 停稳后末次位置必落位（Hero pop 目标 cell 就位不受影响）。
+  Timer? _viewerIndexThrottleTimer;
+  int? _pendingViewerIndex;
+
   // ── 批量选择模式：长按 cell 进入，勾选后底部操作栏执行批量操作 ──
   bool _selectMode = false;
   final Set<String> _selectedIds = {};
@@ -242,6 +250,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     _timelineScrollCtrl.removeListener(_onTimelineScroll);
     _timelineScrollCtrl.dispose();
     _scrollIdleTimer?.cancel();
+    _viewerIndexThrottleTimer?.cancel();
     _isScrolling.dispose();
     super.dispose();
   }
@@ -1039,13 +1048,25 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// viewer 翻页：飞行层返回动画跟随当前照片——更新飞行层图 + 滚动网格到
   /// 目标行 + 计算终点 cell 位置。滚动在 viewer 打开期间后台执行（用户无感），
   /// 返回时目标行已在正确位置（缩略图也随滚动预加载）。
+  /// 快甩节流见 _viewerIndexThrottleTimer 注释。
   void _onViewerIndexChanged(int index) {
     final photos = ref.read(galleryControllerProvider).photos;
     if (index < 0 || index >= photos.length) return;
     // 翻页时立即滚动网格到当前行(jumpTo 无动画):Hero pop 时 cell 必须在视口
     // (GridView lazy build,视口外 cell 无 RenderObject → Hero 找不到飞回目标)。
     // viewer 盖住网格,滚动用户无感;返回时 cell 已在正确位置 + 缩略图已预加载。
+    if (_viewerIndexThrottleTimer != null) {
+      // 节流窗内：只记末次目标，窗口到期统一落位。
+      _pendingViewerIndex = index;
+      return;
+    }
     _scrollToCellRow(index);
+    _viewerIndexThrottleTimer = Timer(const Duration(milliseconds: 150), () {
+      _viewerIndexThrottleTimer = null;
+      final pending = _pendingViewerIndex;
+      _pendingViewerIndex = null;
+      if (pending != null) _onViewerIndexChanged(pending);
+    });
   }
 
   /// 滚动网格让目标行可见。返回定位规则（对标系统相册）：

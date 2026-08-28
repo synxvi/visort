@@ -23,6 +23,8 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint;
+
 /// 请求优先级（越小越先执行）。数值对齐 aves service_policy 的梯度设计。
 abstract final class RequestPriority {
   /// viewer 当前大图：用户正盯着，必须压过一切（filmstrip 缩略图 96px
@@ -39,10 +41,36 @@ abstract final class RequestPriority {
 }
 
 class _Task<T> {
-  _Task(this.priority, this.job);
+  _Task(this.priority, this.job, [this.tag, this.enqueuedQlen, this.enqueuedAt]);
   final int priority;
   final Future<T> Function() job;
+  /// 性能打点标识（可空）。
+  final String? tag;
+  final int? enqueuedQlen;
+  final int? enqueuedAt;
   final Completer<T> completer = Completer<T>();
+}
+
+/// 微秒时钟（打点用；DateTime.now 避免引入额外依赖）。
+int nowMicros() => DateTime.now().microsecondsSinceEpoch;
+
+/// 加载管线打点开关（release 装机排查时置 true；平时 false 零开销）。
+/// 输出格式：[SP] prio wait run qLen@in tag —— wait 为入队→启动的排队
+/// 时长（队列拥塞指标），run 为 job 执行时长（解码/IO 本身），qLen@in
+/// 为入队瞬间队列深度（洪泛指标）。
+/// 排查实证（2026-08-28 快甩卡顿）：开启后真机复现一轮，wait/q 直接
+/// 定位 resolve-洪泛根因；修复后同操作 avgWait 1701ms→0ms、maxQ 431→24。
+const bool kServicePolicyPerfLog = false;
+
+void _perfLog(_Task<dynamic> task, int startAt) {
+  if (!kServicePolicyPerfLog) return;
+  final t = task.tag;
+  if (t == null) return;
+  final doneAt = nowMicros();
+  final wait = ((startAt - (task.enqueuedAt ?? startAt)) / 1000).round();
+  final run = ((doneAt - startAt) / 1000).round();
+  debugPrint(
+      '[SP] p${task.priority} wait=${wait}ms run=${run}ms q=${task.enqueuedQlen} $t');
 }
 
 class ServicePolicy {
@@ -64,8 +92,10 @@ class ServicePolicy {
 
   /// 入队执行 [job]，按 [priority] 调度；滚动暂停期间高优先级任务挂起
   /// 保序，resume 后继续。返回 job 的结果（job 的异常原样抛给调用方）。
-  Future<T> run<T>(int priority, Future<T> Function() job) {
-    final task = _Task<T>(priority, job);
+  ///
+  /// [tag]：性能打点标识（[perfLog]），定位快滚卡顿用，不影响调度。
+  Future<T> run<T>(int priority, Future<T> Function() job, {String? tag}) {
+    final task = _Task<T>(priority, job, tag, _queue.length, nowMicros());
     final pausedAbove = _pausedAbove;
     if (pausedAbove != null && priority > pausedAbove) {
       _suspended.add(task);
@@ -118,12 +148,14 @@ class ServicePolicy {
   }
 
   Future<void> _runTask(_Task<dynamic> task) async {
+    final startAt = nowMicros();
     try {
       final result = await task.job();
       if (!task.completer.isCompleted) task.completer.complete(result);
     } catch (e, st) {
       if (!task.completer.isCompleted) task.completer.completeError(e, st);
     } finally {
+      _perfLog(task, startAt);
       _running--;
       _schedule();
     }
