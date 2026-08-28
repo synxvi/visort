@@ -123,14 +123,21 @@ int _cachedMaxDecodePixels = 100000000; // 100MP 默认，首次解码前刷新
 /// 框架默认 1000 条 / 100MB 的「条数先到」语义会把字节上限架空
 ///（万张相册滚动时反复 evict + 重解码）。按 RAM 档位给字节上限、
 /// 条数收敛到 500，让 LRU 以字节为准。
+///
+/// 2026-08-28 打点实测（PJZ110 23GB / 18s 窗口）：160MB 全程贴满，viewer
+/// 压力轮一次 open（3 张 full ≈9MB）即挤出 23 条网格缩略图 → thumb 档
+/// 100% 重解码（115/115 RE）、网格命中率 25/25→0/25。23GB 档上调 256MB
+///（23GB 设备内存余量充足），6GB 档维持 96MB 不动。
 Future<void> initMaxDecodePixels() async {
   final ramMb = await MediaStoreChannel().totalRamMb();
   if (ramMb == null) return;
   final base = ramMb < 5 * 1024 ? 24000000 : 100000000;
   _cachedMaxDecodePixels = base < 50000000 ? base : 50000000; // min(50MP, base)
   final cache = PaintingBinding.instance.imageCache;
-  cache.maximumSize = 500;
-  cache.maximumSizeBytes = ramMb < 6 * 1024 ? 96 << 20 : 160 << 20;
+  // 条数同步 500→800：256MB 下混合条目（thumb96 0.04MB / full 3.4MB）
+  // 平均 ~0.5MB，500 条会先于字节到顶、架空「字节为准」语义。
+  cache.maximumSize = 800;
+  cache.maximumSizeBytes = ramMb < 6 * 1024 ? 96 << 20 : 256 << 20;
   cachePerfEvent(
     'config ram=${ramMb}MB maxPixels=$_cachedMaxDecodePixels '
     'limit=${cache.maximumSize}n/${cache.maximumSizeBytes >> 20}MB',
