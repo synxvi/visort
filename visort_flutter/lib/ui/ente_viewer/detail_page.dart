@@ -72,8 +72,8 @@ const double _kThumbLineHeight = 44.0;
 /// 每个 item 的固定布局宽度(含间距)。
 const double _kThumbItemExtent = 32.0;
 
-/// 当前(中心)项宽:比普通项(23)大 ~30% = 30。
-const double _kThumbCenterW = 30.0;
+/// 当前(中心)项宽:比普通项(23)大 ~48% = 34（槽 32 内居中溢出渲染）。
+const double _kThumbCenterW = 34.0;
 
 /// 当前项高:比普通项(32)大 ~30% = 42。
 const double _kThumbCenterH = 42.0;
@@ -2064,27 +2064,36 @@ Widget _buildStripItem(
                       ? Border.all(color: AppColors.text, width: 1.5)
                       : null,
                 ),
-                // Image + frameBuilder 占位：旧 DecorationImage 在未加载帧
-                // 渲染空白（黑屏）；frameBuilder 首帧前垫占位色块，加载完
-                // 渐入，快速滑动不再闪黑。
-                child: Image(
-                  image: buildThumbnailProvider(
-                    imageRefFromMediaStoreId(info.id),
-                    size: _kThumbLoadSize,
-                    squareCrop: true, // 方形 cover item
+                // 图片裁剪圆角：中心项贴白框【内沿】（外沿 4.0 − 边框 1.5 =
+                // 2.5），普通项 = 自身 r（2.5）——两者数值一致，高亮切换无
+                // 跳变。BoxDecoration 的 borderRadius 只画边框不裁 child，
+                // 不 clip 的话图片直角穿出圆角边框（四角不统一）。
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(
+                    isCenter ? _kThumbRadiusCenter - 1.5 : _kThumbRadiusNormal,
                   ),
-                  fit: BoxFit.cover,
-                  gaplessPlayback: true,
-                  frameBuilder: (c, child, frame, wasSync) {
-                    if (wasSync || frame != null) return child;
-                    return Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        ThumbnailPlaceHolder(),
-                        child,
-                      ],
-                    );
-                  },
+                  // Image + frameBuilder 占位：旧 DecorationImage 在未加载帧
+                  // 渲染空白（黑屏）；frameBuilder 首帧前垫占位色块，加载完
+                  // 渐入，快速滑动不再闪黑。
+                  child: Image(
+                    image: buildThumbnailProvider(
+                      imageRefFromMediaStoreId(info.id),
+                      size: _kThumbLoadSize,
+                      squareCrop: true, // 方形 cover item
+                    ),
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                    frameBuilder: (c, child, frame, wasSync) {
+                      if (wasSync || frame != null) return child;
+                      return Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          ThumbnailPlaceHolder(),
+                          child,
+                        ],
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
