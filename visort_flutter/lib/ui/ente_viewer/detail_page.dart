@@ -296,6 +296,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
   }
 
   void _onRouteAnimationStatus(AnimationStatus status) {
+    // pop(reverse)起点：冻结条/主图联动——甩滑惯性未停就返回时，pop
+    // 动画 200ms 内条仍在滚、center 继续变 → onIndexChanged 让网格再次
+    // jumpTo（leading）→ Hero 目标 cell 移位 → flight abort/divert =
+    // 「吃飞行动画」；网格二次跳动也是「飞行末端闪烁」的来源。冻结后
+    // 网格锁死在 flush 定位（album 侧 reverse 同帧冲刷），飞行目标稳定。
+    if (status == AnimationStatus.reverse) {
+      _popping = true;
+    }
     // 返回动画结束：立即移除栏。PageRouteBuilder(opaque:false) 下页面
     // dispose 延迟甚至不触发，栏挂 root Overlay 不随 route 消失，必须
     // 主动 remove（否则返回相册后栏残留覆盖网格）。
@@ -309,6 +317,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
       _evictViewedViewerCache();
     }
   }
+
+  /// pop(reverse)进行中：联动全冻结（见 _onRouteAnimationStatus 注释）。
+  bool _popping = false;
 
   /// 本次浏览已出全图的 id 集合 + 首次全图时算好的目标宽度。
   /// pop(dismissed)/dispose 时逐个 evict viewer 大图缓存——
@@ -667,6 +678,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
             );
           },
           onPageChanged: (index) {
+            if (_popping) return; // pop 冻结：主图不再换页（源端 Hero 稳定）
             if (_pagerDrivenByThumb) {
               // 缩略图条驱动主图:跨多页时中间页忽略,不回弹缩略图条;
               // 到达 target 复位 flag。
@@ -1073,6 +1085,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   /// 缩略图条滚动中：实时算离视口中心最近的项，更新高亮 + 跟手联动主图。
   void _onThumbScroll() {
+    if (_popping) return; // pop 冻结：见 _popping 注释
     final ctrl = _thumbScrollCtrl;
     final ci = _thumbCenterIndex;
     if (ctrl == null || ci == null || !ctrl.hasClients) return;
@@ -1093,7 +1106,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   /// 缩略图条滚动停止（fling 减速结束）：吸附最近项到正中 + 联动主图。
   void _onThumbScrollEnd() {
-    if (_deletingInProgress) return;
+    if (_popping || _deletingInProgress) return;
     final ctrl = _thumbScrollCtrl;
     if (ctrl == null || !ctrl.hasClients || _thumbSyncing) return;
     final target = _thumbComputeCenter();
@@ -1110,9 +1123,8 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   /// 点按缩略图单项 → 主图跳转 + 缩略图条吸附居中。
   void _onThumbTap(int i) {
-    // 删除动画窗口：条仍可点按会打断删除流程（白框已被推到 next，点按
-    // 目标与动画目标打架）——直接忽略。
-    if (_deletingInProgress) return;
+    // pop 冻结 / 删除动画窗口：条仍可点按会打断流程——直接忽略。
+    if (_popping || _deletingInProgress) return;
     if (i == _selectedIndexNotifier.value) return;
     _onThumbPageChanged(i);
     final ctrl = _thumbScrollCtrl;
