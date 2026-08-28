@@ -185,19 +185,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 忽略,不回弹缩略图条。到达 target 复位,另有超时兜底。
   bool _pagerDrivenByThumb = false;
 
-  // ── 快甩防抖（对标系统相册）：条甩动中主图不逐页跟跳 ──
-  // 跟手联动若在甩动中逐居中变化 jumpToPage，主图每跳一页都落到
-  // 零缓存的全新图（第一张可用图排在几十个条解码请求之后）→ 主图区
-  // 连续黑屏、越甩越追不上。改为：甩动态（滚动速度高）只更新条高亮，
-  // 主图保持当前图；速度回落（滞回阈值）或停止后一次性切到位。
-  double _thumbLastOffset = 0;
-  DateTime _thumbLastAt = DateTime.now();
-  /// 平滑速度（px/s，EMA）。itemExtent=32，1000px/s ≈ 31 项/秒。
-  double _thumbVel = 0;
-  /// 甩动态：速度 > 进入阈值（1200）置位、< 退出阈值（500）复位（滞回
-  /// 防边界抖动来回切图）。置位期间跳过主图联动。
-  bool _thumbFlinging = false;
-
   /// [photo_view fork] X 边缘溢出翻页动画进行中：期间忽略重复回调防连翻。
   bool _edgePageAnimating = false;
 
@@ -1089,38 +1076,19 @@ class _DetailPageState extends ConsumerState<DetailPage>
     final ctrl = _thumbScrollCtrl;
     final ci = _thumbCenterIndex;
     if (ctrl == null || ci == null || !ctrl.hasClients) return;
-    _updateThumbFlingState(ctrl);
     final newCenter = _thumbComputeCenter();
     if (newCenter == ci.value) return;
     ci.value = newCenter; // 高亮跟手（含删除推入动画：白框翻到滚入项）
     // 程序滚动（_thumbSyncing）与删除流程（_suppressThumbScroll）：
     // 只跟手高亮，不回打主图（主图有自己的滑动动画）。
     if (_thumbSyncing || _suppressThumbScroll) return;
-    // 快甩态：主图不逐页跟跳（见 _thumbFlinging 注释）——只更新高亮，
-    // 减速回落或停止后由本方法恢复 / _onThumbScrollEnd 一次切到位。
-    if (_thumbFlinging) return;
     if (newCenter == _selectedIndexNotifier.value) return;
-    // 跟手联动主图：直接赋值 + jumpToPage 即时切换。
+    // 跟手联动主图：直接赋值 + jumpToPage 即时切换（含快甩——对标系统
+    // 相册全程跟随；途经页零解码请求由 containsKey 守卫保证，跟随首帧
+    // 质量由条构建时的 512 预取保证，见 _ThumbLineStrip）。
     _selectedIndexNotifier.value = newCenter;
     widget.onIndexChanged?.call(newCenter);
     if (_pageController.hasClients) _pageController.jumpToPage(newCenter);
-  }
-
-  /// 条滚动速度跟踪 + 甩动态滞回切换（EMA 平滑帧级差分噪声）。
-  void _updateThumbFlingState(ScrollController ctrl) {
-    final now = DateTime.now();
-    final dtUs = now.difference(_thumbLastAt).inMicroseconds;
-    if (dtUs <= 0) return;
-    final v =
-        (ctrl.offset - _thumbLastOffset).abs() / (dtUs / 1e6);
-    _thumbVel = _thumbVel * 0.6 + v * 0.4;
-    _thumbLastOffset = ctrl.offset;
-    _thumbLastAt = now;
-    if (!_thumbFlinging && _thumbVel > 1200) {
-      _thumbFlinging = true;
-    } else if (_thumbFlinging && _thumbVel < 500) {
-      _thumbFlinging = false;
-    }
   }
 
   /// 缩略图条滚动停止（fling 减速结束）：吸附最近项到正中 + 联动主图。
@@ -1983,9 +1951,23 @@ class _ThumbLineStrip extends StatelessWidget {
           padding: EdgeInsets.symmetric(horizontal: pad),
           itemCount: photos.length,
           itemBuilder: (ctx, i) {
-            // 近邻预载（±2）：快速滑动时条项构建（懒加载）到跟前，缩略图
-            // 已在加载/缓存 → 无明显黑屏（系统相册同款体验）。precacheImage
-            // 幂等：已缓存立即 complete，加载中合并 listener，重复调用无害。
+            // 当前构建项预取 512（contain 等比，与 viewer 渐进 large 同
+            // key）：对标系统相册「全相册 MINI 缩略图预生成」——条滚过的图
+            // 512 即在缓存/在途，主图跟随切页首帧直接 512 级（96 兜底只剩
+            // 512 在途的 1-2 帧窗口），观感「跟随且不糊」。打点实证 512
+            // run ~15-25ms、6 门下甩滑百张排空 <0.5s，且 p200 不挡主图/条
+            // 96 的优先级。
+            precacheImage(
+              buildThumbnailProvider(
+                imageRefFromMediaStoreId(photos[i].id),
+                size: 512,
+                squareCrop: false,
+              ),
+              ctx,
+            );
+            // 近邻预载（±2，仅 96px）：快速滑动时条项构建（懒加载）到跟前，
+            // 缩略图已在加载/缓存 → 无明显黑屏（系统相册同款体验）。
+            // precacheImage 幂等：已缓存立即 complete，加载中合并 listener。
             for (final n in [i - 2, i - 1, i + 1, i + 2]) {
               if (n >= 0 && n < photos.length) {
                 precacheImage(

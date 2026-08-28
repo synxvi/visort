@@ -19,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
+import 'package:visort_flutter/core/fs/service_policy.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
@@ -1069,6 +1070,23 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     });
   }
 
+  /// 立即冲刷节流中的 pending 网格定位（viewer pop reverse 起点调用）。
+  void _flushViewerIndexReposition() {
+    // 甩滑遗留的无观众预取（条 512/96）挪到队尾：网格目标行新 cell 的
+    // 解码立即占满并发门，200ms 飞行窗口内出图，落位不闪。
+    ServicePolicy.instance.deprioritizeQueued(
+      (t) =>
+          t.tag == null ||
+          t.tag!.startsWith('thumb512') ||
+          t.tag!.startsWith('thumb96'),
+    );
+    final pending = _pendingViewerIndex;
+    _pendingViewerIndex = null;
+    _viewerIndexThrottleTimer?.cancel();
+    _viewerIndexThrottleTimer = null;
+    if (pending != null) _scrollToCellRow(pending);
+  }
+
   /// 滚动网格让目标行可见。返回定位规则（对标系统相册）：
   /// - 向后滑（index > 打开时）→ 目标行贴视口**底部**（成为最后可见行）
   /// - 向前滑（index < 打开时）→ 目标行贴视口**顶部**（成为第一行）
@@ -1175,29 +1193,38 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       ),
       context,
     );
-    Navigator.of(context).push(
+    final route = PageRouteBuilder(
       // [ente 移植] 完全复刻 ente routeToPage（navigation_util _buildPageRoute）：
       // Align + FadeTransition 200ms + opaque:false。无黑遮罩、无门控——
       // viewer（含 PageView 预渲染 ±1 页）随 fade 一起淡入 = 中间图淡入淡出、
       // 上下图随之淡入的观感；Hero 飞行层在 overlay 独立负责 cell→大图缩放。
-      PageRouteBuilder(
-        transitionDuration: const Duration(milliseconds: 200),
-        reverseTransitionDuration: const Duration(milliseconds: 200),
-        opaque: false,
-        transitionsBuilder: (ctx, anim, _, child) {
-          return Align(
-            child: FadeTransition(opacity: anim, child: child),
-          );
-        },
-        pageBuilder: (_, _, _) => DetailPage(
-          files: photos,
-          initialIndex: index,
-          onIndexChanged: _onViewerIndexChanged,
-        ),
-        settings: const RouteSettings(name: AlbumRoutes.photoViewer),
-        fullscreenDialog: true,
+      transitionDuration: const Duration(milliseconds: 200),
+      reverseTransitionDuration: const Duration(milliseconds: 200),
+      opaque: false,
+      transitionsBuilder: (ctx, anim, _, child) {
+        return Align(
+          child: FadeTransition(opacity: anim, child: child),
+        );
+      },
+      pageBuilder: (_, _, _) => DetailPage(
+        files: photos,
+        initialIndex: index,
+        onIndexChanged: _onViewerIndexChanged,
       ),
+      settings: const RouteSettings(name: AlbumRoutes.photoViewer),
+      fullscreenDialog: true,
     );
+    Navigator.of(context).push(route);
+    // pop（reverse 起点）强制冲刷节流中的 pending 定位：快甩后 150ms
+    // trailing 窗口内返回，网格可能落后当前 index 数行 → 目标 cell 不在
+    // 视口 → Hero flight 吞掉/最终落位错（「快甩中返回不稳定」根因）。
+    // reverse 第一帧同步 jumpTo——HeroController 的 flight manifest 在
+    // 帧末构建，届时 cell 已就位。（push 同步 install，animation 已非空。）
+    route.animation?.addStatusListener((status) {
+      if (status == AnimationStatus.reverse) {
+        _flushViewerIndexReposition();
+      }
+    });
   }
 }
 

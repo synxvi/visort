@@ -106,6 +106,24 @@ class ServicePolicy {
     return task.completer.future;
   }
 
+  /// 把队列中匹配的【未启动】任务移到队尾（温和重排：不取消、不报错、
+  /// future 照常完成）。viewer pop 冲刷时把甩滑遗留的条 512/96 预取挪后，
+  /// 让网格 cell 解码立即占满并发门——否则网格缩略图排在几十个无观众
+  /// 积压之后，200ms 飞行窗口内出不了图，落位后陆续替换 = 网格闪烁。
+  void deprioritizeQueued(bool Function(_Task<dynamic> task) test) {
+    if (_queue.isEmpty) return;
+    final moved = <_Task<dynamic>>[];
+    final keep = <_Task<dynamic>>[];
+    for (final t in _queue) {
+      (test(t) ? moved : keep).add(t);
+    }
+    if (moved.isEmpty) return;
+    _queue
+      ..clear()
+      ..addAll(keep)
+      ..addAll(moved);
+  }
+
   /// 滚动开始：把队列中 priority > [threshold] 的任务移出挂起（保序），
   /// 后续入队的高优先级任务直接进挂起区。
   void pauseAbove(int threshold) {
