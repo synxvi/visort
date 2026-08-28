@@ -27,6 +27,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:visort_flutter/core/fs/cache_perf.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/ui/ente_viewer/thumbnail_widget.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
@@ -331,6 +332,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   void _onFullImageLoaded(String id) {
     _viewedFullIds.add(id);
+    cachePerfEvent('fullLoaded id=$id n=${_viewedFullIds.length}');
     // 此时 context 处于活跃生命周期（zoomable_image 全图解码完成回调），
     // MediaQuery 读取安全；dispose 阶段不可再读 inherited，故提前缓存。
     _viewerTargetWidthPx ??= computeViewerTargetWidth(
@@ -342,6 +344,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
   void _evictViewedViewerCache() {
     final tw = _viewerTargetWidthPx;
     if (tw == null || _viewedFullIds.isEmpty) return;
+    cachePerfEvent('evictAll R=pop n=${_viewedFullIds.length} tw=$tw');
     for (final id in _viewedFullIds) {
       evictViewerImageCache(id, tw);
     }
@@ -368,6 +371,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
     for (final id in distant) {
       evictViewerImageCache(id, tw);
       _viewedFullIds.remove(id);
+    }
+    if (distant.isNotEmpty) {
+      cachePerfEvent('trim idx=$currentIndex evicted=${distant.length}');
     }
   }
 
@@ -694,6 +700,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
               return; // 跟手场景 filmstrip 已就位，不程序回滚
             }
             _selectedIndexNotifier.value = index;
+            cachePerfEvent('page idx=$index id=${_files[index].id}');
             widget.onIndexChanged?.call(index);
             _syncThumbTo(index);
             _trimDistantViewerCache(index);

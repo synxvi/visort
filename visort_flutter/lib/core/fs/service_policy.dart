@@ -60,7 +60,7 @@ int nowMicros() => DateTime.now().microsecondsSinceEpoch;
 /// 为入队瞬间队列深度（洪泛指标）。
 /// 排查实证（2026-08-28 快甩卡顿）：开启后真机复现一轮，wait/q 直接
 /// 定位 resolve-洪泛根因；修复后同操作 avgWait 1701ms→0ms、maxQ 431→24。
-const bool kServicePolicyPerfLog = false;
+const bool kServicePolicyPerfLog = true; // 排查期临时开启（缓存性能专项）
 
 void _perfLog(_Task<dynamic> task, int startAt) {
   if (!kServicePolicyPerfLog) return;
