@@ -104,6 +104,11 @@ class _GalleryFileWidgetState extends State<GalleryFileWidget> {
     );
     final Widget hero = Hero(
       tag: heroTag,
+      // 飞行内容取 viewer 端 Hero 的 child（PhotoViewCore 的裸 Image，
+      // fit: contain）——首帧即"完整等比图 contain 于飞行框"，与网格的
+      // cover 裁切显示有一次内容切换（系统相册同款），但几何比例与
+      // 终点/落位全程一致（缩略图等比请求框保证，见 MediaStoreRepository
+      // readThumbnail 注释）。
       flightShuttleBuilder:
           (
             flightContext,
@@ -111,24 +116,7 @@ class _GalleryFileWidgetState extends State<GalleryFileWidget> {
             flightDirection,
             fromHeroContext,
             toHeroContext,
-          ) {
-            // [SP] 打点：flight 起飞瞬间两端的实际 rect（全局坐标）。
-            String rectStr(BuildContext c) {
-              final ro = c.findRenderObject();
-              if (ro is RenderBox && ro.hasSize) {
-                final tl = ro.localToGlobal(Offset.zero);
-                return '${tl.dx.toStringAsFixed(0)},${tl.dy.toStringAsFixed(0)} '
-                    '${ro.size.width.toStringAsFixed(0)}x${ro.size.height.toStringAsFixed(0)}';
-              }
-              return 'none';
-            }
-            // ignore: avoid_print
-            print(
-              '[HERO] flight ${flightDirection.name} id=${widget.file.id} '
-              'from=${rectStr(fromHeroContext)} to=${rectStr(toHeroContext)}',
-            );
-            return (toHeroContext.widget as Hero).child;
-          },
+          ) => (toHeroContext.widget as Hero).child,
       transitionOnUserGestures: true,
       child: ClipRRect(borderRadius: borderRadius, child: thumbnailWidget),
     );

@@ -1985,12 +1985,17 @@ class _ThumbLineStrip extends StatelessWidget {
               ),
               ctx,
             );
-            // full 预取（p250，GIF 跳过）：盘缓存就绪区域（空闲预缓存已扫
-            // 过）readSampledImage 内部 30ms 盘命中 → full 进内存 → 掠过/
-            // 停稳页 pick 直接 full 级 = 「掠过即清晰」。未扫到的老照片走
-            // 100ms 全尺寸解码，p250 低于一切用户请求（当前页 p50 恒优先，
-            // 量级与 thumb512 预取同级）。
-            if (photos[i].mime != 'image/gif') {
+            // full 预取（p250，GIF 跳过）：**仅聚焦项近邻（|i−center|≤1）**。
+            // 盘缓存就绪区域（空闲预缓存已扫过）readSampledImage 内部 30ms
+            // 盘命中 → full 进内存，停稳/换页目标条目直接 full 级。
+            // ⚠️ 不可对每个构建条目无条件预取：条初始定位滚动/快甩时几十个
+            // 条目批量构建 → 46 张×4.4MB ARGB 在 ~200ms 内灌满 ImageCache
+            // （43→256MB）→ LRU evict 海啸 + GC，jank 落在 push/pop 飞行窗上
+            // （真机 [FPS]/[CACHE] 实证：pop 飞行中 33/35ms 双重 jank）。
+            // 途经项零 full（large 0.7MB 级顶着）；停稳后主图页自身的
+            // heavy loads（p50 当前页 ±1 预建页）兜住「停稳即清晰」。
+            if ((i - centerIndex.value).abs() <= 1 &&
+                photos[i].mime != 'image/gif') {
               final view = View.of(ctx);
               precacheImage(
                 buildImageProvider(
@@ -2020,19 +2025,6 @@ class _ThumbLineStrip extends StatelessWidget {
                   ),
                   ctx,
                 );
-                // 近邻 full 预取（同上：盘就绪 30ms / 未就绪 p250 排队让路）。
-                if (photos[n].mime != 'image/gif') {
-                  precacheImage(
-                    buildImageProvider(
-                      imageRefFromMediaStoreId(photos[n].id),
-                      targetWidth: computeViewerTargetWidth(
-                        View.of(ctx).physicalSize.width,
-                      ),
-                      priority: RequestPriority.prefetchFull,
-                    ),
-                    ctx,
-                  );
-                }
               }
             }
             for (final n in [i - 2, i + 2]) {

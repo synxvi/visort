@@ -18,7 +18,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show RenderImage;
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/src/core/photo_view_core.dart'
     show PhotoViewCoreState;
@@ -399,7 +398,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
   @override
   Widget build(BuildContext context) {
     _loadLocalImage(context);
-    _debugProbeHeroRect();
     Widget content;
 
     if (_imageProvider != null) {
@@ -516,54 +514,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
     scheduleMicrotask(() {
       if (!mounted) return;
       widget.onFullLoaded?.call(_photo.id);
-    });
-  }
-
-  // [SP] 打点：按加载阶段（loading→cell→large→full）各打一次 Hero 内
-  // Image 的实际全局 rect + childSize + controller.scale——与 [HERO] flight
-  // 的 to rect 对照，定位跳变环节。
-  String? _probePhase;
-  void _debugProbeHeroRect() {
-    final phase = _loadedFinalImage
-        ? 'full'
-        : _loadedLargeThumbnail
-        ? 'large'
-        : _imageProvider != null
-        ? 'cell'
-        : 'loading';
-    if (phase == _probePhase) return;
-    _probePhase = phase;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final root = context.findRenderObject();
-      RenderImage? img;
-      void visit(RenderObject node) {
-        if (img != null) return;
-        if (node is RenderImage) {
-          img = node;
-          return;
-        }
-        node.visitChildren(visit);
-      }
-      if (root is RenderObject) visit(root);
-      final box = img;
-      if (box == null) {
-        // ignore: avoid_print
-        print('[HERO] probe $phase id=${_photo.id} no-render-image');
-        return;
-      }
-      final rect = box.localToGlobal(Offset.zero) & box.size;
-      final core = _coreKey.currentState;
-      // ignore: avoid_print
-      print(
-        '[HERO] probe $phase id=${_photo.id} '
-        'rect=${rect.left.toStringAsFixed(0)},${rect.top.toStringAsFixed(0)} '
-        '${rect.width.toStringAsFixed(0)}x${rect.height.toStringAsFixed(0)} '
-        'child=${core?.scaleBoundaries.childSize.width.toStringAsFixed(0)}x'
-        '${core?.scaleBoundaries.childSize.height.toStringAsFixed(0)} '
-        'scale=${_photoViewController.scale?.toStringAsFixed(2)} '
-        'meta=${_photo.width}x${_photo.height}',
-      );
     });
   }
 
