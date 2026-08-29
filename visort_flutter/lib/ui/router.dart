@@ -19,6 +19,7 @@ import 'screens/settings_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/home_screen_android.dart';
 import 'screens/sort_screen.dart';
+import 'screens/sort_screen_android.dart';
 
 class AppRoutes {
   static const home = '/';
@@ -74,10 +75,12 @@ Route<dynamic>? onGenerateRoute(RouteSettings settings) {
           : const HomeScreen();
       return enteFadeRoute(builder: homeBuilder, settings: settings);
     case AppRoutes.sort:
-      return _platformRoute(
-        builder: (_) => const SortScreen(),
-        settings: settings,
-      );
+      // 与 home 同款文件级分叉：安卓沉浸式布局 / 桌面键盘布局
+      //（共享会话守卫在 sort_common.dart，平台差异不进共享文件）。
+      Widget sortBuilder(BuildContext _) => Platform.isAndroid
+          ? const SortScreenAndroid()
+          : const SortScreen();
+      return enteFadeRoute(builder: sortBuilder, settings: settings);
     case AppRoutes.review:
       return _platformRoute(
         builder: (_) => const ReviewScreen(),

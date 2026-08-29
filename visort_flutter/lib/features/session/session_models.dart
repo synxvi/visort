@@ -111,7 +111,7 @@ class SessionState {
   /// 扫描时刻的整理模式（ClassifyMode.name：'toNewDir'/'toAlbum'）。
   /// 随会话落盘——恢复的会话用快照模式而非当前首页配置（否则恢复
   /// toAlbum 会话时根目录按钮会按当前 toNewDir 配置错误出现/消失，
-  /// 见 sort_screen 根目录按钮判断）。null = 旧版会话无此列，UI 回退当前配置。
+  /// 见 sort_screen_android 根目录按钮判断）。null = 旧版会话无此列，UI 回退当前配置。
   final String? classifyMode;
 
   /// Run 已成功执行的决策 fileId 集（moved+deleted）。Run 完成后回写，

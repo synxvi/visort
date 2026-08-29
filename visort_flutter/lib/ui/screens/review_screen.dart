@@ -19,7 +19,7 @@ import 'package:visort_flutter/ui/router.dart';
 
 /// 「返回」按钮 → 回 Sort 屏继续整理：先把游标回退到最后一张图（破坏
 /// session 完成态）再 pop——sort 屏在 [SessionState.isComplete] 时渲染空白
-/// 过渡页（见 sort_screen.dart），裸 pop 会落到那个空白页 → 黑屏。
+/// 过渡页（见 sort_common.dart），裸 pop 会落到那个空白页 → 黑屏。
 void _continueSortAndPop(BuildContext context, WidgetRef ref) {
   final s = ref.read(sessionControllerProvider);
   if (s.totalCount > 0) {
