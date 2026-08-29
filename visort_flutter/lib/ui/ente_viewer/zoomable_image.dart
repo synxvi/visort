@@ -22,6 +22,7 @@ import 'package:flutter/rendering.dart' show RenderImage;
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/src/core/photo_view_core.dart'
     show PhotoViewCoreState;
+import 'package:visort_flutter/core/fs/cache_perf.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
@@ -258,15 +259,22 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 原图到货后无大小跳变。方形版（centerCrop 裁切 + 方形 childSize）会让
     // 过渡期横图视野变小/竖图裁切放大，宽高比交替的序列（竖→横→竖连续
     // 删除）频繁可见（真机实证）。
-    final large = buildThumbnailProvider(_ref, size: 512, squareCrop: false);
+    final large = buildThumbnailProvider(
+      _ref,
+      size: kViewerLargeThumbSize,
+      squareCrop: false,
+    );
     final cell = buildThumbnailProvider(_ref, size: _cellThumbSize(), squareCrop: true);
     bool completed(ImageProvider p) => _probeSyncComplete(p);
+    String picked = 'none';
     if (completed(full)) {
+      picked = 'full';
       _imageProvider = full;
       _loadedFinalImage = true;
       _loadedSmallThumbnail = true;
       _loadedLargeThumbnail = true;
     } else if (completed(large)) {
+      picked = 'large512';
       _imageProvider = large;
       _loadedLargeThumbnail = true;
       _loadedSmallThumbnail = true;
@@ -282,12 +290,14 @@ class _ZoomableImageState extends State<ZoomableImage> {
         squareCrop: true,
       );
       if (completed(strip)) {
+        picked = 'strip96';
         _imageProvider = strip;
         _loadedSmallThumbnail = true;
       } else if (PaintingBinding.instance.imageCache.containsKey(cell)) {
         // cell 兜底：网格显示过/正在加载（含 pending）才落——无条件赋值会
         // 让 PhotoView resolve 缓存外 cell 即发起解码（见 _probeSyncComplete
         /// 守卫注释的洪泛链）。
+        picked = 'cell';
         _imageProvider = cell;
         _loadedSmallThumbnail = true;
       }
@@ -302,6 +312,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 保持 false：让 _loadLocalImage 正常启动缺失级别的加载（若置 true
     // 会阻塞对应分支的 precache，又没有实际加载在跑 → 缩略图永不清晰）。
     _loadingFinalImage = false;
+    cachePerfEvent('pick id=${_photo.id} L=$picked${allowCellThumb ? '' : ' noCell'}');
   }
 
   /// 探测 provider 在 ImageCache 中是否已有【已完成】的解码条目。
@@ -458,7 +469,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
         child: Center(
           child: Image(
             // 等比（同 large key），错误兜底显示也不裁切变形。
-            image: buildThumbnailProvider(_ref, size: 512, squareCrop: false),
+            image: buildThumbnailProvider(
+              _ref,
+              size: kViewerLargeThumbSize,
+              squareCrop: false,
+            ),
             fit: BoxFit.contain,
           ),
         ),
@@ -561,7 +576,9 @@ class _ZoomableImageState extends State<ZoomableImage> {
         !_loadedLargeThumbnail &&
         !_loadedFinalImage) {
       final cellThumb = buildThumbnailProvider(_ref, size: _cellThumbSize(), squareCrop: true);
-      if (PaintingBinding.instance.imageCache.containsKey(cellThumb)) {
+      final cellHit = PaintingBinding.instance.imageCache.containsKey(cellThumb);
+      cachePerfProbe(cacheLevelThumb(_cellThumbSize(), true), cellHit);
+      if (cellHit) {
         _imageProvider = cellThumb;
         _loadedSmallThumbnail = true;
         _notifyReadyOnce();
@@ -589,7 +606,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
       final gen = _loadGeneration;
       // 等比 512（与 _pickCachedProvider 的 large 同 key，翻页预加载即补位
       // 缓存命中）：过渡期 childSize 宽高比与原图一致，无大小跳变。
-      final large = buildThumbnailProvider(_ref, size: 512, squareCrop: false);
+      final large = buildThumbnailProvider(
+        _ref,
+        size: kViewerLargeThumbSize,
+        squareCrop: false,
+      );
       precacheImage(large, context)
           .then((_) {
             if (!mounted || gen != _loadGeneration) return;

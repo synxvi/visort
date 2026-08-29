@@ -315,6 +315,18 @@ const Map<String, String> stringsEn = {
   'lang_setting': 'Language',
   'settings_section_home': 'Home',
   'settings_section_album': 'Album',
+  'settings_section_cache': 'Cache',
+  'settings_precache': 'Idle Precache',
+  'settings_precache_quota': 'Quota',
+  'settings_cache_usage': 'Cache Usage',
+  'settings_clear_cache': 'Clear Image Cache',
+  'settings_precache_off_title': 'Disable precache?',
+  'settings_precache_off_desc':
+      'All precached full images will be cleared automatically',
+  'settings_clear_cache_title': 'Clear image cache',
+  'settings_clear_cache_desc':
+      'All full-image and thumbnail caches will be cleared and regenerated on next browse',
+  'settings_cache_cleared': 'Freed',
   'settings_title': 'Settings',
   'settings_home_layout': 'Home Layout',
   'settings_home_grid_cols': 'Home Grid Columns',

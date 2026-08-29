@@ -93,6 +93,8 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     /// 删除弹窗发起前的 MANAGE_MEDIA 直删数 / 弹窗涉及的 URI 数（契约同上）
     private var pendingDeleteDirectCount: Int = 0
     private var pendingDeleteConsentCount: Int = 0
+    /// 弹窗删除的完整 ids（成功/部分成功分支据此清磁盘缓存文件）。
+    private var pendingDeleteIds: List<String> = emptyList()
 
     /// 待处理的重命名请求（他人文件授权弹窗异步）
     private var pendingRenameResult: Result? = null
@@ -214,11 +216,15 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                     // 实际删除数 = 弹窗前 MANAGE_MEDIA 直删数 + 弹窗 URI 数
                     //（部分直删 + 弹窗的组合下，旧协议只报 ids.size 或取消，
                     // 已直删部分被误报/丢失——本地列表残留幽灵条目）。
+                    clearImageCacheFilesAsync(pendingDeleteIds)
+                    pendingDeleteIds = emptyList()
                     pending.success(pendingDeleteDirectCount + pendingDeleteConsentCount)
                 } else if (pendingDeleteDirectCount > 0) {
                     // 用户取消弹窗，但直删子集已物理删除——如实上报部分
                     // 成功（Dart 侧 exists 复查会正确移除并提示部分失败），
                     // 不再抛 CANCELLED 让本地状态与磁盘脱节。
+                    clearImageCacheFilesAsync(pendingDeleteIds)
+                    pendingDeleteIds = emptyList()
                     pending.success(pendingDeleteDirectCount)
                 } else {
                     pending.error(MsError.DeleteCancelled.code, MsError.DeleteCancelled.message, null)
@@ -360,6 +366,11 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             "requestManageMedia" -> handleRequestManageMedia(result)
             // [ente 对齐] 设备总内存（MB）：解码防崩阈值用（<5GB → 24MP 上限）。
             "totalRamMb" -> handleTotalRamMb(result)
+            // 空闲预缓存（全相册 screenNail 预生成，设置页档位配额）。
+            "precacheFullImage" -> handlePrecacheFullImage(call, result)
+            "setFullCacheQuota" -> handleSetFullCacheQuota(call, result)
+            "clearImageCaches" -> handleClearImageCaches(call, result)
+            "imageCacheBytes" -> handleImageCacheBytes(result)
             else -> result.notImplemented()
         }
     }
@@ -815,6 +826,86 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         }
     }
 
+    // ──────────── 空闲预缓存（channel 层） ────────────
+
+    private fun handlePrecacheFullImage(call: MethodCall, result: Result) {
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        val id = call.argument<String>("id")
+        if (id.isNullOrBlank()) {
+            result.error(MsError.InvalidArg("id 缺失").code, null, null); return
+        }
+        val targetWidth = call.argument<Int>("targetWidth") ?: 1152
+        ioExecutor.execute {
+            val code = try {
+                repo.precacheFullImage(id, targetWidth)
+            } catch (e: Exception) {
+                3
+            }
+            mainHandler.post { result.success(code) }
+        }
+    }
+
+    private fun handleSetFullCacheQuota(call: MethodCall, result: Result) {
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        // ⚠️ MethodChannel 编码坑：Dart int 在 2^31 内以 32 位 Integer 到达，
+        // argument<Long> 强转失败返回 null（1GB=2^30 正中招）——用 Number
+        // 兼容收再 toLong。此 bug 曾使配额设置静默失败、Kotlin 恒用默认
+        // 128MB → 预缓存 LRU 环流删最新照片。
+        val bytes = (call.argument<Number>("bytes"))?.toLong()
+        if (bytes == null || bytes <= 0) {
+            result.error(MsError.InvalidArg("bytes 非法").code, null, null); return
+        }
+        ioExecutor.execute {
+            try {
+                repo.setFullCacheQuota(bytes)
+                mainHandler.post { result.success(true) }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("setFullCacheQuota 异常: ${e.message}").code, e.message, null)
+                }
+            }
+        }
+    }
+
+    private fun handleClearImageCaches(call: MethodCall, result: Result) {
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        val clearThumb = call.argument<Boolean>("clearThumb") ?: false
+        ioExecutor.execute {
+            val freed = try {
+                repo.clearImageCaches(clearThumb)
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("clearImageCaches 异常: ${e.message}").code, e.message, null)
+                }
+                return@execute
+            }
+            mainHandler.post { result.success(freed) }
+        }
+    }
+
+    private fun handleImageCacheBytes(result: Result) {
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        ioExecutor.execute {
+            val sizes = try {
+                repo.imageCacheBytes()
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("imageCacheBytes 异常: ${e.message}").code, e.message, null)
+                }
+                return@execute
+            }
+            mainHandler.post { result.success(sizes) }
+        }
+    }
+
     private fun handleExists(call: MethodCall, result: Result) {
         val repo = requireRepo() ?: run {
             result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
@@ -870,11 +961,14 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             }
             mainHandler.post {
                 when (dr) {
-                    is MediaStoreRepository.DeleteResult.Done ->
+                    is MediaStoreRepository.DeleteResult.Done -> {
                         // 直接完成（MANAGE_MEDIA 全量直删 / 无图可删）：
                         // 上报实际删除数——此前恒报 0，已删文件被 Dart 记为
                         // delete_failed（结果报告错误，重跑时文件已不存在）。
+                        // 删除成功即清磁盘缓存文件（预缓存泄漏防线）。
+                        clearImageCacheFilesAsync(ids)
                         result.success(dr.deleted)
+                    }
                     is MediaStoreRepository.DeleteResult.NeedsConsent -> {
                         // 启动系统弹窗。记录直删数与弹窗 URI 数——弹窗结果
                         // 分支据此合成真实删除数（见 onActivityResult）。
@@ -883,6 +977,8 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                         // 弹窗只覆盖直删失败的子集：ids.size - alreadyDeleted
                         // （旧协议记 ids.size，部分直删 + 授权的组合会虚报）。
                         pendingDeleteConsentCount = ids.size - dr.alreadyDeleted
+                        // ids 记成员：弹窗成功/部分直删分支据此清缓存文件。
+                        pendingDeleteIds = ids
                         try {
                             act.startIntentSenderForResult(dr.intentSender, REQUEST_DELETE, null, 0, 0, 0)
                         } catch (e: Exception) {
@@ -891,6 +987,17 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// 删除成功后清这些 id 的磁盘缓存文件（full + thumb 各目录 `{id}.jpg`）。
+    /// 文件 IO 下 ioExecutor；失败静默（残留由 LRU trim 兜底回收）。
+    private fun clearImageCacheFilesAsync(ids: List<String>) {
+        val repo = repository ?: return
+        ioExecutor.execute {
+            for (id in ids) {
+                id.toLongOrNull()?.let { repo.deleteImageCacheFiles(it) }
             }
         }
     }

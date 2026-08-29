@@ -17,6 +17,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
+import 'package:visort_flutter/core/fs/cache_perf.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/fs/service_policy.dart';
@@ -1183,14 +1184,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       info.id,
       extension: extOf(info.name),
     );
+    final openTw = computeViewerTargetWidth(
+      MediaQuery.sizeOf(context).width *
+          MediaQuery.devicePixelRatioOf(context),
+    );
+    cachePerfEvent('open idx=$index id=${info.id} tw=$openTw');
     precacheImage(
-      buildImageProvider(
-        imgRef,
-        targetWidth: computeViewerTargetWidth(
-          MediaQuery.sizeOf(context).width *
-              MediaQuery.devicePixelRatioOf(context),
-        ),
-      ),
+      buildImageProvider(imgRef, targetWidth: openTw),
       context,
     );
     final route = PageRouteBuilder(

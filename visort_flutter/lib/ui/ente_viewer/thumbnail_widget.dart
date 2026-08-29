@@ -5,6 +5,7 @@
 // [aves 移植] GIF 动图徽标（左下胶囊，OverlayIcon 同款样式）。
 
 import 'package:flutter/material.dart';
+import 'package:visort_flutter/core/fs/cache_perf.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
@@ -110,12 +111,14 @@ class _ThumbnailWidgetState extends State<ThumbnailWidget> {
       squareCrop: true,
     );
     if (PaintingBinding.instance.imageCache.containsKey(provider)) {
+      cachePerfProbe(cacheLevelThumb(widget.thumbnailSize, true), true);
       setState(() {
         _imageProvider = provider;
         _hasLoadedThumbnail = true;
       });
       return;
     }
+    cachePerfProbe(cacheLevelThumb(widget.thumbnailSize, true), false);
     precacheImage(provider, context).then((_) {
       if (mounted && !_hasLoadedThumbnail) {
         setState(() {

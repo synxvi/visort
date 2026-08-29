@@ -38,6 +38,15 @@ abstract final class RequestPriority {
 
   /// 网格清晰层（256/512）：快滚中挂起，停稳/慢滚时集中补。
   static const int sizedThumbnail = 200;
+
+  /// 空闲预缓存（全相册 screenNail 预生成）：比一切用户请求低——任何
+  /// 用户解码天然插队；配合 IdlePrecacheService 的交互静默检测双保险。
+  static const int idlePrecache = 300;
+
+  /// filmstrip full 预取（盘缓存就绪区域「掠过即 full」）：低于一切用户
+  /// 请求（当前页 p50 恒优先），高于空闲扫描——未扫到的老照片会走
+  /// 100ms 全尺寸解码，量级与 thumb512 预取同级（p200 q83 已实证可承受）。
+  static const int prefetchFull = 250;
 }
 
 class _Task<T> {
@@ -60,7 +69,7 @@ int nowMicros() => DateTime.now().microsecondsSinceEpoch;
 /// 为入队瞬间队列深度（洪泛指标）。
 /// 排查实证（2026-08-28 快甩卡顿）：开启后真机复现一轮，wait/q 直接
 /// 定位 resolve-洪泛根因；修复后同操作 avgWait 1701ms→0ms、maxQ 431→24。
-const bool kServicePolicyPerfLog = false;
+const bool kServicePolicyPerfLog = true; // 排查期临时开启（缓存性能专项）
 
 void _perfLog(_Task<dynamic> task, int startAt) {
   if (!kServicePolicyPerfLog) return;
@@ -82,6 +91,10 @@ class ServicePolicy {
   /// 并发门：6（aves 取 4；实测 4 下快滚补清晰偏慢提到 6，Kotlin 12
   /// 线程池前仍有余量）。
   static const int maxConcurrent = 6;
+
+  /// 管线空闲判定（空闲预缓存的前置条件）：队列、挂起区、在跑任务
+  /// 全空——预生成绝不与用户解码抢槽。
+  bool get idle => _queue.isEmpty && _suspended.isEmpty && _running == 0;
 
   final List<_Task<dynamic>> _queue = [];
   final List<_Task<dynamic>> _suspended = [];

@@ -14,6 +14,7 @@ import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 
 import 'android_mediastore_file_system.dart';
+import 'cache_perf.dart';
 import 'file_system_repository.dart';
 import 'image_ref.dart';
 import 'mediastore_channel.dart';
@@ -25,9 +26,17 @@ import 'service_policy.dart';
 /// （12MP ≈ 48MB ARGB）在键盘连按时每键双份解码会瞬间塞满 ImageCache；
 /// 下采样后 ~7MB/张。GIF 跳过缩放（ResizeImage 对多帧动图不可靠，
 /// 安卓侧 _AndroidBytesImageProvider 同样对 GIF 走全量保多帧）。
-ImageProvider buildImageProvider(ImageRef ref, {int? targetWidth}) {
+/// [priority]（安卓）：ServicePolicy 入队优先级——预取场景（filmstrip
+/// p250）须低于用户当前页（p50），防止抢队（当年「主图黑屏」根因）。
+/// 不参与 ImageCache key（相同 id+tw 的实例等值，先到的 load 生效）。
+ImageProvider buildImageProvider(ImageRef ref,
+    {int? targetWidth, int priority = RequestPriority.viewerImage}) {
   if (Platform.isAndroid) {
-    return _AndroidBytesImageProvider(ref: ref, targetWidth: targetWidth);
+    return _AndroidBytesImageProvider(
+      ref: ref,
+      targetWidth: targetWidth,
+      priority: priority,
+    );
   }
   final file = FileImage(File(p.join(ref.root, ref.relativePath)));
   if (targetWidth != null &&
@@ -67,16 +76,18 @@ void evictImageCache(String mediaStoreId) {
   if (!Platform.isAndroid) return;
   final cache = PaintingBinding.instance.imageCache;
   final ref = imageRefFromMediaStoreId(mediaStoreId);
+  final results = <bool>[];
   for (final (size, crop) in _usedThumbVariants) {
-    cache.evict(_AndroidThumbnailProvider(
-      ref: ref,
-      size: size,
-      squareCrop: crop,
-    ));
+    results.add(
+      cache.evict(
+        _AndroidThumbnailProvider(ref: ref, size: size, squareCrop: crop),
+      ),
+    );
   }
   // 全图：无 targetWidth 条目（带 targetWidth 的 viewer 变体由
   // evictViewerImageCache 在关闭时按具体宽度清理）。
-  cache.evict(_AndroidBytesImageProvider(ref: ref));
+  results.add(cache.evict(_AndroidBytesImageProvider(ref: ref)));
+  cachePerfEvict('media', mediaStoreId, results);
 }
 
 /// 清理 viewer 浏览用的图片缓存（1024 垫底缩略图 + 全图），**不动网格 300
@@ -91,8 +102,11 @@ void evictViewerImageCache(String mediaStoreId, int targetWidth) {
   // 768/1024 条目——旧固定 evict 是空转（Cache.evict 对不存在 key 返回
   // false，白付 2 次对象构造 + key 哈希）。改只清真实键：无 targetWidth
   //（旧条目）与带 targetWidth（下采样）都清。
-  cache.evict(_AndroidBytesImageProvider(ref: ref));
-  cache.evict(_AndroidBytesImageProvider(ref: ref, targetWidth: targetWidth));
+  final results = <bool>[
+    cache.evict(_AndroidBytesImageProvider(ref: ref)),
+    cache.evict(_AndroidBytesImageProvider(ref: ref, targetWidth: targetWidth)),
+  ];
+  cachePerfEvict('viewer', mediaStoreId, results);
 }
 
 /// viewer 原图下采样目标宽度（物理像素）：对齐系统相册 by70.c() = max(960, 屏宽×0.8)。
@@ -117,23 +131,42 @@ int _cachedMaxDecodePixels = 100000000; // 100MP 默认，首次解码前刷新
 /// 框架默认 1000 条 / 100MB 的「条数先到」语义会把字节上限架空
 ///（万张相册滚动时反复 evict + 重解码）。按 RAM 档位给字节上限、
 /// 条数收敛到 500，让 LRU 以字节为准。
+///
+/// 2026-08-28 打点实测（PJZ110 23GB / 18s 窗口）：160MB 全程贴满，viewer
+/// 压力轮一次 open（3 张 full ≈9MB）即挤出 23 条网格缩略图 → thumb 档
+/// 100% 重解码（115/115 RE）、网格命中率 25/25→0/25。23GB 档上调 256MB
+///（23GB 设备内存余量充足），6GB 档维持 96MB 不动。
 Future<void> initMaxDecodePixels() async {
   final ramMb = await MediaStoreChannel().totalRamMb();
   if (ramMb == null) return;
   final base = ramMb < 5 * 1024 ? 24000000 : 100000000;
   _cachedMaxDecodePixels = base < 50000000 ? base : 50000000; // min(50MP, base)
   final cache = PaintingBinding.instance.imageCache;
-  cache.maximumSize = 500;
-  cache.maximumSizeBytes = ramMb < 6 * 1024 ? 96 << 20 : 160 << 20;
+  // 条数同步 500→800：256MB 下混合条目（thumb96 0.04MB / full 3.4MB）
+  // 平均 ~0.5MB，500 条会先于字节到顶、架空「字节为准」语义。
+  cache.maximumSize = 800;
+  cache.maximumSizeBytes = ramMb < 6 * 1024 ? 96 << 20 : 256 << 20;
+  cachePerfEvent(
+    'config ram=${ramMb}MB maxPixels=$_cachedMaxDecodePixels '
+    'limit=${cache.maximumSize}n/${cache.maximumSizeBytes >> 20}MB',
+  );
 }
 
 /// 安卓端从 MediaStore 读字节的 ImageProvider。
 class _AndroidBytesImageProvider
     extends ImageProvider<_AndroidBytesImageProvider> {
-  const _AndroidBytesImageProvider({required this.ref, this.targetWidth});
+  const _AndroidBytesImageProvider({
+    required this.ref,
+    this.targetWidth,
+    this.priority = RequestPriority.viewerImage,
+  });
 
   final ImageRef ref;
   final int? targetWidth;
+
+  /// ServicePolicy 入队优先级（预取 vs 用户当前页）。不参与 ==/hashCode
+  ///（相同 id+tw 等值共享缓存条目，先发起的 load 决定实际优先级）。
+  final int priority;
 
   @override
   Future<_AndroidBytesImageProvider> obtainKey(
@@ -175,7 +208,7 @@ class _AndroidBytesImageProvider
         // 不低于占位层(100)。
         final r = await ServicePolicy.instance
             .run(
-              RequestPriority.viewerImage,
+              key.priority,
               () => _msChannel.readSampledImage(
                 key.ref.relativePath,
                 targetWidth: tw,
@@ -192,9 +225,12 @@ class _AndroidBytesImageProvider
         );
         // 必须 await：否则 instantiateCodec 的异步错误逃出 catch，
         // 不落 readBytes 兜底（3.47 unawaited_return_in_try_block 揪出）。
-        return await desc.instantiateCodec();
+        final codec = await desc.instantiateCodec();
+        cachePerfDecode(cacheLevelFull(tw), key.ref.id, r.width, r.height);
+        return codec;
       } catch (_) {
         // readSampledImage 失败(超时/channel/解码)→ 落到下面 readBytes 兜底
+        cachePerfEvent('fallback L=${cacheLevelFull(tw)} id=${key.ref.id}');
       }
     }
     final bytes = await _fs.readBytes(key.ref);
@@ -204,11 +240,18 @@ class _AndroidBytesImageProvider
     if (tw != null && tw > 0) {
       if (isGif) {
         // GIF:不降采样,全尺寸解码保全部帧(GIF 文件通常几 MB,可接受)。
+        cachePerfDecode('gif$tw', key.ref.id, null, null, via: 'bytes');
         return decode(buffer);
       }
       return decode(
         buffer,
         getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
+          cachePerfDecodeIntrinsic(
+            '${cacheLevelFull(tw)}FB',
+            key.ref.id,
+            intrinsicWidth,
+            intrinsicHeight,
+          );
           return ui.TargetImageSize(width: tw);
         },
       );
@@ -221,16 +264,26 @@ class _AndroidBytesImageProvider
       getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
         final px = intrinsicWidth * intrinsicHeight;
         final max = _cachedMaxDecodePixels;
+        int outW;
+        int outH;
         if (px <= max) {
-          return ui.TargetImageSize(
-            width: intrinsicWidth,
-            height: intrinsicHeight,
-          );
+          outW = intrinsicWidth;
+          outH = intrinsicHeight;
+        } else {
+          final aspect = intrinsicWidth / intrinsicHeight;
+          final targetH = math.sqrt(max / aspect);
+          outW = (aspect * targetH).round();
+          outH = targetH.round();
         }
-        final aspect = intrinsicWidth / intrinsicHeight;
-        final targetH = math.sqrt(max / aspect);
-        final targetW = (aspect * targetH).round();
-        return ui.TargetImageSize(width: targetW, height: targetH.round());
+        // 打最终解码尺寸（进缓存的真实字节）；intrinsic 在 via 里留档。
+        cachePerfDecode(
+          'hd',
+          key.ref.id,
+          outW,
+          outH,
+          via: 'bytes(${intrinsicWidth}x$intrinsicHeight)',
+        );
+        return ui.TargetImageSize(width: outW, height: outH);
       },
     );
   }
@@ -400,6 +453,13 @@ class _AndroidThumbnailProvider
     return decode(
       buffer,
       getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
+        cachePerfDecodeIntrinsic(
+          cacheLevelThumb(key.size, key.squareCrop),
+          key.ref.id,
+          intrinsicWidth,
+          intrinsicHeight,
+          via: 'thumb',
+        );
         return ui.TargetImageSize(width: key.size);
       },
     );

@@ -635,6 +635,32 @@ class MediaStoreRepository(private val context: Context) {
         // 网格/查看器视觉需求最低 960。
         val safeTarget = targetWidth.coerceIn(960, 4096)
         val longId = id.toLongOrNull() ?: throw MsError.InvalidArg("非法图片 id: $id")
+        // ⓪ 磁盘缓存（对标系统相册 screenNail 的 MEMORY_AND_DISK 磁盘层）：
+        // 首次解码成功后落盘 targetWidth 宽 JPEG（已采样+EXIF 转正，二次读
+        // 只需 decodeByteArray ~20-30ms vs 原路径 inJustDecodeBounds+全解码
+        // +旋转 ~96ms）。viewer 回访/甩回程滚动期间 full 命中率大涨 = 滚动
+        // 清晰度的主要来源。失效与清理同 thumb 缓存（mtime 校验 + LRU trim）。
+        readFullCache(longId, safeTarget)?.let { return it }
+        val bitmap = decodeSampledBitmap(longId, safeTarget)
+        // ④' 落盘 screenNail JPEG（quality 90，已采样+转正；PNG 源存 JPEG 视觉
+        // 无损级）：同步写 ~150KB，读路径跑 ioExecutor 可接受。失败不阻断
+        //（缓存纯加速器）。写后再 copy 像素（compress 只读位图不销毁）。
+        writeFullCache(longId, safeTarget, bitmap)
+        val w = bitmap.width
+        val h = bitmap.height
+        // ④ 直接拷贝 ARGB_8888 原始像素(不 compress JPEG):省掉 JPEG encode + dart 再
+        //    decode 两步 codec。copyPixelsToBuffer 字节序 RGBA(= Flutter rgba8888)。
+        val pixels = ByteArray(w * h * 4)
+        bitmap.copyPixelsToBuffer(ByteBuffer.wrap(pixels))
+        bitmap.recycle()
+        return mapOf("pixels" to pixels, "width" to w, "height" to h)
+    }
+
+    /// 原图 → ≤[safeTarget] 宽的转正位图（inSampleSize 下采样 + EXIF 旋转），
+    /// 不落盘不拷像素——readSampledImage（在线路径）与 precacheFullImage
+    ///（空闲预生成）共用的解码核。
+    private fun decodeSampledBitmap(longId: Long, safeTarget: Int): Bitmap {
+        val id = longId.toString()
         val uri = ContentUris.withAppendedId(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
         )
@@ -679,27 +705,193 @@ class MediaStoreRepository(private val context: Context) {
         }
         val dStream = contentResolver.openInputStream(uri)
             ?: throw MsError.QueryFailed("无法打开 InputStream: $id")
-        var bitmap = dStream.use {
+        val bitmap = dStream.use {
             BitmapFactory.decodeStream(BufferedInputStream(it, 65536), null, opts)
         } ?: throw MsError.QueryFailed("无法解码 id=$id")
-        // ③ 应用 EXIF 旋转(见函数 doc):竖拍照片位图横躺,Matrix.postRotate
-        //    转正。翻转组合(TRANSPOSE/TRANSVERSE,多见于前置摄像头)忽略镜像
-        //    只取旋转角——比横躺好,罕见场景不引入翻转复杂度。
-        if (rotationDegrees != 0) {
-            val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
-            val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-            bitmap.recycle()
-            bitmap = rotated
-        }
-        // ④ 直接拷贝 ARGB_8888 原始像素(不 compress JPEG):省掉 JPEG encode + dart 再
-        //    decode 两步 codec。copyPixelsToBuffer 字节序 RGBA(= Flutter rgba8888)。
-        val w = bitmap.width
-        val h = bitmap.height
-        val pixels = ByteArray(w * h * 4)
-        bitmap.copyPixelsToBuffer(ByteBuffer.wrap(pixels))
+        // ③' 应用 EXIF 旋转(见 readSampledImage doc):竖拍照片位图横躺,
+        //    Matrix.postRotate 转正。翻转组合(TRANSPOSE/TRANSVERSE,多见于前置
+        //    摄像头)忽略镜像只取旋转角——比横躺好,罕见场景不引入翻转复杂度。
+        if (rotationDegrees == 0) return bitmap
+        val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+        val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
         bitmap.recycle()
-        return mapOf("pixels" to pixels, "width" to w, "height" to h)
+        return rotated
     }
+
+    // ──────────── 空闲预缓存（对标系统相册全相册 screenNail 预生成，配额内填满） ────────────
+
+    /// 空闲预生成单张全图缓存：只落盘**不拷像素不跨 channel**（批量几千张时
+    /// 省 n×4MB 的 channel 传输）。配额检查由调用方每 N 张调
+    /// [fullCacheBytes] 自查（本方法不做整目录扫描）。
+    ///
+    /// @return 0=已生成 1=缓存已存在（校验有效）跳过 3=失败（源图缺失/损坏）
+    fun precacheFullImage(id: String, targetWidth: Int): Int {
+        val safeTarget = targetWidth.coerceIn(960, 4096)
+        val longId = id.toLongOrNull() ?: return 3
+        // 已缓存（文件存在且 mtime 有效）→ 跳过（与 readFullCache 的校验一致，
+        // 但不 decode——预生成只关心文件在不在）。
+        val file = File(File(fullCacheDir, safeTarget.toString()), "$longId.jpg")
+        if (file.exists()) {
+            val dm = queryDateModifiedMs(longId)
+            if (dm == null || file.lastModified() >= dm) return 1
+            file.delete() // 源图已编辑：删旧重生成
+        }
+        return try {
+            val bitmap = decodeSampledBitmap(longId, safeTarget)
+            writeFullCache(longId, safeTarget, bitmap)
+            bitmap.recycle()
+            0
+        } catch (e: Exception) {
+            Log.w(TAG, "precacheFullImage 失败 id=$id: ${e.message}")
+            3
+        }
+    }
+
+    /// 全图缓存目录当前字节数（配额满检测用）。
+    fun fullCacheBytes(): Long =
+        fullCacheDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+    /// 设置全图缓存配额（用户拖档位）并立即收紧——缩档时按 LRU 删最旧到
+    /// 新配额内。绕过 trim 节流（用户操作要求即时反馈）。
+    fun setFullCacheQuota(bytes: Long) {
+        fullCacheQuotaBytes = bytes.coerceIn(64L * 1024 * 1024, 2L * 1024 * 1024 * 1024)
+        lastFullTrimAt = 0 // 绕过节流
+        trimFullCache()
+    }
+
+    /// 清空图片磁盘缓存。[clearThumb]=true 连缩略图缓存一起清（手动清理
+    /// 按钮）；关闭预缓存开关只清全图缓存（full）。返回释放的字节数。
+    fun clearImageCaches(clearThumb: Boolean): Map<String, Any> {
+        var freedFull = 0L
+        var freedThumb = 0L
+        fun wipe(dir: File): Long {
+            var freed = 0L
+            val files = dir.walkTopDown().filter { it.isFile }.toList()
+            for (f in files) {
+                val len = f.length()
+                if (f.delete()) freed += len
+            }
+            return freed
+        }
+        try {
+            freedFull = wipe(fullCacheDir)
+            if (clearThumb) freedThumb = wipe(thumbnailCacheDir)
+        } catch (e: Exception) {
+            Log.w(TAG, "clearImageCaches 失败: ${e.message}")
+        }
+        return mapOf("full" to freedFull, "thumb" to freedThumb)
+    }
+
+    /// 统计图片磁盘缓存占用（设置页显示）。thumb 两个目录分开报。
+    fun imageCacheBytes(): Map<String, Any> {
+        var full = 0L
+        var thumb = 0L
+        try {
+            fullCacheDir.walkTopDown().filter { it.isFile }.forEach { full += it.length() }
+            thumbnailCacheDir.walkTopDown().filter { it.isFile }.forEach { thumb += it.length() }
+        } catch (_: Exception) {
+        }
+        return mapOf("full" to full, "thumb" to thumb)
+    }
+
+    /// 删除图片后清其所有磁盘缓存文件（full 各宽度目录 + thumb 各尺寸目录，
+    /// 按 `{id}.jpg` 精确匹配）。失败静默（残留文件由 LRU trim 最终回收）。
+    fun deleteImageCacheFiles(longId: Long) {
+        try {
+            val name = "$longId.jpg"
+            for (root in listOf(fullCacheDir, thumbnailCacheDir)) {
+                root.listFiles()?.forEach { sub ->
+                    sub.listFiles()?.forEach { f -> if (f.name == name) f.delete() }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "deleteImageCacheFiles 失败: ${e.message}")
+        }
+    }
+
+    // ──────────── viewer 全图磁盘缓存（screenNail 落盘，对标系统相册 MEMORY_AND_DISK） ────────────
+
+    /// 全图缓存命中：读 JPEG → decodeByteArray → raw 像素（契约同 readSampledImage
+    /// 返回值，dart 侧无感）。缓存 JPEG 已是「采样后+EXIF 转正」终态，无需再
+    /// 采样/旋转。性能红线同 thumb 缓存：文件不存在（miss）零 DB 查询直接返回
+    /// ——viewer 滚动高峰 miss 是常态；命中后一次 dm 查询可接受（此时确有
+    /// 缓存文件，源图被编辑 dm 前进 → 删文件失效走原路径重解重写）。
+    private fun readFullCache(id: Long, targetWidth: Int): Map<String, Any>? {
+        val file = File(File(fullCacheDir, targetWidth.toString()), "$id.jpg")
+        if (!file.exists()) return null // miss：零查询
+        val dm = queryDateModifiedMs(id)
+        if (dm != null && file.lastModified() < dm) {
+            file.delete() // 源图已编辑：失效重解
+            return null
+        }
+        return try {
+            val bytes = file.readBytes()
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                ?: return null
+            val w = bitmap.width
+            val h = bitmap.height
+            val pixels = ByteArray(w * h * 4)
+            bitmap.copyPixelsToBuffer(ByteBuffer.wrap(pixels))
+            bitmap.recycle()
+            mapOf("pixels" to pixels, "width" to w, "height" to h)
+        } catch (e: Exception) {
+            Log.w(TAG, "readFullCache 失败: ${e.message}")
+            null
+        }
+    }
+
+    /// 写全图缓存（compress 后立即落盘 + 节流 trim）。失败静默（不阻断解码
+    /// 主路径）。
+    private fun writeFullCache(id: Long, targetWidth: Int, bitmap: Bitmap) {
+        try {
+            val dir = File(fullCacheDir, targetWidth.toString())
+            dir.mkdirs()
+            val tmp = File(dir, "$id.tmp")
+            val out = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+            tmp.writeBytes(out.toByteArray())
+            // 临时文件原子改名：trim/断电不留半写 JPEG（decodeByteArray 会
+            // 当损坏图返回 null，命中变 miss 白付一次 IO）。
+            if (!tmp.renameTo(File(dir, "$id.jpg"))) tmp.delete()
+            trimFullCache()
+        } catch (e: Exception) {
+            Log.w(TAG, "writeFullCache 失败: ${e.message}")
+        }
+    }
+
+    /// 全图缓存 trim（独立于缩略图缓存：独立目录/独立配额/独立节流）。
+    /// 配额 [fullCacheQuotaBytes] 运行时可调（用户设置档位）；默认 128MB
+    /// ≈ 850 张 1152 宽 JPEG（~150KB/张）。
+    private fun trimFullCache() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastFullTrimAt < TRIM_THROTTLE_MS) return
+        lastFullTrimAt = now
+        val quota = fullCacheQuotaBytes
+        val files = fullCacheDir.walkTopDown().filter { it.isFile }.toList()
+        var total = 0L
+        for (f in files) total += f.length()
+        if (total <= quota) return
+        val sorted = files.sortedBy { it.lastModified() }
+        for (f in sorted) {
+            if (total <= quota) break
+            val len = f.length()
+            if (f.delete()) total -= len
+        }
+    }
+
+    /// 全图磁盘缓存目录（app cache，系统可清）。
+    private val fullCacheDir: File by lazy {
+        File(context.cacheDir, "visort_full").apply { mkdirs() }
+    }
+
+    /// 全图缓存最近一次 trim 时刻（ms）。
+    private var lastFullTrimAt = 0L
+
+    /// 全图缓存配额（字节，运行时可调——设置页档位手柄）。写路径
+    /// （writeFullCache）与设置路径（setFullCacheQuota）均在 ioExecutor 或
+    /// MethodChannel 线程，volatile 防可见性问题足够。
+    @Volatile
+    private var fullCacheQuotaBytes = DEFAULT_FULL_CACHE_BYTES
 
     /// 读 EXIF orientation 映射为旋转角(0/90/180/270)。
     /// PNG/WebP 无 orientation → 0;解析失败 → 0(横躺兜底,不崩)。
@@ -1170,6 +1362,11 @@ class MediaStoreRepository(private val context: Context) {
 
         /// 磁盘缩略图缓存容量上限（128MB ≈ 数千张 300~500px JPEG）。
         private const val MAX_THUMBNAIL_CACHE_BYTES = 128L * 1024 * 1024
+
+        /// viewer 全图磁盘缓存默认配额（128MB ≈ 850 张 1152 宽 JPEG，
+        /// ~150KB/张——对标系统相册 screenNail 磁盘层）。运行时由
+        /// setFullCacheQuota 按用户档位（256MB~2GB）调整。
+        private const val DEFAULT_FULL_CACHE_BYTES = 128L * 1024 * 1024
 
         /// trim 全目录扫描最小间隔（ms）：写缓存高峰不每次触发 walkTopDown。
         private const val TRIM_THROTTLE_MS = 5000L

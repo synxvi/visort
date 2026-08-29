@@ -34,6 +34,14 @@ enum FullScreenRequestReason { userInteraction, playbackStateChange }
 /// 黑屏等待）。改此值必须两端同改（key 不匹配 = 兜底永远 miss）。
 const int kFilmstripThumbLoadSize = 96;
 
+/// viewer 渐进「清晰层」解码宽度（px，等比）：甩条滚动期间大图区显示档
+/// （pick 链第二级），停稳后由 full（computeViewerTargetWidth ~1152）覆盖。
+/// 512→640（2026-08-28）：滚动期放大 2.25→1.8 倍，竖图 640×~1130 ≈2.9MB/条。
+/// 改此值必须与 zoomable_image（pick/heavy/错误兜底）+ detail_page 条目
+/// 预取（当前项/±1）同改——ImageCache key = (id, size, squareCrop)，
+/// 单点定义防漂移。
+const int kViewerLargeThumbSize = 640;
+
 // ───────────────── [visort 追加] 沉浸退出后恢复无背景系统栏 ─────────────────
 // 手势条（小横条）无背景：导航栏透明色用 alpha=0 但 RGB 非零的 workaround
 // （部分 ROM 把全零当「未设置」而回退半透明 scrim；同 main.dart
