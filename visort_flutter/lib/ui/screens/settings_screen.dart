@@ -429,12 +429,14 @@ class _CacheSectionState extends ConsumerState<_CacheSection> {
         ' ${_fmtBytes(freed.full + freed.thumb, ref)}');
   }
 
-  /// 进度行副文案：任务状态 + 磁盘占用组合。running/enqueued 状态解释
-  /// 「数字为什么不动」（在跑 / 排队中），idle 只报占用。
+  /// 进度行副文案：任务状态 + full 磁盘占用组合。running/enqueued 状态
+  /// 解释「数字为什么不动」（在跑 / 排队中），idle 只报占用。
+  /// 占用只报 full（配额管的口径）：thumb 是独立 128MB 上限不受滑块
+  /// 控制，混进合计会呈现「占用 364MB > 256MB 配额」的困惑（真机实证）。
   String _statusLine(WidgetRef ref) {
     final u = _usage;
     if (u == null) return '…';
-    final usageStr = _fmtBytes(u.full + u.thumb, ref);
+    final usageStr = _fmtBytes(u.full, ref);
     switch (_workState) {
       case 'running':
         return '${t(ref, 'settings_precache_running')} · $usageStr';

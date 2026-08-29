@@ -56,9 +56,12 @@ class PrecacheWorker(appContext: Context, params: WorkerParameters) :
                     }.getOrDefault(3)
                     if (code == 0) generated++ else if (code == 1) skipped++
                     // 每 16 张查配额（walkTopDown 有成本）：写满即收工。
-                    // 全 skip（已就绪重扫）不查——直接跑完退出。
-                    if ((generated + skipped) % QUOTA_CHECK_EVERY == 0 && generated > 0 &&
-                        repo.fullCacheBytes() >= repo.fullCacheQuota
+                    // 0.95 阈值 + skip 段也查（无 generated>0 门槛）——配额
+                    // 装不下全库时，被 trim 挤掉的老图重解码写回再挤掉 =
+                    // 写-删拉锯（重解码纯浪费）；skip 段自查在重写开始前
+                    // 即发现已满整轮停止（与 Dart idle 会话同修，真机实证）。
+                    if ((generated + skipped) % QUOTA_CHECK_EVERY == 0 &&
+                        repo.fullCacheBytes() >= repo.fullCacheQuota * 95 / 100
                     ) {
                         quotaFull = true
                         break

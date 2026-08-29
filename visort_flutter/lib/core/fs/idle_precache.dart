@@ -53,6 +53,12 @@ class IdlePrecacheService with WidgetsBindingObserver {
   bool _attached = false;
   Ref? _ref;
 
+  /// 最近一次会话因配额满停止的时刻：满态退避——否则每 2s tick 都会
+  /// 「启动会话→skip 16 张→自查满→停」空转一轮（持续日志+目录 walk
+  /// 噪音，真机实证每 2s 一条 QUOTA_FULL）。30s 内不再启动新会话；
+  /// 清缓存/调大配额后最迟 30s 自动恢复扫描。
+  DateTime? _quotaFullAt;
+
   /// 绑定 provider（main 完成后调用一次激活；重复调用幂等）。
   /// 配置变化由 idlePrecacheProvider 的 ref.listen 转发到 onConfigChanged。
   void attach(Ref ref) {
@@ -72,6 +78,8 @@ class IdlePrecacheService with WidgetsBindingObserver {
   void onConfigChanged(AppConfig config) {
     _pushQuota(config);
     _syncWorkSchedule(config);
+    // 配置变化（含清缓存后回调/配额调整）清除满态退避：立即恢复扫描。
+    _quotaFullAt = null;
     if (!config.precacheEnabled) {
       _session++; // 作废在跑扫描
     }
@@ -104,6 +112,12 @@ class IdlePrecacheService with WidgetsBindingObserver {
   void _tick() {
     final ref = _ref;
     if (ref == null || _scanning) return;
+    // 满态退避（见 _quotaFullAt 注释）：30s 内不启动新会话。
+    final fullAt = _quotaFullAt;
+    if (fullAt != null &&
+        DateTime.now().difference(fullAt) < const Duration(seconds: 30)) {
+      return;
+    }
     final config = ref.read(configProvider);
     if (!config.precacheEnabled) return;
     // 仅启动时看一眼管线空闲（防灌积压队列）；会话中途让路交给 p300
@@ -160,14 +174,19 @@ class IdlePrecacheService with WidgetsBindingObserver {
           }
           // 每 16 张查配额：写满即停本轮（静默条件持续则等下轮 tick
           // 重扫，已缓存段秒级越过）。
-          if ((generated + skipped) % _kQuotaCheckEvery == 0 &&
-              generated > 0) {
+          // 0.95 阈值 + skip 段也查（无 generated>0 门槛）：配额装不下
+          // 全库时，被 trim 挤掉的老图每轮会话都会被重解码写回再挤掉
+          //（写-删拉锯，重解码几百张纯浪费、缓存内容滚动无净增长——
+          // 真机实证 2026-08-29）。skip 段自查让会话在开始重写【前】就
+          // 发现配额已满整轮停止。头部新照片不受影响：新图 miss 落盘
+          //（有价值的替换），写入撞线即停。
+          if ((generated + skipped) % _kQuotaCheckEvery == 0) {
             final bytes = await ServicePolicy.instance.run(
               RequestPriority.idlePrecache,
               () => _channel.imageCacheBytes(),
             );
             if (bytes.full >=
-                (ref.read(configProvider).precacheQuotaMb << 20)) {
+                (ref.read(configProvider).precacheQuotaMb << 20) * 0.95) {
               quotaFull = true;
               break;
             }
@@ -184,6 +203,7 @@ class IdlePrecacheService with WidgetsBindingObserver {
         cursor = page.nextCursor;
         if (cursor == null) break; // 全库扫完
       }
+      if (quotaFull) _quotaFullAt = DateTime.now();
       cachePerfEvent(
         'precacheSession gen=$generated skip=$skipped'
         '${quotaFull ? ' QUOTA_FULL' : ''}',
