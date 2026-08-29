@@ -1073,28 +1073,31 @@ class MediaStoreRepository(private val context: Context) {
 
         // ④ 等比请求框构造（tall 路径泛化）：短边 = min(target, 源短边)，
         //    长边等比放大但不超源长边与 [tallImageMaxLongSide] → 系统
-        //    fit-inside 返回等比结果。源尺寸查询失败（极端）回落方形框。
+        //    fit-inside 返回等比结果。
+        //    ⚠️ 源尺寸查询失败（binder 繁忙/行不存在）或 WIDTH/HEIGHT=0
+        //    （损坏/未完成扫描）时【不回落方形框】：方形框正是 ColorOS mini
+        //    污染（固定 3:4）的触发条件，且无 srcAspect 无从校验——直接走
+        //    decodeFullFallback 等比自解（读不出尺寸的损坏图由其 throw，
+        //    Dart 侧 readBytes 兜底，链路闭环）。
+        val (srcW, srcH) = srcSize ?: (null to null)
+        if (srcW == null || srcH == null || srcW <= 0 || srcH <= 0) {
+            return decodeFullFallback(longId, id, width, height, dateModifiedMs)
+        }
+        val srcShort = min(srcW, srcH)
+        val srcLong = max(srcW, srcH)
+        val reqShort = max(1, min(min(width, height), srcShort))
+        val reqLong = min(
+            min((reqShort.toLong() * srcLong / srcShort).toInt(), srcLong),
+            tallImageMaxLongSide,
+        )
         val reqW: Int
         val reqH: Int
-        val (srcW, srcH) = srcSize ?: (null to null)
-        if (srcW != null && srcH != null && srcW > 0 && srcH > 0) {
-            val srcShort = min(srcW, srcH)
-            val srcLong = max(srcW, srcH)
-            val reqShort = max(1, min(min(width, height), srcShort))
-            val reqLong = min(
-                min((reqShort.toLong() * srcLong / srcShort).toInt(), srcLong),
-                tallImageMaxLongSide,
-            )
-            if (srcW < srcH) {
-                reqW = reqShort
-                reqH = reqLong
-            } else {
-                reqW = reqLong
-                reqH = reqShort
-            }
+        if (srcW < srcH) {
+            reqW = reqShort
+            reqH = reqLong
         } else {
-            reqW = width
-            reqH = height
+            reqW = reqLong
+            reqH = reqShort
         }
 
         // ⑤ loadThumbnail + 编码。信号量限制并发：首屏 20+ 张同时
@@ -1118,29 +1121,23 @@ class MediaStoreRepository(private val context: Context) {
         // Dart 侧解码更快 —— 三重收益。
         bitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
         val bytes = baos.toByteArray()
-        if (srcW != null && srcH != null && srcW > 0 && srcH > 0) {
-            // 等比结果校验：系统偶发仍吐非等比（如命中 mini）时丢结果不落盘，
-            // 退回源尺寸等比自解（decode 兜底）——防止污染再次固化。
-            val reqAspect = reqW.toDouble() / reqH.toDouble()
-            val gotAspect = bitmap.width.toDouble() / bitmap.height.toDouble()
-            val srcAspect = srcW.toDouble() / srcH.toDouble()
-            val aspectErr = abs(gotAspect / srcAspect - 1.0)
-            val reqErr = abs(reqAspect / srcAspect - 1.0)
-            if (aspectErr <= max(0.02, reqErr)) {
-                writeThumbnailCache(longId, width, height, dateModifiedMs, bytes, crop = true)
-                return bytes
-            }
-            Log.d(
-                TAG,
-                "readThumbnail: 等比校验拒绝 id=$id src=${srcW}x${srcH} " +
-                    "req=${reqW}x${reqH} got=${bitmap.width}x${bitmap.height}",
-            )
-            // 重解一次方形框（此时系统大概率已按等比框生成过真实缩略图，
-            // 方框命中 mini 的概率随等比请求已预热而下降）
-            return decodeFullFallback(longId, id, width, height, dateModifiedMs)
+        // 等比结果校验：系统偶发仍吐非等比（如命中 mini）时丢结果不落盘，
+        // 退回源尺寸等比自解（decode 兜底）——防止污染固化。
+        val reqAspect = reqW.toDouble() / reqH.toDouble()
+        val gotAspect = bitmap.width.toDouble() / bitmap.height.toDouble()
+        val srcAspect = srcW.toDouble() / srcH.toDouble()
+        val aspectErr = abs(gotAspect / srcAspect - 1.0)
+        val reqErr = abs(reqAspect / srcAspect - 1.0)
+        if (aspectErr <= max(0.02, reqErr)) {
+            writeThumbnailCache(longId, width, height, dateModifiedMs, bytes, crop = true)
+            return bytes
         }
-        writeThumbnailCache(longId, width, height, dateModifiedMs, bytes, crop = true)
-        return bytes
+        Log.d(
+            TAG,
+            "readThumbnail: 等比校验拒绝 id=$id src=${srcW}x${srcH} " +
+                "req=${reqW}x${reqH} got=${bitmap.width}x${bitmap.height}",
+        )
+        return decodeFullFallback(longId, id, width, height, dateModifiedMs)
     }
 
     /// 等比校验失败后的兜底：流式解码原图 + EXIF 旋转 + 等比缩放（绕开

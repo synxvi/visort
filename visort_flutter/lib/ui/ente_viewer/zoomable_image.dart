@@ -473,6 +473,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
               squareCrop: false,
             ),
             fit: BoxFit.contain,
+            // 审查实证 P2：full 失败后若 large 也读不出（文件彻底损坏），
+            // 无 errorBuilder 会渲染空白 Hero 飞行；gaplessPlayback 避免
+            // 相同 key 内容替换闪底层。
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => const _DelayedLoadingIndicator(),
           ),
         ),
       );
@@ -668,6 +673,9 @@ class _ZoomableImageState extends State<ZoomableImage> {
         previousScale /
         (finalImageInfo.image.width / prevImageInfo.image.width);
     final currentPosition = _photoViewController.value.position;
+    // 旧 controller 的订阅已取消，重建前 dispose 旧实例（stream/notifier
+    // 不 close 会随每张「缩放中切原图」累积泄漏，审查实证 P2）。
+    final oldController = _photoViewController;
     unawaited(_zoomStreamSubscription?.cancel());
     _photoViewController = PhotoViewController(
       initialPosition: currentPosition,
@@ -681,6 +689,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
       _initialScale = null;
     }
     _subscribeToZoomStream();
+    oldController.dispose();
     // 防止原图就绪后自动缩放（双击状态保持）。
     _scaleStateController.scaleState = PhotoViewScaleState.zoomedIn;
   }

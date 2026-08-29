@@ -164,13 +164,16 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     _positionAnimationController.stop();
     _rotationAnimationController.stop();
     _doubleTapController.stop();
+    // [visort fork] 双击动画被手势打断：stop() 不触发 status 回调（Flutter
+    // AnimationController.stop 语义），programmaticScaleAnimationActive 会
+    // 残留 true 直到下次双击——期间 _blindScaleListener 跳过 position
+    // clamp（审查实证 P2）。同步复位。
+    programmaticScaleAnimationActive = false;
   }
 
   void onScaleUpdate(ScaleUpdateDetails details) {
     final double newScale = _scaleBefore! * details.scale;
     final Offset delta = details.focalPoint - _normalizedPosition!;
-    // ignore: avoid_print
-    print('[DT] onScaleUpdate: newScale=$newScale');
 
     if (widget.strictScale &&
         (newScale > widget.scaleBoundaries.maxScale ||
@@ -292,10 +295,6 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     final Offset endPos = zooming
         ? _doubleTapEndPositionSnap(tapLocal, box.size, begin, target)
         : Offset.zero;
-    // ignore: avoid_print
-    print(
-      '[DT] zoom: tap=${tapLocal.dx.toStringAsFixed(1)},${tapLocal.dy.toStringAsFixed(1)} begin=$begin initial=$initial target=$target endPos=${endPos.dx.toStringAsFixed(1)},${endPos.dy.toStringAsFixed(1)} pos0=${controller.position.dx.toStringAsFixed(1)},${controller.position.dy.toStringAsFixed(1)} view=${box.size.width.toStringAsFixed(0)}x${box.size.height.toStringAsFixed(0)} child=${scaleBoundaries.childSize.width.toStringAsFixed(0)}x${scaleBoundaries.childSize.height.toStringAsFixed(0)}',
-    );
 
     _doubleTapScaleTween = Tween<double>(begin: begin, end: target);
     _doubleTapPositionTween = Tween<Offset>(
@@ -416,21 +415,8 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     final Animation<double> t = _doubleTapController.view;
     final s = _doubleTapScaleTween!.evaluate(t);
     final p = _doubleTapPositionTween!.evaluate(t);
-    // 只在相邻帧 scale 偏离线性预期 >2% 时打印（识别外部写值打断）。
-    final expected = _doubleTapScaleTween!.begin! +
-        (_doubleTapScaleTween!.end! - _doubleTapScaleTween!.begin!) *
-            t.value;
-    if ((s - expected).abs() / expected > 0.02) {
-      // ignore: avoid_print
-      print('[DT] tick anomaly: anim=$s expected=$expected t=${t.value}');
-    }
     scale = s;
-    final posBefore = controller.position;
     controller.position = p;
-    // ignore: avoid_print
-    print(
-      '[DT] tick: t=${t.value.toStringAsFixed(3)} s=${s.toStringAsFixed(4)} p=${p.dx.toStringAsFixed(1)},${p.dy.toStringAsFixed(1)} posBefore=${posBefore.dx.toStringAsFixed(1)},${posBefore.dy.toStringAsFixed(1)}',
-    );
   }
 
   /// doubleTapZoom 的 stop()+value=0 重置序列进行中：忽略其触发的
@@ -438,10 +424,6 @@ class PhotoViewCoreState extends State<PhotoViewCore>
   bool _resettingDoubleTap = false;
 
   void _onDoubleTapStatus(AnimationStatus status) {
-    // ignore: avoid_print
-    print(
-      '[DT] status=$status resetting=$_resettingDoubleTap scale=${controller.scale}',
-    );
     final interrupted =
         status == AnimationStatus.dismissed &&
         !_resettingDoubleTap &&
@@ -473,12 +455,8 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     // 竖图 cover > 2.5×initial 时两动画终点不同，跳变可见，横图终点恰好
     // 相同无感）。双击动画进行中直接忽略本次 scaleState 联动动画。
     if (_doubleTapController.isAnimating) {
-      // ignore: avoid_print
-      print('[DT] animateScale BLOCKED: $from -> $to');
       return;
     }
-    // ignore: avoid_print
-    print('[DT] animateScale: $from -> $to');
     _scaleAnimation = Tween<double>(
       begin: from,
       end: to,

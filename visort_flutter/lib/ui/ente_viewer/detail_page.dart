@@ -305,6 +305,12 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // 网格锁死在 flush 定位（album 侧 reverse 同帧冲刷），飞行目标稳定。
     if (status == AnimationStatus.reverse) {
       _popping = true;
+      // ⚠️ pop 冻结须同时锁 PageView 惯性（physics 加 _popping）：
+      // 快甩（fling 惯性未停）中返回时 PageView 若继续滚，onPageChanged
+      // 被 _popping 拒后网格 cell 与 viewer 页错位，Hero 终点悬空/错位
+      //（审查实证 P1，089ea74 冻结了条/网格联动但漏了页面本体）。
+      // setState 让 physics 立即生效（首帧即锁，无 1 帧惯性间隙）。
+      if (mounted) setState(() {});
     }
     // 返回动画结束：立即移除栏。PageRouteBuilder(opaque:false) 下页面
     // dispose 延迟甚至不触发，栏挂 root Overlay 不随 route 消失，必须
@@ -698,6 +704,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
               // 文件数可能已变但索引未变（删除补位/缩略图跟手 jumpToPage 触发）。
               // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
               _selectedIndexNotifier.notifyListeners();
+              // ⚠️ 跟手路径（filmstrip 快甩 jumpToPage）也须清理远端缓存：
+              // 快甩扫过 20+ 页时每页 full(4.4MB)都记入 _viewedFullIds，若
+              // 不 trim 则浏览期缓存撑爆、网格缩略图被逐（审查实证 P1——
+              // _trimDistantViewerCache 注释声明的场景原样发生）。
+              _trimDistantViewerCache(index);
               return; // 跟手场景 filmstrip 已就位，不程序回滚
             }
             _selectedIndexNotifier.value = index;
@@ -706,7 +717,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
             _syncThumbTo(index);
             _trimDistantViewerCache(index);
           },
-          physics: _shouldDisableScroll || _swipeLocked
+          physics: _shouldDisableScroll || _swipeLocked || _popping
               ? const NeverScrollableScrollPhysics()
               : const FastScrollPhysics(speedFactor: 4.0),
           controller: _pageController,

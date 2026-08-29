@@ -72,14 +72,7 @@ mixin PhotoViewControllerDelegate on State<PhotoViewCore> {
 
   void _blindScaleListener() {
     if (!widget.enablePanAlways && !programmaticScaleAnimationActive) {
-      final before = controller.position;
       controller.position = clampPosition();
-      if (controller.position != before) {
-        // ignore: avoid_print
-        print(
-          '[DT] blind-clamp: ${before.dx.toStringAsFixed(1)},${before.dy.toStringAsFixed(1)} -> ${controller.position.dx.toStringAsFixed(1)},${controller.position.dy.toStringAsFixed(1)} scale=${controller.scale}',
-        );
-      }
     }
     if (controller.scale == controller.prevValue.scale) {
       return;
@@ -111,10 +104,6 @@ mixin PhotoViewControllerDelegate on State<PhotoViewCore> {
         scaleBoundaries,
       );
       markNeedsScaleRecalc = false;
-      // ignore: avoid_print
-      print(
-        '[DT] scale-getter recalc: $newScale state=${scaleStateController.scaleState} animActive=$programmaticScaleAnimationActive',
-      );
       scale = newScale;
       return newScale;
     }

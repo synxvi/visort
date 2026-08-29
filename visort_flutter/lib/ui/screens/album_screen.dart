@@ -1073,12 +1073,15 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
 
   /// 立即冲刷节流中的 pending 网格定位（viewer pop reverse 起点调用）。
   void _flushViewerIndexReposition() {
-    // 甩滑遗留的无观众预取（条 512/96）挪到队尾：网格目标行新 cell 的
+    // 甩滑遗留的无观众预取（条 large 640/96）挪到队尾：网格目标行新 cell 的
     // 解码立即占满并发门，200ms 飞行窗口内出图，落位不闪。
+    // ⚠️ 条 large 档已从 512 升到 640（kViewerLargeThumbSize），tag 是
+    // 'thumb640:'——过滤器必须跟上，否则匹配不到任何请求（thumb512 残留
+    // 是 pop 落位闪烁的回归根因，审查实证）。
     ServicePolicy.instance.deprioritizeQueued(
       (t) =>
           t.tag == null ||
-          t.tag!.startsWith('thumb512') ||
+          t.tag!.startsWith('thumb640') ||
           t.tag!.startsWith('thumb96'),
     );
     final pending = _pendingViewerIndex;
