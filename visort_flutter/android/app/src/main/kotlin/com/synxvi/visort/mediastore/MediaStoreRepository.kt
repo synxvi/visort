@@ -20,8 +20,10 @@ import java.io.File
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.Semaphore
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 // ───────────────────────── MediaStore 业务层 ─────────────────────────
 //
@@ -824,6 +826,11 @@ class MediaStoreRepository(private val context: Context) {
 
     // ──────────── 读取缩略图（相册网格用） ────────────
 
+    /// 等比请求框长边上限：超长图（1080×20000 级）等比会放大出 300×5555
+    /// 级 bitmap（~19MB），clamp 2048 防内存尖峰（系统 fit-inside 返回
+    /// 等比更小值，aspect 不变）。
+    private val tallImageMaxLongSide = 2048
+
     /// 读取单图缩略图字节（JPEG 编码）。
     ///
     /// API 29+ 用 ContentResolver.loadThumbnail（系统级高效，返回指定尺寸的 Bitmap）。
@@ -836,9 +843,8 @@ class MediaStoreRepository(private val context: Context) {
     /// 容量上限 [MAX_THUMBNAIL_CACHE_BYTES]，超出按 mtime 删最旧。
     ///
     /// [width]/[height] 为目标缩略图像素尺寸（如 256x256）。
-    /// [squareCrop]=true：方形 cover 显示场景（网格 cell/封面）——长图走
-    /// centerCrop；false（默认）：contain 场景（大图渐进链）——fit-inside
-    /// 保全图 aspect（方形 crop 占位会在 contain 位被拉伸，Hero 落位突变）。
+    /// [squareCrop] 现仅参与 Dart 侧 ImageCache key（同档两种语义不混存），
+    /// native 行为已无差异：一律【等比请求框】loadThumbnail（见函数内注释）。
     fun readThumbnail(
         id: String,
         width: Int = 256,
@@ -848,29 +854,58 @@ class MediaStoreRepository(private val context: Context) {
     ): ByteArray {
         val longId = id.toLongOrNull() ?: throw MsError.InvalidArg("非法图片 id: $id")
 
-        // ① 长图（极端 aspect）专用 centerCrop 解码（见 tallImageCropBytes）。
-        //    仅 squareCrop 请求；判定在最前（先于普通缓存）：旧版已把长图
-        //    fit-inside 的糊结果缓存进普通目录，后置判定会命中旧糊图。
-        //    判定 = 一次 _ID 索引查询（~0.1ms），普通图 miss 后继续原路径。
-        if (squareCrop) {
-            tallImageCropBytes(longId, width, height, dateModifiedMs)?.let { return it }
-        }
+        // ① 等比缓存（{w}x{h}_iso，档级 key）命中 → 零解码直出。
+        //    旧普通目录（{w}x{h}）整体废弃不读：方形请求框时代 ColorOS 的
+        //    loadThumbnail 会直接吐系统 mini 缓存（384×512，固定 3:4/4:3）
+        //    ——宽高比 ≠ 源图（真机实证：2304×4608 aspect 0.5 的图拿到
+        //    346×461 = 3:4），错比例条目已被写盘固化，唯一安全做法是换目录。
+        readThumbnailCache(longId, width, height, dateModifiedMs, crop = true)?.let { return it }
 
-        // ② 磁盘缓存命中 → 零解码直出
-        readThumbnailCache(longId, width, height, dateModifiedMs)?.let { return it }
+        // ② 源尺寸（一次 _ID 索引查询 ~0.1ms，仅在缓存 miss 后发生；命中
+        //    路径保持零查询红线）→ 等比请求框。系统对【非方形】请求框按
+        //    fit-inside 生成等比结果（长图路径已实证多年）；方形框则可能
+        //    命中 mini 缓存吐 3:4（长图与本次 0.5 竖图双实证）。
+        val srcSize = queryImageSize(longId)
 
         // ③ 小尺寸请求（占位层）优先 EXIF 内嵌缩略图（对标系统相册 fo0.java）：
         //    相机 JPEG 内嵌 160×120 缩略图，解码 ~1-5ms，免系统 loadThumbnail
         //    服务首次生成的 50~200ms —— 首屏占位秒显的关键。
+        //    内嵌缩略图天然等比（全图等比缩小），无 mini 污染问题。
         //    无 EXIF 时回退 loadThumbnail（小尺寸采样少，也快于大尺寸）。
         if (width <= EXIF_THUMBNAIL_MAX_SIZE && height <= EXIF_THUMBNAIL_MAX_SIZE) {
             exifThumbnail(longId)?.let { bytes ->
-                writeThumbnailCache(longId, width, height, dateModifiedMs, bytes)
+                writeThumbnailCache(longId, width, height, dateModifiedMs, bytes, crop = true)
                 return bytes
             }
         }
 
-        // ④ 未命中 → loadThumbnail + 编码。信号量限制并发：首屏 20+ 张同时
+        // ④ 等比请求框构造（tall 路径泛化）：短边 = min(target, 源短边)，
+        //    长边等比放大但不超源长边与 [tallImageMaxLongSide] → 系统
+        //    fit-inside 返回等比结果。源尺寸查询失败（极端）回落方形框。
+        val reqW: Int
+        val reqH: Int
+        val (srcW, srcH) = srcSize ?: (null to null)
+        if (srcW != null && srcH != null && srcW > 0 && srcH > 0) {
+            val srcShort = min(srcW, srcH)
+            val srcLong = max(srcW, srcH)
+            val reqShort = max(1, min(min(width, height), srcShort))
+            val reqLong = min(
+                min((reqShort.toLong() * srcLong / srcShort).toInt(), srcLong),
+                tallImageMaxLongSide,
+            )
+            if (srcW < srcH) {
+                reqW = reqShort
+                reqH = reqLong
+            } else {
+                reqW = reqLong
+                reqH = reqShort
+            }
+        } else {
+            reqW = width
+            reqH = height
+        }
+
+        // ⑤ loadThumbnail + 编码。信号量限制并发：首屏 20+ 张同时
         //    压系统 MediaStore 缩略图服务会造成 CPU 尖峰与排队抖动。
         val bitmap: Bitmap
         thumbnailSemaphore.acquire()
@@ -879,7 +914,7 @@ class MediaStoreRepository(private val context: Context) {
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
             )
             bitmap = try {
-                contentResolver.loadThumbnail(uri, Size(width, height), null)
+                contentResolver.loadThumbnail(uri, Size(reqW, reqH), null)
             } catch (e: Exception) {
                 throw MsError.QueryFailed("loadThumbnail 失败 id=$id: ${e.message}")
             }
@@ -891,91 +926,103 @@ class MediaStoreRepository(private val context: Context) {
         // Dart 侧解码更快 —— 三重收益。
         bitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
         val bytes = baos.toByteArray()
-        writeThumbnailCache(longId, width, height, dateModifiedMs, bytes)
+        if (srcW != null && srcH != null && srcW > 0 && srcH > 0) {
+            // 等比结果校验：系统偶发仍吐非等比（如命中 mini）时丢结果不落盘，
+            // 退回源尺寸等比自解（decode 兜底）——防止污染再次固化。
+            val reqAspect = reqW.toDouble() / reqH.toDouble()
+            val gotAspect = bitmap.width.toDouble() / bitmap.height.toDouble()
+            val srcAspect = srcW.toDouble() / srcH.toDouble()
+            val aspectErr = abs(gotAspect / srcAspect - 1.0)
+            val reqErr = abs(reqAspect / srcAspect - 1.0)
+            if (aspectErr <= max(0.02, reqErr)) {
+                writeThumbnailCache(longId, width, height, dateModifiedMs, bytes, crop = true)
+                return bytes
+            }
+            Log.d(
+                TAG,
+                "readThumbnail: 等比校验拒绝 id=$id src=${srcW}x${srcH} " +
+                    "req=${reqW}x${reqH} got=${bitmap.width}x${bitmap.height}",
+            )
+            // 重解一次方形框（此时系统大概率已按等比框生成过真实缩略图，
+            // 方框命中 mini 的概率随等比请求已预热而下降）
+            return decodeFullFallback(longId, id, width, height, dateModifiedMs)
+        }
+        writeThumbnailCache(longId, width, height, dateModifiedMs, bytes, crop = true)
         return bytes
     }
 
-    // ──────────── 长图专用等比缩略图（cover 请求框） ────────────
-
-    /// 长图判定阈值：源宽/高 < 0.5 或 > 2（356×1920 → 0.185 命中）。
-    /// 方形 cell 的 cover 显示下，fit-inside 结果的窄边像素不足 target 的一半。
-    private val tallImageAspectRange = 0.5..2.0
-
-    /// 等比请求框长边上限：超长图（1080×20000 级）等比会放大出 300×5555
-    /// 级 bitmap（~19MB），clamp 2048 防内存尖峰（系统 fit-inside 返回
-    /// 等比更小值，aspect 不变）。
-    private val tallImageMaxLongSide = 2048
-
-    /// 长图（极端 aspect）缩略图：按「等比放大请求框」走系统 loadThumbnail，
-    /// 返回与原图【同 aspect】的等比图（窄边保有 target 级真实像素）。
-    ///
-    /// 背景（真机实证）：loadThumbnail(Size(300,300)) 是 fit-inside 语义——
-    /// 356×1920 只返回 56×300 窄条，Flutter cover 横向 ~6 倍上采样 → 糊。
-    ///
-    /// 为什么等比而非 centerCrop 裁剪（v1 已回退）：detail 大图首帧用与
-    /// 网格共享的 cell 缩略图（ente ThumbnailInMemoryLruCache 同款语义——
-    /// 共享缓存首帧同步有图，Hero flight 才能启动）。裁剪版 aspect≠原图，
-    /// detail contain 布局在原图到达时突变 = 落位拉伸跳变；等比版三端全
-    /// 对：网格 cover 裁中（清晰）、Hero 飞行（aspect 连续）、detail
-    /// contain（无跳变）。
-    ///
-    /// 请求框：短边 = min(target, 源短边)；长边 = 等比放大但不超源长边与
-    /// [tallImageMaxLongSide] → 系统 fit-inside 返回等比结果：
-    /// 356×1920 t300 → 300×1618；1080×2556 → 300×713；
-    /// 1080×20000 → 300×2048（系统返 110×2048，等比）。
-    /// 任何失败返回 null → 调用方回退原 Size 路径。缓存独立 _crop 子目录。
-    private fun tallImageCropBytes(
-        id: Long,
+    /// 等比校验失败后的兜底：流式解码原图 + EXIF 旋转 + 等比缩放（绕开
+    /// loadThumbnail 的 mini 污染）。仅校验拒绝时触发（罕见路径）。
+    private fun decodeFullFallback(
+        longId: Long,
+        id: String,
         width: Int,
         height: Int,
         dateModifiedMs: Long?,
-    ): ByteArray? {
-        if (width != height) return null
-        val (srcW, srcH) = queryImageSize(id) ?: return null
-        val aspect = srcW.toDouble() / srcH.toDouble()
-        if (tallImageAspectRange.contains(aspect)) return null
-        val srcShort = min(srcW, srcH)
-        val srcLong = max(srcW, srcH)
-        val reqShort = max(1, min(width, srcShort))
-        val reqLong = min(
-            min((reqShort.toLong() * srcLong / srcShort).toInt(), srcLong),
-            tallImageMaxLongSide,
-        )
-        val reqW: Int
-        val reqH: Int
-        if (srcW < srcH) {
-            reqW = reqShort
-            reqH = reqLong
-        } else {
-            reqW = reqLong
-            reqH = reqShort
-        }
-        readThumbnailCache(id, width, height, dateModifiedMs, crop = true)?.let { return it }
+    ): ByteArray {
         val uri = ContentUris.withAppendedId(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
         )
-        val bitmap: Bitmap
-        thumbnailSemaphore.acquire()
-        try {
-            bitmap = try {
-                contentResolver.loadThumbnail(uri, Size(reqW, reqH), null)
-            } catch (e: Exception) {
-                Log.d(TAG, "readThumbnail: 长图等比失败 id=$id: ${e.message}")
-                return null
-            }
-        } finally {
-            thumbnailSemaphore.release()
+        // 原始位图尺寸（未旋转）+ EXIF 角度 → 显示尺寸
+        val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        val bStream = contentResolver.openInputStream(uri)
+            ?: throw MsError.QueryFailed("无法打开 InputStream: $id")
+        bStream.use {
+            BitmapFactory.decodeStream(BufferedInputStream(it, 65536), null, boundsOpts)
+        }
+        val origW = boundsOpts.outWidth
+        val origH = boundsOpts.outHeight
+        if (origW <= 0 || origH <= 0) {
+            throw MsError.QueryFailed("decodeFullFallback: 无法读尺寸 id=$id")
+        }
+        val rotation = exifRotationDegrees(uri)
+        val dispW = if (rotation == 90 || rotation == 270) origH else origW
+        val dispH = if (rotation == 90 || rotation == 270) origW else origH
+        // inSampleSize 先粗下采样（2 的幂，短边解到 ~(target/2, target]）
+        var sampleSize = 1
+        while (min(dispW, dispH) / sampleSize > min(width, height)) {
+            sampleSize *= 2
+        }
+        val opts = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        val dStream = contentResolver.openInputStream(uri)
+            ?: throw MsError.QueryFailed("无法打开 InputStream: $id")
+        var bitmap = dStream.use {
+            BitmapFactory.decodeStream(BufferedInputStream(it, 65536), null, opts)
+        } ?: throw MsError.QueryFailed("无法解码 id=$id")
+        if (rotation != 0) {
+            val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+            val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            bitmap.recycle()
+            bitmap = rotated
+        }
+        // 精确等比缩到短边 = min(target, 源短边)
+        val targetShort = min(min(width, height), min(bitmap.width, bitmap.height))
+        if (min(bitmap.width, bitmap.height) != targetShort) {
+            val scale = targetShort.toDouble() / min(bitmap.width, bitmap.height).toDouble()
+            val scaled = Bitmap.createScaledBitmap(
+                bitmap,
+                max(1, (bitmap.width * scale).roundToInt()),
+                max(1, (bitmap.height * scale).roundToInt()),
+                true,
+            )
+            bitmap.recycle()
+            bitmap = scaled
         }
         val baos = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
-        val bytes = baos.toByteArray()
+        val outW = bitmap.width
+        val outH = bitmap.height
+        bitmap.recycle()
+        val out = baos.toByteArray()
+        writeThumbnailCache(longId, width, height, dateModifiedMs, out, crop = true)
         Log.d(
             TAG,
-            "readThumbnail: 长图等比 id=$id ${srcW}x${srcH} req=${reqW}x${reqH} " +
-                "-> ${bitmap.width}x${bitmap.height} ${bytes.size}B",
+            "readThumbnail: 等比兜底 id=$id ${dispW}x${dispH} -> ${outW}x${outH} ${out.size}B",
         )
-        writeThumbnailCache(id, width, height, dateModifiedMs, bytes, crop = true)
-        return bytes
+        return out
     }
 
     /// 查单图源尺寸（WIDTH/HEIGHT 列，_ID 索引查询）。失败返回 null。

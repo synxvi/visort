@@ -111,7 +111,24 @@ class _GalleryFileWidgetState extends State<GalleryFileWidget> {
             flightDirection,
             fromHeroContext,
             toHeroContext,
-          ) => (toHeroContext.widget as Hero).child,
+          ) {
+            // [SP] 打点：flight 起飞瞬间两端的实际 rect（全局坐标）。
+            String rectStr(BuildContext c) {
+              final ro = c.findRenderObject();
+              if (ro is RenderBox && ro.hasSize) {
+                final tl = ro.localToGlobal(Offset.zero);
+                return '${tl.dx.toStringAsFixed(0)},${tl.dy.toStringAsFixed(0)} '
+                    '${ro.size.width.toStringAsFixed(0)}x${ro.size.height.toStringAsFixed(0)}';
+              }
+              return 'none';
+            }
+            // ignore: avoid_print
+            print(
+              '[HERO] flight ${flightDirection.name} id=${widget.file.id} '
+              'from=${rectStr(fromHeroContext)} to=${rectStr(toHeroContext)}',
+            );
+            return (toHeroContext.widget as Hero).child;
+          },
       transitionOnUserGestures: true,
       child: ClipRRect(borderRadius: borderRadius, child: thumbnailWidget),
     );

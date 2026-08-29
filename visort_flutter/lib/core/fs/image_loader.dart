@@ -266,11 +266,13 @@ const int kThumbnailPlaceholderSize = 128;
 /// 低版本回退 readBytes 全图 + targetWidth 下采样。
 /// Windows 端用 ResizeImage 包 FileImage 做下采样。
 ///
-/// [squareCrop]（Android）：true = 方形 cover 显示场景（网格 cell/封面/
-/// 缩略图条）——长图走 centerCrop 解码（横向保真实像素，对标系统相册）；
-/// false（默认）= contain 显示场景（大图渐进链）——走系统 fit-inside，
-/// 缩略图与原图同 aspect，避免 Hero 落位时几何突变（真机实证：方形
-/// crop 占位在大图 contain 位被拉伸，原图解完瞬间变回）。
+/// [squareCrop]（Android）：仅参与 ImageCache key（同档两种语义不混存，
+/// 历史上 true=方形裁切/false=等比）——native 已统一为【等比请求框】
+/// 解码：方形请求框在 ColorOS 上会被系统吐 mini 缓存（固定 3:4/4:3，
+/// 与源图比例不符），错比例缩略图会固化进磁盘缓存并导致 viewer Hero
+/// 飞行终点比例错误（真机实证 2304×4608 图拿到 3:4 缩略图）。等比版
+/// 全端一致：网格 cover 裁中、Hero 飞行 aspect 连续、viewer contain
+/// 无跳变。
 ImageProvider buildThumbnailProvider(
   ImageRef ref, {
   int size = 256,
@@ -323,8 +325,9 @@ class _AndroidThumbnailProvider
   /// dateModified 变化 → 新 key 自动重取；② 透传 Kotlin 磁盘缓存校验。
   final int? dateModifiedMs;
 
-  /// 方形 cover 显示（true）→ 长图 centerCrop；contain 显示（false）→
-  /// fit-inside（全图 aspect）。参与缓存 key：同 size 两种语义不混存。
+  /// 历史语义（true=方形裁切/false=等比）已废弃——native 统一等比请求框
+  /// 解码（见 buildThumbnailProvider doc）。仅参与缓存 key：同 size 两种
+  /// 语义不混存。
   final bool squareCrop;
 
   @override
