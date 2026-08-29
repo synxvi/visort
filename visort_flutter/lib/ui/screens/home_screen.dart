@@ -18,6 +18,7 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/scan/scan_controller.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/features/home/home_controller.dart';
+import 'package:visort_flutter/shared/widgets/responsive_builder.dart';
 import 'package:visort_flutter/shared/widgets/visort_logo.dart';
 import 'package:visort_flutter/shared/widgets/profile_dropdown.dart';
 import 'package:visort_flutter/shared/widgets/resume_button.dart';
@@ -799,20 +800,6 @@ class _FolderChip extends StatelessWidget {
                   fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback, fontSize: 10, color: AppColors.muted)),
         ],
       ),
-    );
-  }
-}
-
-// ───────────── 响应式辅助 ─────────────
-
-class ResponsiveBuilder extends StatelessWidget {
-  const ResponsiveBuilder({super.key, required this.builder});
-  final Widget Function(BuildContext, double) builder;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (ctx, constraints) => builder(ctx, constraints.maxWidth),
     );
   }
 }
