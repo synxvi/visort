@@ -42,6 +42,11 @@ abstract final class RequestPriority {
   /// 空闲预缓存（全相册 screenNail 预生成）：比一切用户请求低——任何
   /// 用户解码天然插队；配合 IdlePrecacheService 的交互静默检测双保险。
   static const int idlePrecache = 300;
+
+  /// filmstrip full 预取（盘缓存就绪区域「掠过即 full」）：低于一切用户
+  /// 请求（当前页 p50 恒优先），高于空闲扫描——未扫到的老照片会走
+  /// 100ms 全尺寸解码，量级与 thumb512 预取同级（p200 q83 已实证可承受）。
+  static const int prefetchFull = 250;
 }
 
 class _Task<T> {

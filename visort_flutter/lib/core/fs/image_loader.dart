@@ -26,9 +26,17 @@ import 'service_policy.dart';
 /// （12MP ≈ 48MB ARGB）在键盘连按时每键双份解码会瞬间塞满 ImageCache；
 /// 下采样后 ~7MB/张。GIF 跳过缩放（ResizeImage 对多帧动图不可靠，
 /// 安卓侧 _AndroidBytesImageProvider 同样对 GIF 走全量保多帧）。
-ImageProvider buildImageProvider(ImageRef ref, {int? targetWidth}) {
+/// [priority]（安卓）：ServicePolicy 入队优先级——预取场景（filmstrip
+/// p250）须低于用户当前页（p50），防止抢队（当年「主图黑屏」根因）。
+/// 不参与 ImageCache key（相同 id+tw 的实例等值，先到的 load 生效）。
+ImageProvider buildImageProvider(ImageRef ref,
+    {int? targetWidth, int priority = RequestPriority.viewerImage}) {
   if (Platform.isAndroid) {
-    return _AndroidBytesImageProvider(ref: ref, targetWidth: targetWidth);
+    return _AndroidBytesImageProvider(
+      ref: ref,
+      targetWidth: targetWidth,
+      priority: priority,
+    );
   }
   final file = FileImage(File(p.join(ref.root, ref.relativePath)));
   if (targetWidth != null &&
@@ -147,10 +155,18 @@ Future<void> initMaxDecodePixels() async {
 /// 安卓端从 MediaStore 读字节的 ImageProvider。
 class _AndroidBytesImageProvider
     extends ImageProvider<_AndroidBytesImageProvider> {
-  const _AndroidBytesImageProvider({required this.ref, this.targetWidth});
+  const _AndroidBytesImageProvider({
+    required this.ref,
+    this.targetWidth,
+    this.priority = RequestPriority.viewerImage,
+  });
 
   final ImageRef ref;
   final int? targetWidth;
+
+  /// ServicePolicy 入队优先级（预取 vs 用户当前页）。不参与 ==/hashCode
+  ///（相同 id+tw 等值共享缓存条目，先发起的 load 决定实际优先级）。
+  final int priority;
 
   @override
   Future<_AndroidBytesImageProvider> obtainKey(
@@ -192,7 +208,7 @@ class _AndroidBytesImageProvider
         // 不低于占位层(100)。
         final r = await ServicePolicy.instance
             .run(
-              RequestPriority.viewerImage,
+              key.priority,
               () => _msChannel.readSampledImage(
                 key.ref.relativePath,
                 targetWidth: tw,

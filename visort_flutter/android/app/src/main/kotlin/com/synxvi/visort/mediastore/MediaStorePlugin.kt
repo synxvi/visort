@@ -851,7 +851,11 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         val repo = requireRepo() ?: run {
             result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
         }
-        val bytes = call.argument<Long>("bytes")
+        // ⚠️ MethodChannel 编码坑：Dart int 在 2^31 内以 32 位 Integer 到达，
+        // argument<Long> 强转失败返回 null（1GB=2^30 正中招）——用 Number
+        // 兼容收再 toLong。此 bug 曾使配额设置静默失败、Kotlin 恒用默认
+        // 128MB → 预缓存 LRU 环流删最新照片。
+        val bytes = (call.argument<Number>("bytes"))?.toLong()
         if (bytes == null || bytes <= 0) {
             result.error(MsError.InvalidArg("bytes 非法").code, null, null); return
         }

@@ -29,6 +29,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/fs/cache_perf.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
+import 'package:visort_flutter/core/fs/service_policy.dart' show RequestPriority;
 import 'package:visort_flutter/ui/ente_viewer/thumbnail_widget.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart' show configProvider, t;
@@ -1984,6 +1985,24 @@ class _ThumbLineStrip extends StatelessWidget {
               ),
               ctx,
             );
+            // full 预取（p250，GIF 跳过）：盘缓存就绪区域（空闲预缓存已扫
+            // 过）readSampledImage 内部 30ms 盘命中 → full 进内存 → 掠过/
+            // 停稳页 pick 直接 full 级 = 「掠过即清晰」。未扫到的老照片走
+            // 100ms 全尺寸解码，p250 低于一切用户请求（当前页 p50 恒优先，
+            // 量级与 thumb512 预取同级）。
+            if (photos[i].mime != 'image/gif') {
+              final view = View.of(ctx);
+              precacheImage(
+                buildImageProvider(
+                  imageRefFromMediaStoreId(photos[i].id),
+                  targetWidth: computeViewerTargetWidth(
+                    view.physicalSize.width,
+                  ),
+                  priority: RequestPriority.prefetchFull,
+                ),
+                ctx,
+              );
+            }
             // 近邻预载：±1 用 large 等比（与当前项同档、与 viewer 渐进 large
             // 同 key）——甩条滚动中/停稳页必有 large 预热，主图起步档从 cell
             //（346 方形裁剪，竖图 ~7 倍垂直放大 = 甩动糊感来源）升为
@@ -2001,6 +2020,19 @@ class _ThumbLineStrip extends StatelessWidget {
                   ),
                   ctx,
                 );
+                // 近邻 full 预取（同上：盘就绪 30ms / 未就绪 p250 排队让路）。
+                if (photos[n].mime != 'image/gif') {
+                  precacheImage(
+                    buildImageProvider(
+                      imageRefFromMediaStoreId(photos[n].id),
+                      targetWidth: computeViewerTargetWidth(
+                        View.of(ctx).physicalSize.width,
+                      ),
+                      priority: RequestPriority.prefetchFull,
+                    ),
+                    ctx,
+                  );
+                }
               }
             }
             for (final n in [i - 2, i + 2]) {
