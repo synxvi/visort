@@ -144,6 +144,10 @@ dependencies {
     // metadata-extractor：兜底多格式元数据（IPTC/XMP/PNG/RAW），覆盖 ExifInterface 不支持的容器。
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("com.drewnoakes:metadata-extractor:2.19.0")
+    // WorkManager：全库预缓存后台任务（充电+存储不低约束的可靠调度，
+    // 跨进程/设备重启续跑）。KTX 版提供 CoroutineWorker/suspend 支持；
+    // 仅用经典 Worker 也走此依赖（work-runtime 被 ktx 传递包含）。
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
 }
 
 // 安卓端 SQLite 走 sqflite method-channel → 系统 SQLite(android.database)，

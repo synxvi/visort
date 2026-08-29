@@ -318,7 +318,11 @@ const Map<String, String> stringsEn = {
   'settings_section_cache': 'Cache',
   'settings_precache': 'Idle Precache',
   'settings_precache_quota': 'Quota',
-  'settings_cache_usage': 'Cache Usage',
+  'settings_cache_progress': 'Progress',
+  'settings_precache_running': 'Precaching',
+  'settings_precache_waiting': 'Queued — starts when charging',
+  'settings_disk_usage': 'Disk usage',
+  'photos_unit': 'photos',
   'settings_clear_cache': 'Clear Image Cache',
   'settings_precache_off_title': 'Disable precache?',
   'settings_precache_off_desc':

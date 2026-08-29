@@ -724,15 +724,19 @@ class MediaStoreRepository(private val context: Context) {
     /// 省 n×4MB 的 channel 传输）。配额检查由调用方每 N 张调
     /// [fullCacheBytes] 自查（本方法不做整目录扫描）。
     ///
+    /// [dateModifiedMs] 调用方已知的源图 DATE_MODIFIED（scanImages 结果里有），
+    /// 传入可省去 exists 分支的一次单行查询——全库重扫时上千张 skip 各省
+    /// 一次查询；null 则自查（单张调用路径不变）。
+    ///
     /// @return 0=已生成 1=缓存已存在（校验有效）跳过 3=失败（源图缺失/损坏）
-    fun precacheFullImage(id: String, targetWidth: Int): Int {
+    fun precacheFullImage(id: String, targetWidth: Int, dateModifiedMs: Long? = null): Int {
         val safeTarget = targetWidth.coerceIn(960, 4096)
         val longId = id.toLongOrNull() ?: return 3
         // 已缓存（文件存在且 mtime 有效）→ 跳过（与 readFullCache 的校验一致，
         // 但不 decode——预生成只关心文件在不在）。
         val file = File(File(fullCacheDir, safeTarget.toString()), "$longId.jpg")
         if (file.exists()) {
-            val dm = queryDateModifiedMs(longId)
+            val dm = dateModifiedMs ?: queryDateModifiedMs(longId)
             if (dm == null || file.lastModified() >= dm) return 1
             file.delete() // 源图已编辑：删旧重生成
         }
@@ -753,8 +757,12 @@ class MediaStoreRepository(private val context: Context) {
 
     /// 设置全图缓存配额（用户拖档位）并立即收紧——缩档时按 LRU 删最旧到
     /// 新配额内。绕过 trim 节流（用户操作要求即时反馈）。
+    /// 配额同步持久化到 SharedPreferences：WorkManager Worker 自建的
+    /// Repository 实例与冷启动早期（Dart 推送到达前）都能拿到用户档位，
+    /// 不再回落默认 128MB（曾致 Worker 新实例按默认配额提前停止/误 trim）。
     fun setFullCacheQuota(bytes: Long) {
         fullCacheQuotaBytes = bytes.coerceIn(64L * 1024 * 1024, 2L * 1024 * 1024 * 1024)
+        quotaPrefs.edit().putLong(KEY_FULL_QUOTA_BYTES, fullCacheQuotaBytes).apply()
         lastFullTrimAt = 0 // 绕过节流
         trimFullCache()
     }
@@ -792,6 +800,54 @@ class MediaStoreRepository(private val context: Context) {
         } catch (_: Exception) {
         }
         return mapOf("full" to full, "thumb" to thumb)
+    }
+
+    /// 当前配额（字节）。Worker / Dart 侧配额满检测用（与 [setFullCacheQuota]
+    /// 同源的运行时值，已含 SP 恢复）。
+    val fullCacheQuota: Long
+        get() = fullCacheQuotaBytes
+
+    /// 预缓存进度统计（设置页进度行数据源，一次查询全给齐）：
+    ///   - cached：`visort_full/{targetWidth}` 目录的文件数（已缓存张数）
+    ///   - total：全库非回收站、非 GIF 图片总数（应缓存目标）
+    ///   - full/thumb：磁盘占用字节数（与 [imageCacheBytes] 同源）
+    ///
+    /// total 的 count 查询走 Bundle MATCH_EXCLUDE（与 scanImages 一致，
+    /// ColorOS 对 MANAGE_MEDIA app 的 selection 不可靠）；GIF 排除因 viewer
+    /// 走多帧路径不读 full 盘缓存。手动彻底删除图片会同步删缓存文件
+    /// （deleteImageCacheFiles），cached 随轮询即时反映。
+    fun fullCacheStats(targetWidth: Int): Map<String, Any> {
+        var cached = 0
+        try {
+            val dir = File(fullCacheDir, targetWidth.coerceIn(960, 4096).toString())
+            cached = dir.listFiles()?.count { it.isFile } ?: 0
+        } catch (_: Exception) {
+        }
+        val total = try {
+            val bundle = android.os.Bundle().apply {
+                putString(
+                    android.content.ContentResolver.QUERY_ARG_SQL_SELECTION,
+                    "(${MediaStore.Images.Media.MIME_TYPE} IS NULL OR ${MediaStore.Images.Media.MIME_TYPE} != ?)",
+                )
+                putStringArray(
+                    android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
+                    arrayOf("image/gif"),
+                )
+                putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_EXCLUDE)
+            }
+            contentResolver.query(collection, arrayOf(MediaStore.Images.Media._ID), bundle, null)
+                ?.use { it.count } ?: 0
+        } catch (e: Exception) {
+            Log.w(TAG, "fullCacheStats count 查询失败: ${e.message}")
+            0
+        }
+        val bytes = imageCacheBytes()
+        return mapOf(
+            "cached" to cached,
+            "total" to total,
+            "full" to (bytes["full"] ?: 0L),
+            "thumb" to (bytes["thumb"] ?: 0L),
+        )
     }
 
     /// 删除图片后清其所有磁盘缓存文件（full 各宽度目录 + thumb 各尺寸目录，
@@ -890,8 +946,16 @@ class MediaStoreRepository(private val context: Context) {
     /// 全图缓存配额（字节，运行时可调——设置页档位手柄）。写路径
     /// （writeFullCache）与设置路径（setFullCacheQuota）均在 ioExecutor 或
     /// MethodChannel 线程，volatile 防可见性问题足够。
+    /// 初值从 SharedPreferences 恢复（用户设过的档位），未设过用默认——
+    /// Worker 新实例/冷启动早期与 plugin 实例看到同一配额。
     @Volatile
-    private var fullCacheQuotaBytes = DEFAULT_FULL_CACHE_BYTES
+    private var fullCacheQuotaBytes: Long =
+        context.getSharedPreferences("visort_cache", android.content.Context.MODE_PRIVATE)
+            .getLong(KEY_FULL_QUOTA_BYTES, DEFAULT_FULL_CACHE_BYTES)
+
+    /// 配额持久化（同上）。Worker 与 plugin 持不同 Repository 实例，共享此 SP。
+    private val quotaPrefs =
+        context.getSharedPreferences("visort_cache", android.content.Context.MODE_PRIVATE)
 
     /// 读 EXIF orientation 映射为旋转角(0/90/180/270)。
     /// PNG/WebP 无 orientation → 0;解析失败 → 0(横躺兜底,不崩)。
@@ -1364,6 +1428,9 @@ class MediaStoreRepository(private val context: Context) {
         /// ~150KB/张——对标系统相册 screenNail 磁盘层）。运行时由
         /// setFullCacheQuota 按用户档位（256MB~2GB）调整。
         private const val DEFAULT_FULL_CACHE_BYTES = 128L * 1024 * 1024
+
+        /// 配额持久化 SP 键（文件 "visort_cache"，见 quotaPrefs）。
+        const val KEY_FULL_QUOTA_BYTES = "full_quota_bytes"
 
         /// trim 全目录扫描最小间隔（ms）：写缓存高峰不每次触发 walkTopDown。
         private const val TRIM_THROTTLE_MS = 5000L

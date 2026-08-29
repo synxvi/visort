@@ -8,9 +8,13 @@
 //         弹窗底色 surfaceElevated（比卡片 surface 提亮，层级区分）。
 // 改动即时写回 configProvider 并持久化（shared_preferences）。
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
+import 'package:visort_flutter/core/fs/image_loader.dart'
+    show computeViewerTargetWidth;
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
@@ -338,18 +342,48 @@ class _CacheSection extends ConsumerStatefulWidget {
 
 class _CacheSectionState extends ConsumerState<_CacheSection> {
   final MediaStoreChannel _channel = const MediaStoreChannel();
-  ({int full, int thumb})? _usage;
+  ({int cached, int total, int full, int thumb})? _usage;
+
+  /// WorkManager 任务态：running / enqueued（排队等充电）/ idle。
+  String _workState = 'idle';
   bool _clearing = false;
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
     _refreshUsage();
+    // 进度轮询：Worker 充电窗口跑批 / 前台 idle 会话都在持续写盘，
+    // 快照数字会"卡住不动"（曾致「增长慢」误判）。3s 间隔两个轻查询
+    // （目录计数 + count），设置页存活期才轮询，离开即停。
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _refreshUsage(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _refreshUsage() async {
-    final usage = await _channel.imageCacheBytes();
-    if (mounted) setState(() => _usage = usage);
+    // tw 与 viewer 同源（fullCacheStats 只数 {tw} 目录的文件数）。
+    // platformDispatcher 而非 View.of(context)：initState 首调时 widget
+    // 树尚未挂载完，View.of 依赖 ancestor 查找会抛异常。
+    final view = WidgetsBinding.instance.platformDispatcher.views.first;
+    final results = await Future.wait([
+      _channel.fullCacheStats(
+        targetWidth: computeViewerTargetWidth(view.physicalSize.width),
+      ),
+      _channel.precacheWorkState(),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _usage = results[0] as ({int cached, int total, int full, int thumb});
+      _workState = results[1] as String;
+    });
   }
 
   /// 关开关：弹窗提醒全量缓存将自动清除 → 确认后关开关 + 清 full 缓存。
@@ -384,12 +418,31 @@ class _CacheSectionState extends ConsumerState<_CacheSection> {
     ).confirmed;
     if (confirmed != true || !mounted) return;
     setState(() => _clearing = true);
+    // 先取消预缓存任务再清：Worker 正在跑时边删边写，清完又被写回，
+    // 违背「立即释放」预期。开关仍开，下次冷启动重新排队（增量成本低）。
+    await _channel.cancelPrecacheWork();
     final freed = await _channel.clearImageCaches(clearThumb: true);
     if (!mounted) return;
     setState(() => _clearing = false);
     await _refreshUsage();
     toast(context, t(ref, 'settings_cache_cleared') +
         ' ${_fmtBytes(freed.full + freed.thumb, ref)}');
+  }
+
+  /// 进度行副文案：任务状态 + 磁盘占用组合。running/enqueued 状态解释
+  /// 「数字为什么不动」（在跑 / 在等充电），idle 只报占用。
+  String _statusLine(WidgetRef ref) {
+    final u = _usage;
+    if (u == null) return '…';
+    final usageStr = _fmtBytes(u.full + u.thumb, ref);
+    switch (_workState) {
+      case 'running':
+        return '${t(ref, 'settings_precache_running')} · $usageStr';
+      case 'enqueued':
+        return '${t(ref, 'settings_precache_waiting')} · $usageStr';
+      default:
+        return '${t(ref, 'settings_disk_usage')} $usageStr';
+    }
   }
 
   Future<void> _updateConfig({bool? precacheEnabled, int? precacheQuotaMb}) async {
@@ -489,29 +542,47 @@ class _CacheSectionState extends ConsumerState<_CacheSection> {
               ],
             ),
           ),
-        // 占用显示行：进入设置页查一次 + 清除后刷新。
+        // 进度显示行：已缓存张数 + 任务状态 + 磁盘占用（3s 轮询，见
+        // initState；点按立即刷）。删除图片会同步删缓存文件，张数与占用
+        // 随轮询即时反映。
         InkWell(
           onTap: _refreshUsage,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(t(ref, 'settings_cache_usage'),
-                    style: const TextStyle(
-                      color: AppColors.text,
-                      fontFamily: 'Space Mono',
-                      height: 1.2,
-                      fontFamilyFallback: AppFonts.cjkFallback,
-                      fontSize: 14,
-                    )),
-                const Spacer(),
+                Row(
+                  children: [
+                    Text(t(ref, 'settings_cache_progress'),
+                        style: const TextStyle(
+                          color: AppColors.text,
+                          fontFamily: 'Space Mono',
+                          height: 1.2,
+                          fontFamilyFallback: AppFonts.cjkFallback,
+                          fontSize: 14,
+                        )),
+                    const Spacer(),
+                    Text(
+                      usage == null
+                          ? '…'
+                          : '${usage.cached} / ${usage.total} ${t(ref, 'photos_unit')}',
+                      style: const TextStyle(
+                          fontFamily: 'Space Mono',
+                          fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                          color: AppColors.muted,
+                          fontSize: 13),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
                 Text(
-                  usage == null ? '…' : _fmtBytes(usage.full + usage.thumb, ref),
+                  _statusLine(ref),
                   style: const TextStyle(
                       fontFamily: 'Space Mono',
                       fontFamilyFallback: ['Noto Sans Mono CJK SC'],
                       color: AppColors.muted,
-                      fontSize: 13),
+                      fontSize: 12),
                 ),
               ],
             ),

@@ -546,11 +546,18 @@ class MediaStoreChannel {
   // ──────────── 空闲预缓存（全相册 screenNail 预生成） ────────────
 
   /// 空闲预生成单张全图缓存（只落盘不拷像素不跨 channel 传大 buffer）。
+  /// [dateModifiedMs] 调用方已知的源图修改时间（scanImages 结果里有），
+  /// 传入省去 Kotlin exists 分支的一次单行查询（全库重扫上千张 skip 时
+  /// 收益显著）；null 则 Kotlin 自查。
   /// 返回码：0=已生成 1=缓存已存在跳过 3=失败（源图缺失/损坏）。
-  Future<int> precacheFullImage(String id, {required int targetWidth}) async {
+  Future<int> precacheFullImage(String id,
+      {required int targetWidth, int? dateModifiedMs}) async {
     try {
-      return await _channel.invokeMethod<int>('precacheFullImage',
-          {'id': id, 'targetWidth': targetWidth}) ??
+      return await _channel.invokeMethod<int>('precacheFullImage', {
+        'id': id,
+        'targetWidth': targetWidth,
+        if (dateModifiedMs != null) 'dateModifiedMs': dateModifiedMs,
+      }) ??
           3;
     } on PlatformException {
       return 3;
@@ -594,6 +601,56 @@ class MediaStoreChannel {
       );
     } on PlatformException {
       return (full: 0, thumb: 0);
+    }
+  }
+
+  // ──────────── WorkManager 全库预缓存（充电窗口批量） ────────────
+
+  /// 排队全库预缓存任务（约束：充电 + 存储不低，KEEP 幂等）。白天 app 内
+  /// 排队不动，插电即跑。失败静默（下次冷启动再排）。
+  Future<void> schedulePrecacheWork({required int targetWidth}) async {
+    try {
+      await _channel.invokeMethod<void>(
+          'schedulePrecacheWork', {'targetWidth': targetWidth});
+    } on PlatformException {
+      // 静默：调度失败下次启动再排
+    }
+  }
+
+  /// 取消预缓存任务（关开关/手动清缓存）。
+  Future<void> cancelPrecacheWork() async {
+    try {
+      await _channel.invokeMethod<void>('cancelPrecacheWork');
+    } on PlatformException {
+      // 静默
+    }
+  }
+
+  /// 预缓存任务状态：running（跑着）/ enqueued（排队等充电）/ idle。
+  Future<String> precacheWorkState() async {
+    try {
+      return await _channel.invokeMethod<String>('precacheWorkState') ?? 'idle';
+    } on PlatformException {
+      return 'idle';
+    }
+  }
+
+  /// 预缓存进度 {cached, total, full, thumb}：cached=已缓存张数（目录
+  /// 文件数），total=全库应缓存张数（非回收站非 GIF），full/thumb=磁盘
+  /// 占用字节。设置页进度行轮询数据源（一次往返全给齐）。
+  Future<({int cached, int total, int full, int thumb})> fullCacheStats(
+      {required int targetWidth}) async {
+    try {
+      final raw = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+          'fullCacheStats', {'targetWidth': targetWidth});
+      return (
+        cached: ((raw?['cached'] as num?) ?? 0).toInt(),
+        total: ((raw?['total'] as num?) ?? 0).toInt(),
+        full: ((raw?['full'] as num?) ?? 0).toInt(),
+        thumb: ((raw?['thumb'] as num?) ?? 0).toInt(),
+      );
+    } on PlatformException {
+      return (cached: 0, total: 0, full: 0, thumb: 0);
     }
   }
 

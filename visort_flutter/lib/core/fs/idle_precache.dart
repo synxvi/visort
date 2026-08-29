@@ -32,6 +32,10 @@ const Duration _kTick = Duration(seconds: 2);
 /// 单张间隔（低频节流）。
 const Duration _kPerImageGap = Duration(milliseconds: 200);
 
+/// 已缓存跳过项（code=1）的间隔：仅 channel 节流，不付满额让路成本——
+/// 重扫段的吞吐瓶颈在等待而非解码。
+const Duration _kSkipGap = Duration(milliseconds: 20);
+
 /// 配额满检测间隔（每 N 张查一次目录大小，walkTopDown 有成本）。
 const int _kQuotaCheckEvery = 16;
 
@@ -59,12 +63,15 @@ class IdlePrecacheService with WidgetsBindingObserver {
     _tickTimer = Timer.periodic(_kTick, (_) => _tick());
     // 启动即把持久化配额推给 Kotlin（进程重启后 Kotlin 侧回到默认 128MB）。
     _pushQuota(ref.read(configProvider));
+    // WorkManager 全库任务排队（KEEP 幂等；已排队/运行中不叠加）。
+    _syncWorkSchedule(ref.read(configProvider));
   }
 
-  /// 配置变化（idlePrecacheProvider 转发）：开关关 → 作废在跑扫描；
-  /// 配额变 → 推送 Kotlin（缩档立即 LRU 收紧）。
+  /// 配置变化（idlePrecacheProvider 转发）：开关关 → 作废在跑扫描 +
+  /// 取消 WorkManager 任务；配额变 → 推送 Kotlin（缩档立即 LRU 收紧）。
   void onConfigChanged(AppConfig config) {
     _pushQuota(config);
+    _syncWorkSchedule(config);
     if (!config.precacheEnabled) {
       _session++; // 作废在跑扫描
     }
@@ -72,6 +79,19 @@ class IdlePrecacheService with WidgetsBindingObserver {
 
   void _pushQuota(AppConfig config) {
     unawaited(_channel.setFullCacheQuota(config.precacheQuotaMb << 20));
+  }
+
+  /// WorkManager 全库任务与开关同步：开 → 排队（充电+存储不低约束，
+  /// 插电即跑，不占交互用电）；关 → 取消（含运行中的，防边关边写）。
+  void _syncWorkSchedule(AppConfig config) {
+    if (config.precacheEnabled) {
+      final view = WidgetsBinding.instance.platformDispatcher.views.first;
+      unawaited(_channel.schedulePrecacheWork(
+        targetWidth: computeViewerTargetWidth(view.physicalSize.width),
+      ));
+    } else {
+      unawaited(_channel.cancelPrecacheWork());
+    }
   }
 
   @override
@@ -126,7 +146,11 @@ class IdlePrecacheService with WidgetsBindingObserver {
           if (info.mime == 'image/gif') continue;
           final code = await ServicePolicy.instance.run(
             RequestPriority.idlePrecache,
-            () => _channel.precacheFullImage(info.id, targetWidth: tw),
+            () => _channel.precacheFullImage(
+              info.id,
+              targetWidth: tw,
+              dateModifiedMs: info.dateModifiedMs,
+            ),
             tag: 'precachefull:${info.id}',
           );
           if (code == 0) {
@@ -148,7 +172,13 @@ class IdlePrecacheService with WidgetsBindingObserver {
               break;
             }
           }
-          await Future<void>.delayed(_kPerImageGap);
+          // skip（已缓存）不睡满 200ms：会话重启重扫已缓存段（上千张 ×
+          // 200ms = 数分钟纯等待）摸不到未缓存尾部——真机实证 8.5h 仅
+          // 爬 63% 的主因之一。skip 只留 20ms channel 节流；生成保持
+          // 200ms 让路节奏不变。
+          await Future<void>.delayed(
+            code == 1 ? _kSkipGap : _kPerImageGap,
+          );
         }
         if (quotaFull) break;
         cursor = page.nextCursor;

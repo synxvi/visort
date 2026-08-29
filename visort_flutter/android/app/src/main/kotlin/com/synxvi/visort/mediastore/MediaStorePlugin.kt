@@ -1,6 +1,7 @@
 package com.synxvi.visort.mediastore
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.ContentObserver
@@ -11,6 +12,13 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
 import androidx.core.content.ContextCompat
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -21,6 +29,7 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import io.flutter.plugin.common.PluginRegistry
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 // ───────────────────────── MediaStore MethodChannel 入口 ─────────────────────────
 //
@@ -72,6 +81,10 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     private var activity: Activity? = null
     private var repository: MediaStoreRepository? = null
 
+    /// 应用级 context（engine 附着期存续，比 activity 生命周期长）——
+    /// WorkManager 调度入口用它（后台任务不依赖 Activity 存在）。
+    private var appContext: Context? = null
+
     /// IO 线程池：图片字节/缩略图/查询放后台，避免阻塞 UI 线程导致滚动卡顿。
     /// 12 线程 = 对标系统相册 BaseThumbnailLoader 的 12 并发上限——
     /// 首屏 20+ 张缩略图 4 线程要排 5 轮（每轮 loadThumbnail 首次生成 50~200ms），
@@ -114,6 +127,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     // ──────────── FlutterPlugin 生命周期 ────────────
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        appContext = binding.applicationContext
         channel = MethodChannel(binding.binaryMessenger, CHANNEL).also {
             it.setMethodCallHandler(this)
         }
@@ -141,6 +155,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         // 注销 ContentObserver
+        appContext = null
         mediaObserver?.let { binding.applicationContext.contentResolver.unregisterContentObserver(it) }
         mediaObserver = null
         channel?.setMethodCallHandler(null)
@@ -371,6 +386,11 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             "setFullCacheQuota" -> handleSetFullCacheQuota(call, result)
             "clearImageCaches" -> handleClearImageCaches(call, result)
             "imageCacheBytes" -> handleImageCacheBytes(result)
+            // WorkManager 全库预缓存（充电窗口批量补齐）+ 进度/状态查询。
+            "schedulePrecacheWork" -> handleSchedulePrecacheWork(call, result)
+            "cancelPrecacheWork" -> handleCancelPrecacheWork(result)
+            "precacheWorkState" -> handlePrecacheWorkState(result)
+            "fullCacheStats" -> handleFullCacheStats(call, result)
             else -> result.notImplemented()
         }
     }
@@ -837,9 +857,12 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             result.error(MsError.InvalidArg("id 缺失").code, null, null); return
         }
         val targetWidth = call.argument<Int>("targetWidth") ?: 1152
+        // Number 兼容收（epoch ms 是 int64，argument<Long> 强转有 2^30 溢出
+        // 前科——见 handleSetFullCacheQuota 注释）。
+        val dateModifiedMs = call.argument<Number>("dateModifiedMs")?.toLong()
         ioExecutor.execute {
             val code = try {
-                repo.precacheFullImage(id, targetWidth)
+                repo.precacheFullImage(id, targetWidth, dateModifiedMs)
             } catch (e: Exception) {
                 3
             }
@@ -903,6 +926,114 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 return@execute
             }
             mainHandler.post { result.success(sizes) }
+        }
+    }
+
+    // ──────────── WorkManager 全库预缓存调度 ────────────
+
+    /// 排队全库预缓存任务（约束：充电 + 存储不低）。KEEP 策略幂等——
+    /// 已排队/运行中不重复叠加；跑完出队，下次冷启动/开关打开时再排
+    /// （已缓存段 skip 秒过，增量成本低）。充电约束是核心：白天 app 内
+    /// 排队不动，用户插电（多为睡前）即开跑，不占交互用电预算。
+    private fun handleSchedulePrecacheWork(call: MethodCall, result: Result) {
+        val ctx = appContext ?: run {
+            result.error(MsError.InvalidArg("appContext 未就绪").code, null, null); return
+        }
+        val targetWidth = call.argument<Int>("targetWidth") ?: 1152
+        ioExecutor.execute {
+            try {
+                val constraints = Constraints.Builder()
+                    .setRequiresCharging(true)
+                    .setRequiresStorageNotLow(true)
+                    .build()
+                val request = OneTimeWorkRequestBuilder<PrecacheWorker>()
+                    .setConstraints(constraints)
+                    .setInputData(workDataOf(PrecacheWorker.KEY_TARGET_WIDTH to targetWidth))
+                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                    .build()
+                WorkManager.getInstance(ctx).enqueueUniqueWork(
+                    PrecacheWorker.UNIQUE_NAME,
+                    ExistingWorkPolicy.KEEP,
+                    request,
+                )
+                mainHandler.post { result.success(true) }
+            } catch (e: Exception) {
+                Log.w(TAG, "schedulePrecacheWork 异常: ${e.message}")
+                mainHandler.post {
+                    result.error(
+                        MsError.QueryFailed("schedulePrecacheWork 异常: ${e.message}").code,
+                        e.message, null,
+                    )
+                }
+            }
+        }
+    }
+
+    /// 取消预缓存任务（关开关/手动清缓存时）。
+    private fun handleCancelPrecacheWork(result: Result) {
+        val ctx = appContext ?: run {
+            result.error(MsError.InvalidArg("appContext 未就绪").code, null, null); return
+        }
+        ioExecutor.execute {
+            try {
+                WorkManager.getInstance(ctx).cancelUniqueWork(PrecacheWorker.UNIQUE_NAME)
+                mainHandler.post { result.success(true) }
+            } catch (e: Exception) {
+                Log.w(TAG, "cancelPrecacheWork 异常: ${e.message}")
+                mainHandler.post {
+                    result.error(
+                        MsError.QueryFailed("cancelPrecacheWork 异常: ${e.message}").code,
+                        e.message, null,
+                    )
+                }
+            }
+        }
+    }
+
+    /// 预缓存任务状态："running"（跑着）/ "enqueued"（排队等充电）/
+    /// "idle"（无活动任务——跑完了或从未排队）。设置页据此解释进度
+    /// 「为什么不动」。KEEP 下已完成的任务保留在历史里，只报活动态。
+    private fun handlePrecacheWorkState(result: Result) {
+        val ctx = appContext ?: run {
+            result.error(MsError.InvalidArg("appContext 未就绪").code, null, null); return
+        }
+        ioExecutor.execute {
+            val state = try {
+                val infos = WorkManager.getInstance(ctx)
+                    .getWorkInfosForUniqueWork(PrecacheWorker.UNIQUE_NAME).get()
+                when {
+                    infos.any { it.state == WorkInfo.State.RUNNING } -> "running"
+                    infos.any { it.state == WorkInfo.State.ENQUEUED } -> "enqueued"
+                    else -> "idle"
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "precacheWorkState 查询失败: ${e.message}")
+                "idle"
+            }
+            mainHandler.post { result.success(state) }
+        }
+    }
+
+    /// 预缓存进度（cached/total 张数 + full/thumb 占用）：设置页进度行
+    /// 数据源（一次 channel 往返全给齐，轮询专用）。
+    private fun handleFullCacheStats(call: MethodCall, result: Result) {
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        val targetWidth = call.argument<Int>("targetWidth") ?: 1152
+        ioExecutor.execute {
+            val stats = try {
+                repo.fullCacheStats(targetWidth)
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(
+                        MsError.QueryFailed("fullCacheStats 异常: ${e.message}").code,
+                        e.message, null,
+                    )
+                }
+                return@execute
+            }
+            mainHandler.post { result.success(stats) }
         }
     }
 
