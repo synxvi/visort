@@ -430,7 +430,7 @@ class _CacheSectionState extends ConsumerState<_CacheSection> {
   }
 
   /// 进度行副文案：任务状态 + 磁盘占用组合。running/enqueued 状态解释
-  /// 「数字为什么不动」（在跑 / 在等充电），idle 只报占用。
+  /// 「数字为什么不动」（在跑 / 排队中），idle 只报占用。
   String _statusLine(WidgetRef ref) {
     final u = _usage;
     if (u == null) return '…';

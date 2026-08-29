@@ -81,8 +81,8 @@ class IdlePrecacheService with WidgetsBindingObserver {
     unawaited(_channel.setFullCacheQuota(config.precacheQuotaMb << 20));
   }
 
-  /// WorkManager 全库任务与开关同步：开 → 排队（充电+存储不低约束，
-  /// 插电即跑，不占交互用电）；关 → 取消（含运行中的，防边关边写）。
+  /// WorkManager 全库任务与开关同步：开 → 排队（存储不低约束，系统给
+  /// 窗口即跑）；关 → 取消（含运行中的，防边关边写）。
   void _syncWorkSchedule(AppConfig config) {
     if (config.precacheEnabled) {
       final view = WidgetsBinding.instance.platformDispatcher.views.first;

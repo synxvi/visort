@@ -8,12 +8,12 @@ import androidx.work.WorkerParameters
 // ───────────────────────── 全库预缓存 Worker（WorkManager 约束调度） ─────────────────────────
 //
 // 与前台 idle_precache（Dart 会话）分工：
-//   - Worker：全库首轮批量补齐。约束「充电 + 存储不低」——白天 app 内
-//     enqueue 只排队不跑，用户睡前插电即开跑（~1900 张单线程解码约
-//     10~15 分钟），不要求 app 前台、跨进程/设备重启由 WorkManager 持久
-//     化调度续跑。这是主流做法（对标官方对「可延迟但必须可靠完成」的
-//     批量工作的定位），替代此前「绑定 app 前台 + 管线空闲」导致 8 小时
-//     仅爬 63% 的模式。
+//   - Worker：全库首轮批量补齐。约束「存储不低」（2026-08-29 用户定调
+//     去掉充电限制——排队后系统给窗口即跑，~1900 张单线程解码约 10~15
+//     分钟），不要求 app 前台、跨进程/设备重启由 WorkManager 持久化调度
+//     续跑。这是主流做法（对标官方对「可延迟但必须可靠完成」的批量工作
+//     的定位），替代此前「绑定 app 前台 + 管线空闲」导致 8 小时仅爬 63%
+//     的模式。
 //   - 前台 idle 会话：保留，管日常增量（新照片在 DATE_ADDED 倒序头部，
 //     会话开头即处理）。
 //
@@ -40,7 +40,7 @@ class PrecacheWorker(appContext: Context, params: WorkerParameters) :
         var quotaFull = false
         try {
             while (true) {
-                // isStopped：约束失效（拔电源）/开关关闭触发的系统 stop——
+                // isStopped：约束失效（存储低）/开关关闭触发的系统 stop——
                 // 尽快返回让出资源；约束式任务由 WorkManager 自动重新入队
                 // 等待下次窗口，无需自行 retry。
                 if (isStopped) return Result.success()

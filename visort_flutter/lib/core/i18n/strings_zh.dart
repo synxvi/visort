@@ -319,7 +319,7 @@ const Map<String, String> stringsZh = {
   'settings_precache_quota': '缓存配额',
   'settings_cache_progress': '缓存进度',
   'settings_precache_running': '预缓存进行中',
-  'settings_precache_waiting': '已排队，充电后自动开始',
+  'settings_precache_waiting': '已排队，即将开始',
   'settings_disk_usage': '磁盘占用',
   'photos_unit': '张',
   'settings_clear_cache': '清除图片缓存',

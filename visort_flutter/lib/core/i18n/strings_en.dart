@@ -320,7 +320,7 @@ const Map<String, String> stringsEn = {
   'settings_precache_quota': 'Quota',
   'settings_cache_progress': 'Progress',
   'settings_precache_running': 'Precaching',
-  'settings_precache_waiting': 'Queued — starts when charging',
+  'settings_precache_waiting': 'Queued — starting soon',
   'settings_disk_usage': 'Disk usage',
   'photos_unit': 'photos',
   'settings_clear_cache': 'Clear Image Cache',

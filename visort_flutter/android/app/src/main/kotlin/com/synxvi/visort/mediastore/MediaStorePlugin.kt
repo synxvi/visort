@@ -931,10 +931,10 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
 
     // ──────────── WorkManager 全库预缓存调度 ────────────
 
-    /// 排队全库预缓存任务（约束：充电 + 存储不低）。KEEP 策略幂等——
-    /// 已排队/运行中不重复叠加；跑完出队，下次冷启动/开关打开时再排
-    /// （已缓存段 skip 秒过，增量成本低）。充电约束是核心：白天 app 内
-    /// 排队不动，用户插电（多为睡前）即开跑，不占交互用电预算。
+    /// 排队全库预缓存任务（约束：仅存储不低——2026-08-29 用户定调去掉
+    /// 充电限制，排队后系统给窗口即跑）。KEEP 策略幂等——已排队/运行中
+    /// 不重复叠加；跑完出队，下次冷启动/开关打开时再排（已缓存段 skip
+    /// 秒过，增量成本低）。
     private fun handleSchedulePrecacheWork(call: MethodCall, result: Result) {
         val ctx = appContext ?: run {
             result.error(MsError.InvalidArg("appContext 未就绪").code, null, null); return
@@ -943,7 +943,6 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         ioExecutor.execute {
             try {
                 val constraints = Constraints.Builder()
-                    .setRequiresCharging(true)
                     .setRequiresStorageNotLow(true)
                     .build()
                 val request = OneTimeWorkRequestBuilder<PrecacheWorker>()

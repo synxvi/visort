@@ -46,3 +46,11 @@
 # R8 严格模式可能裁剪未被直接引用的 Directory 实现，保留整个包。
 -keep class com.drew.** { *; }
 -dontwarn com.drew.**
+
+# ── WorkManager（R8 full mode 反射缺口）──
+# WorkManagerInitializer 在启动 ContentProvider 阶段反射构造 Room 生成类
+# WorkDatabase_Impl 的无参 <init>（getDeclaredConstructor）。AGP 9 / R8
+# full mode 下 work-runtime 自带 consumer rules 对该生成类覆盖不全，
+# 构造器被裁 → NoSuchMethodException → 启动即崩（真机实证 08-29）。
+-keep class androidx.work.impl.WorkDatabase_Impl { *; }
+-keep class androidx.work.impl.WorkDatabase_Impl$* { *; }
