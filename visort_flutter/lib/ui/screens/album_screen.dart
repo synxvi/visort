@@ -26,6 +26,8 @@ import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/ui/router_android.dart';
+import 'package:visort_flutter/ui/screens/app_shell_android.dart'
+    show ShellHandle;
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
 import 'package:visort_flutter/shared/widgets/rename_dialog.dart';
@@ -46,13 +48,15 @@ import 'album_common.dart';
 class AlbumScreen extends ConsumerStatefulWidget {
   const AlbumScreen({
     super.key,
-    required this.bucketId,
+    this.bucketId = '',
     this.bucketName,
     this.bucketCount,
     this.favoritesOnly = false,
     this.trashedOnly = false,
+    this.shellHandle,
   });
 
+  /// 相册 id（bucket 模式必传；收藏/回收站模式忽略，可为空串）。
   final String bucketId;
   final String? bucketName;
 
@@ -66,6 +70,15 @@ class AlbumScreen extends ConsumerStatefulWidget {
 
   /// 跨相册回收站视图（P1a）：true 时扫描所有 IS_TRASHED=1。
   final bool trashedOnly;
+
+  /// 抽屉壳句柄：非 null = 嵌入 Shell 的一级页（收藏/回收站）——
+  /// 顶栏 ☰ 呼出抽屉（无返回箭头）、返回键经 Shell 三段分发（勾选态退出
+  /// 勾选）、数据进入由 Shell 切页时驱动。null = push 的二级页（bucket
+  /// 浏览/旧入口），行为与历史完全一致（返回箭头 + PopScope + 自驱动 enter）。
+  final ShellHandle? shellHandle;
+
+  /// 嵌入 Shell 的一级页（收藏/回收站）。
+  bool get _embedded => shellHandle != null;
 
   @override
   ConsumerState<AlbumScreen> createState() => _AlbumScreenState();
@@ -199,7 +212,19 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     _timelineView = ref.read(configProvider).photoTimelineView;
     _scrollCtrl.addListener(_onScroll);
     _timelineScrollCtrl.addListener(_onTimelineScroll);
+    // 嵌入 Shell 的一级页：数据进入由 Shell 切页驱动（enterFavorites/
+    // enterTrash silent），此处不重复触发；返回键经 Shell 分发——勾选态
+    // 先退勾选（ShellHandle.onBack 返回已消费），不得再注册 PopScope
+    //（同路由多 PopScope 会全部同时回调）。
+    if (widget._embedded) {
+      widget.shellHandle!.onBack = () {
+        if (!_selectMode) return false;
+        _exitSelectMode();
+        return true;
+      };
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (widget._embedded) return;
       // 进入动画（网格由小变大）期间网格照常渲染——动画主体就是网格本身，
       // query 在动画窗口内完成,动画结束缩略图渐进填充。
       if (widget.favoritesOnly) {
@@ -246,6 +271,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   void dispose() {
     // 菜单浮层挂 rootOverlay（不随本页 dispose），主动收回防残留。
     _menuCtl?.close();
+    widget.shellHandle?.onBack = null;
     _routeAnim?.removeStatusListener(_onRouteStatus);
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
@@ -286,11 +312,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     ref.read(galleryControllerProvider.notifier).loadMore();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final gallery = ref.watch(galleryControllerProvider);
-    // 勾选态拦截返回：系统返回/返回箭头先取消勾选态，不退出页面
-    // （对标系统相册；再按一次才真正退出）。
+  /// push 模式包裹 PopScope：勾选态拦截返回（系统返回/返回箭头先取消勾选
+  /// 态，不退出页面，对标系统相册）+ pop 时 exitBucket（存桶快照+刷新列表）。
+  /// 嵌入 Shell 时直通：返回键由 Shell 三段分发（勾选态退出经
+  /// ShellHandle.onBack，见 initState），且本页无路由可 pop、view 由
+  /// Shell 切页管理，exitBucket 语义不适用。
+  Widget _maybePopScope({required Widget child}) {
+    if (widget._embedded) return child;
     return PopScope(
       canPop: !_selectMode,
       onPopInvokedWithResult: (didPop, _) {
@@ -305,11 +333,28 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           ref.read(galleryControllerProvider.notifier).exitBucket();
         }
       },
+      child: child,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final gallery = ref.watch(galleryControllerProvider);
+    return _maybePopScope(
       child: Scaffold(
         backgroundColor: AppColors.bg,
         appBar: AppBar(
           backgroundColor: AppColors.surface,
           foregroundColor: AppColors.text,
+          // 嵌入 Shell（收藏/回收站一级页）：☰ 呼出抽屉；push 模式保持
+          // 默认返回箭头（勾选态时 PopScope canPop=false 自动隐藏，现状）。
+          leading: widget._embedded
+              ? IconButton(
+                  icon: const Icon(Icons.menu, color: AppColors.text),
+                  tooltip: t(ref, 'gallery_manage'),
+                  onPressed: () => widget.shellHandle!.openDrawer(),
+                )
+              : null,
           // 标题紧贴返回箭头（默认 titleSpacing 16 会显得相册名离箭头太远）
           titleSpacing: 0,
           title: _selectMode
@@ -439,20 +484,25 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         // 均触发）。TweenAnimationBuilder key 变化时旧 child 先卸载
         // （scrollable detach）再挂新 child 淡入——无重叠挂载，保留淡入
         // 效果且彻底杜绝双 attach 崩溃。
+        // 嵌入 Shell 的一级页跳过淡入：抽屉切页时 IndexedStack 首次挂载
+        // 本页会播 150ms Opacity 动画，与「抽屉收起即满屏新页」的预期
+        // 不符（淡入是 push 转场的观感）。
         // edge-to-edge 沉浸：bottom:false——网格延伸画到屏幕物理底边（手势条
         // 悬浮在照片上，系统自动对比取色）；末行避让由 Gallery 尾部 inset
         // sliver 承担（gallery.dart）。选择态底栏出现时 Scaffold 自动垫高 body。
         body: SafeArea(
           bottom: false,
-          child: TweenAnimationBuilder<double>(
-            key: ValueKey(_timelineView),
-            tween: Tween(begin: 0.0, end: 1.0),
-            duration: AppDurations.enteContentSwitch,
-            curve: Curves.easeOut,
-            builder: (_, opacity, child) =>
-                Opacity(opacity: opacity, child: child),
-            child: _buildBody(gallery),
-          ),
+          child: widget._embedded
+              ? _buildBody(gallery)
+              : TweenAnimationBuilder<double>(
+                  key: ValueKey(_timelineView),
+                  tween: Tween(begin: 0.0, end: 1.0),
+                  duration: AppDurations.enteContentSwitch,
+                  curve: Curves.easeOut,
+                  builder: (_, opacity, child) =>
+                      Opacity(opacity: opacity, child: child),
+                  child: _buildBody(gallery),
+                ),
         ),
         // 批量选择模式：底部操作栏（按视图模式提供不同批量操作）
         bottomNavigationBar: _selectMode ? _buildBatchBar(gallery) : null,
