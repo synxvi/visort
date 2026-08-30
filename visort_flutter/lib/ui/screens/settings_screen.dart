@@ -9,6 +9,7 @@
 // 改动即时写回 configProvider 并持久化（shared_preferences）。
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -22,7 +23,7 @@ import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/screens/app_shell_android.dart'
-    show ShellHandle;
+    show DrawerMenuButton, ShellHandle;
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key, this.shellHandle});
@@ -42,10 +43,9 @@ class SettingsScreen extends ConsumerWidget {
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.text,
         leading: shellHandle != null
-            ? IconButton(
-                icon: const Icon(Icons.menu, color: AppColors.text),
+            ? DrawerMenuButton(
+                handle: shellHandle,
                 tooltip: t(ref, 'settings_title'),
-                onPressed: shellHandle!.openDrawer,
               )
             : null,
         title: Text(t(ref, 'settings_title'),
@@ -76,12 +76,51 @@ class SettingsScreen extends ConsumerWidget {
                 ],
                 onSelected: (v) => setLanguage(ref, v),
               ),
+              // 抽屉动画档位（仅安卓 Shell 有抽屉；桌面端不显示）。
+              // 快速 = 250/200ms（Material 官方黄金值，默认）；舒适 =
+              // 320/240ms（emphasized 方向，节奏沉稳）。开/关非对称。
+              if (Platform.isAndroid)
+                _PickerRow<DrawerAnimSpeed>(
+                  label: t(ref, 'settings_drawer_speed'),
+                  value: config.drawerAnimSpeed,
+                  valueLabel: config.drawerAnimSpeed == DrawerAnimSpeed.fast
+                      ? t(ref, 'drawer_speed_fast')
+                      : t(ref, 'drawer_speed_comfortable'),
+                  options: [
+                    (DrawerAnimSpeed.fast, t(ref, 'drawer_speed_fast')),
+                    (
+                      DrawerAnimSpeed.comfortable,
+                      t(ref, 'drawer_speed_comfortable')
+                    ),
+                  ],
+                  onSelected: (v) => _update(ref, drawerAnimSpeed: v),
+                ),
             ],
           ),
-          // ── 首页 ──
+          // ── 布局：首页（bucket 网格）与快速整理各自独立配置，完全解耦 ──
           _SectionHeader(t(ref, 'settings_section_home')),
           _SettingsCard(
             children: [
+              _PickerRow<HomeLayout>(
+                label: t(ref, 'settings_homepage_layout'),
+                value: config.galleryLayout,
+                valueLabel: config.galleryLayout == HomeLayout.grid
+                    ? t(ref, 'layout_grid')
+                    : t(ref, 'layout_list'),
+                options: [
+                  (HomeLayout.list, t(ref, 'layout_list')),
+                  (HomeLayout.grid, t(ref, 'layout_grid')),
+                ],
+                onSelected: (v) => _update(ref, galleryLayout: v),
+              ),
+              if (config.galleryLayout == HomeLayout.grid)
+                _PickerRow<int>(
+                  label: t(ref, 'settings_homepage_grid_cols'),
+                  value: config.galleryGridColumns,
+                  valueLabel: '${config.galleryGridColumns} $suffix',
+                  options: [(3, '3 $suffix'), (4, '4 $suffix')],
+                  onSelected: (v) => _update(ref, galleryGridColumns: v),
+                ),
               _PickerRow<HomeLayout>(
                 label: t(ref, 'settings_home_layout'),
                 value: config.homeLayout,
@@ -101,12 +140,8 @@ class SettingsScreen extends ConsumerWidget {
                   options: [(3, '3 $suffix'), (4, '4 $suffix')],
                   onSelected: (v) => _update(ref, homeGridColumns: v),
                 ),
-            ],
-          ),
-          // ── 相册 ──
-          _SectionHeader(t(ref, 'settings_section_album')),
-          _SettingsCard(
-            children: [
+              // 相册内照片网格列数（原「相册」节唯一项，并入布局节；
+              // 「相册」节随之取消）。
               _PickerRow<int>(
                 label: t(ref, 'settings_album_grid_cols'),
                 value: config.photoGridColumns,
@@ -135,11 +170,17 @@ class SettingsScreen extends ConsumerWidget {
     HomeLayout? homeLayout,
     int? homeGridColumns,
     int? photoGridColumns,
+    DrawerAnimSpeed? drawerAnimSpeed,
+    HomeLayout? galleryLayout,
+    int? galleryGridColumns,
   }) async {
     final updated = ref.read(configProvider).copyWith(
           homeLayout: homeLayout,
           homeGridColumns: homeGridColumns,
           photoGridColumns: photoGridColumns,
+          drawerAnimSpeed: drawerAnimSpeed,
+          galleryLayout: galleryLayout,
+          galleryGridColumns: galleryGridColumns,
         );
     ref.read(configProvider.notifier).state = updated;
     await ref.read(profilesServiceProvider).save(updated);

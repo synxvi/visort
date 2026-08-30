@@ -13,6 +13,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:visort_flutter/core/config/models.dart' show HomeLayout;
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
@@ -23,7 +24,7 @@ import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/ui/router.dart';
 import 'package:visort_flutter/ui/router_android.dart';
 import 'package:visort_flutter/ui/screens/app_shell_android.dart'
-    show ShellHandle;
+    show DrawerMenuButton, ShellHandle;
 
 class GalleryScreen extends ConsumerStatefulWidget {
   const GalleryScreen({super.key, this.shellHandle});
@@ -74,10 +75,9 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.text,
-        leading: IconButton(
-          icon: const Icon(Icons.menu, color: AppColors.text),
+        leading: DrawerMenuButton(
+          handle: widget.shellHandle,
           tooltip: t(ref, 'gallery_title'),
-          onPressed: () => widget.shellHandle?.openDrawer(),
         ),
         titleSpacing: 0,
         title: Text(
@@ -164,26 +164,37 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
     final buckets = gallery.sortedBuckets;
     // 尾部 inset = 手势条高度 + 网格间距：末行封面不被手势条压住。
     final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
-    // 网格结构与快速整理页完全一致：Wrap + 固定列宽（GridView 的
-    // childAspectRatio 会锁死 cell 高留白，见 home_screen_android 同款注释），
-    // 列数共用 homeGridColumns 配置——两处网格视觉统一。
-    final cols = ref.watch(configProvider).homeGridColumns;
+    // 布局配置与快速整理页解耦（galleryLayout/galleryGridColumns）：
+    // 网格 = Wrap + 固定列宽（GridView 的 childAspectRatio 会锁死 cell 高
+    // 留白，见 home_screen_android 同款注释）；列表 = 行式（封面+名称+数量）。
+    final config = ref.watch(configProvider);
+    final isGrid = config.galleryLayout == HomeLayout.grid;
+    return RefreshIndicator(
+      color: AppColors.accent,
+      onRefresh: () =>
+          ref.read(galleryControllerProvider.notifier).loadBuckets(silent: true),
+      child: isGrid ? _buildGridBody(buckets, bottomInset) : _buildListBody(buckets, bottomInset),
+    );
+  }
+
+  /// 网格布局：与快速整理页网格同构（Wrap + 固定列宽），列数独立配置。
+  Widget _buildGridBody(List<MsBucket> buckets, double bottomInset) {
+    final cols = ref.watch(configProvider).galleryGridColumns;
     const spacing = 4.0;
     const hpad = 12.0;
     return LayoutBuilder(
       builder: (ctx, c) {
         final cellW = (c.maxWidth - hpad * 2 - spacing * (cols - 1)) / cols;
-        return RefreshIndicator(
-          color: AppColors.accent,
-          onRefresh: () => ref
-              .read(galleryControllerProvider.notifier)
-              .loadBuckets(silent: true),
-          child: SingleChildScrollView(
-            // 动画对齐 ente：iOS 式回弹滚动物理（AlwaysScrollable 保下拉刷新）。
-            physics: const BouncingScrollPhysics(
-              parent: AlwaysScrollableScrollPhysics(),
-            ),
-            padding: EdgeInsets.fromLTRB(hpad, 8, hpad, 16 + bottomInset),
+        return SingleChildScrollView(
+          // 动画对齐 ente：iOS 式回弹滚动物理（AlwaysScrollable 保下拉刷新）。
+          physics: const BouncingScrollPhysics(
+            parent: AlwaysScrollableScrollPhysics(),
+          ),
+          padding: EdgeInsets.fromLTRB(hpad, 8, hpad, 16 + bottomInset),
+          // 内容最小高度 = 视口：相册不满一屏时撑满，下拉刷新/回弹时
+          // 底部不再露出大片黑（真机实测下拉时底部 1/4 黑屏）。
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: c.maxHeight),
             child: Wrap(
               spacing: spacing,
               runSpacing: spacing,
@@ -192,6 +203,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
                   SizedBox(
                     width: cellW,
                     child: _AlbumTile(
+                      grid: true,
                       bucket: bucket,
                       flightTag: _flightTag,
                       onFlightStart: (tag) => setState(() => _flightTag = tag),
@@ -204,17 +216,39 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
       },
     );
   }
+
+  /// 列表布局：行式 tile（封面 + 名称 + 数量 + chevron）。
+  Widget _buildListBody(List<MsBucket> buckets, double bottomInset) {
+    return ListView.builder(
+      physics: const BouncingScrollPhysics(
+        parent: AlwaysScrollableScrollPhysics(),
+      ),
+      padding: EdgeInsets.only(top: 8, bottom: 16 + bottomInset),
+      itemCount: buckets.length,
+      itemBuilder: (ctx, i) => _AlbumTile(
+        grid: false,
+        bucket: buckets[i],
+        flightTag: _flightTag,
+        onFlightStart: (tag) => setState(() => _flightTag = tag),
+      ),
+    );
+  }
 }
 
-/// 单个相册 cell：上封面 + 相册名 + 数量 → 点击进相册。
+/// 单个相册 cell：网格态（封面 + 名称 + 内嵌数量 badge）/ 列表态
+/// （封面 + 名称 + 数量 + chevron 行式）→ 点击进相册。
 class _AlbumTile extends ConsumerStatefulWidget {
   const _AlbumTile({
     required this.bucket,
+    required this.grid,
     this.flightTag,
     this.onFlightStart,
   });
 
   final MsBucket bucket;
+
+  /// true = 网格 tile；false = 行式 tile。
+  final bool grid;
 
   /// 父级飞行目标 tag（点击相册瞬间非 null，用于 HeroMode 屏蔽本 tile）。
   final String? flightTag;
@@ -257,9 +291,67 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
   @override
   Widget build(BuildContext context) {
     final bucket = widget.bucket;
-    // 点击行为对齐快速整理页的相册 tile：裸 GestureDetector 无按压反馈
-    //（Hero 封面飞行即反馈；旧版 PressScale 按压缩放是已废弃的交互）。
-    // 数量为封面左下角内嵌黑 badge，名称单行紧贴封面下。
+    return widget.grid ? _buildGrid(bucket) : _buildRow(bucket);
+  }
+
+  /// 行式 tile（列表布局）：封面 + 名称/数量两行 + 右 chevron。
+  Widget _buildRow(MsBucket bucket) {
+    return GestureDetector(
+      onTap: _open,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Row(
+          children: [
+            _CoverThumb(
+              coverId: bucket.coverId,
+              heroTag: _heroTag,
+              heroEnabled:
+                  widget.flightTag == null || widget.flightTag == _heroTag,
+              size: 56,
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    bucket.name.isEmpty ? t(ref, 'root_dir') : bucket.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontFamily: 'Space Mono',
+                      height: 1.2,
+                      fontFamilyFallback: AppFonts.cjkFallback,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                      color: AppColors.text,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    t(ref, 'photo_count', [bucket.count]),
+                    style: const TextStyle(
+                      fontFamily: 'Space Mono',
+                      fontFamilyFallback: AppFonts.cjkFallback,
+                      color: AppColors.muted,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: AppColors.muted, size: 22),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 网格 tile：裸 GestureDetector 无按压反馈（Hero 封面飞行即反馈；
+  /// 旧版 PressScale 按压缩放是已废弃的交互）。数量为封面左下角内嵌
+  /// 黑 badge，名称单行紧贴封面下。
+  Widget _buildGrid(MsBucket bucket) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       child: Column(
@@ -374,8 +466,12 @@ class _CoverThumb extends StatelessWidget {
         (size * MediaQuery.devicePixelRatioOf(context)).round().clamp(96, 512);
     // [ente 对齐] 封面包 Hero：与相册网格第一张 cell（GalleryFileWidget
     // tag 'photo_${id}'）配对 → 进入/返回时封面↔第一张图飞行。
-    return AspectRatio(
-      aspectRatio: 1,
+    // 显式 SizedBox（不用 AspectRatio）：列表态 tile 直接放在 Row 里，
+    // 宽高双无界约束下 AspectRatio 无法求解 → 渲染异常 → 整页黑屏
+    //（真机实测：列表布局进入只显示顶栏）。网格态同效（size=cellW）。
+    return SizedBox(
+      width: size,
+      height: size,
       child: HeroMode(
         enabled: heroEnabled,
         child: Hero(

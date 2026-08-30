@@ -34,6 +34,14 @@ enum ClassifyMode {
 /// 首页（Home 源相册区）相册列表布局。
 enum HomeLayout { list, grid }
 
+/// 抽屉开合动画档位（仅安卓 Shell）：
+/// - fast：开 250ms / 关 200ms——Material 2/3 官方规格的黄金值
+///   （M2 Speed 明文 drawer opens 250ms / closes 200ms；M3 Standard 集
+///   进屏 250 / 出屏 200 一致）。
+/// - comfortable：开 320ms / 关 240ms——emphasized 方向约 +20%，节奏
+///   更沉稳。两档都保持「关比开快」的非对称（退出不需要用户注意力）。
+enum DrawerAnimSpeed { fast, comfortable }
+
 /// 文件夹模板：快捷键 + 显示名（不含路径）。
 ///
 /// 路径在 [FolderDescriptor]（profiles_service.dart）里拼装。
@@ -240,6 +248,9 @@ class AppConfig {
     this.photoGridColumns = 4,
     this.precacheEnabled = true,
     this.precacheQuotaMb = 1024,
+    this.drawerAnimSpeed = DrawerAnimSpeed.fast,
+    this.galleryLayout = HomeLayout.grid,
+    this.galleryGridColumns = 4,
   });
 
   /// 所有 Profile（name → Profile）。
@@ -284,6 +295,16 @@ class AppConfig {
   /// 空闲预缓存磁盘配额（MB）。档位见设置页（256MB~2GB），默认 1GB。
   final int precacheQuotaMb;
 
+  /// 抽屉开合动画档位（舒适/快速），默认快速（Material 黄金值）。
+  final DrawerAnimSpeed drawerAnimSpeed;
+
+  /// 首页（原「相册」页，返回终点）布局：列表 / 网格。与快速整理页的
+  /// [homeLayout]/[homeGridColumns]（沿用历史字段名）完全解耦。
+  final HomeLayout galleryLayout;
+
+  /// 首页网格列数（3 或 4）。
+  final int galleryGridColumns;
+
   /// 当前激活 Profile 的数据（便捷访问）。
   Profile get activeProfileData =>
       profiles[activeProfile] ?? profiles.values.first;
@@ -316,6 +337,9 @@ class AppConfig {
     int? photoGridColumns,
     bool? precacheEnabled,
     int? precacheQuotaMb,
+    DrawerAnimSpeed? drawerAnimSpeed,
+    HomeLayout? galleryLayout,
+    int? galleryGridColumns,
   }) =>
       AppConfig(
         profiles: profiles ?? this.profiles,
@@ -333,6 +357,9 @@ class AppConfig {
         photoGridColumns: photoGridColumns ?? this.photoGridColumns,
         precacheEnabled: precacheEnabled ?? this.precacheEnabled,
         precacheQuotaMb: precacheQuotaMb ?? this.precacheQuotaMb,
+        drawerAnimSpeed: drawerAnimSpeed ?? this.drawerAnimSpeed,
+        galleryLayout: galleryLayout ?? this.galleryLayout,
+        galleryGridColumns: galleryGridColumns ?? this.galleryGridColumns,
       );
 
   /// 序列化为 JSON（可逆，见 [fromJson]）。
@@ -351,6 +378,9 @@ class AppConfig {
         'photo_grid_columns': photoGridColumns,
         'precache_enabled': precacheEnabled,
         'precache_quota_mb': precacheQuotaMb,
+        'drawer_anim_speed': drawerAnimSpeed.name,
+        'gallery_layout': galleryLayout.name,
+        'gallery_grid_columns': galleryGridColumns,
         'profiles': {
           for (final e in profiles.entries) e.key: e.value.toJson(),
         },
@@ -415,7 +445,25 @@ class AppConfig {
               4,
       precacheEnabled: (json['precache_enabled'] as bool?) ?? true,
       precacheQuotaMb: (json['precache_quota_mb'] as int?) ?? 1024,
+      drawerAnimSpeed: _parseDrawerAnimSpeed(
+          json['drawer_anim_speed'], DrawerAnimSpeed.fast),
+      galleryLayout: _parseHomeLayout(
+          json['gallery_layout'], HomeLayout.grid),
+      galleryGridColumns:
+          (json['gallery_grid_columns'] as int?) ?? 4,
     );
+  }
+}
+
+DrawerAnimSpeed _parseDrawerAnimSpeed(
+    Object? value, DrawerAnimSpeed fallback) {
+  switch (value) {
+    case 'comfortable':
+      return DrawerAnimSpeed.comfortable;
+    case 'fast':
+      return DrawerAnimSpeed.fast;
+    default:
+      return fallback;
   }
 }
 
