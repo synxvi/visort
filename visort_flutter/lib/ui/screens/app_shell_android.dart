@@ -133,6 +133,21 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
     _currentPage =
         _homeIndexOf(ref.read(configProvider).defaultHomePage);
     _visited = 1 << _currentPage;
+    // 启动直入收藏/回收站时补发数据查询：嵌入 Shell 的这两页 initState
+    // 不自查（album_screen：数据进入由 Shell 切页驱动），而启动直入未经
+    // _selectPage——缺此补发则页面停在占位网格（真机实证：默认首页=
+    // 收藏时 6 行空白格）。相册/SORT 页有自己的 initState 加载，无需补。
+    if (_currentPage == _pageFavorites || _currentPage == _pageTrash) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final gallery = ref.read(galleryControllerProvider.notifier);
+        if (_currentPage == _pageFavorites) {
+          gallery.enterFavorites(silent: true);
+        } else {
+          gallery.enterTrash(silent: true);
+        }
+      });
+    }
     _drawerCtrl = AnimationController(
       vsync: this,
       duration: AppDurations.activity,
