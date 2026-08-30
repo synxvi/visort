@@ -36,9 +36,11 @@ ThemeData buildAppTheme() {
       centerTitle: false,
       // edge-to-edge：系统栏透明叠加在内容之上，图标用亮色适配深底。
       // 仅在 AppBar 出现的页面生效（作为兜底；main() 已全局设置一次）。
+      // 0x00010000 同 main() 的 workaround：纯 0x00000000 被 ColorOS 当
+      // 「未设置」而挂默认 scrim（此处若用纯透明会覆盖掉全局设置）。
       systemOverlayStyle: SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        systemNavigationBarColor: Colors.transparent,
+        statusBarColor: Color(0x00010000),
+        systemNavigationBarColor: Color(0x00010000),
         statusBarIconBrightness: Brightness.light,
         systemNavigationBarIconBrightness: Brightness.light,
       ),

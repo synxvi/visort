@@ -328,16 +328,14 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
               onHorizontalDragEnd: drawerActive ? _onActiveDragEnd : null,
               child: Stack(
               children: [
-                // ── 退让区底色：bg → surface 随 t 过渡 ──
-                // 展开时缩小页四周露出的底色与抽屉面板统一（surface），
-                // 收起态（t=0）保持 bg（页面满屏盖住，不可见）。
+                // ── 退让区底色：恒 surface ──
+                // 不随 t lerp：关闭动画后半段若从 surface 渐回 bg（近黑），
+                // 条带在被放大的页面盖住前会先经历一段「近黑带」（顶部配
+                // 状态栏白字尤刺眼，真机实测「顶部黑底部正常」即此——底部
+                // 同样暗只是被手势条视觉掩盖）。t=0 时页面满屏盖住底色，
+                // bg 起点本就不可见，lerp 纯多余。
                 Positioned.fill(
-                  child: ColoredBox(
-                    color: ColorTween(
-                      begin: AppColors.bg,
-                      end: AppColors.surface,
-                    ).evaluate(_drawerAnim) ?? AppColors.bg,
-                  ),
+                  child: const ColoredBox(color: AppColors.surface),
                 ),
                 // ── 抽屉（底层）：视差滑入；项错峰入场由 _itemCtrl 驱动 ──
                 Positioned(
@@ -362,7 +360,7 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
                     ),
                   ),
                 ),
-                  // ── 当前页（顶层）：缩小 + 右移 + 圆角 + 投影 ──
+                  // ── 当前页（顶层）：缩小 + 右移 + 圆角 ──
                   // 垂直居中用显式数学（topLeft 锚点 + y 平移 (1-s)h/2），
                   // 上下留白严格对称，不依赖 alignment 的 pivot 语义
                   //（真机实测 alignment 版观感偏上，显式平移后实测对称）。
@@ -374,21 +372,6 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
                       child: Transform.scale(
                         alignment: Alignment.topLeft,
                         scale: s,
-                        child: DecoratedBox(
-                        // 卡片阴影：轻量单枚（小 blur + 轻微下沉）——大 blur
-                        // 双枚会在 surface 底色上糊出宽环带、与页面 bg 形成
-                        // 明显分层（真机实测），收敛到只做边缘描离。
-                        // alpha 随 t 渐入，收起态无阴影。
-                        decoration: BoxDecoration(
-                          boxShadow: [
-                            if (t > 0)
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.35 * t),
-                                blurRadius: 14,
-                                offset: const Offset(0, 2),
-                              ),
-                          ],
-                        ),
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(_pageRadius * t),
                           child: GestureDetector(
@@ -400,11 +383,23 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
                               // 展开即屏蔽页面交互（t>0），直到关闭动画落回 0；
                               // 阈值 0.5 时前半程仍可点页面按钮，误触观感差。
                               ignoring: t > 0,
-                              child: pages,
+                              // 「悬浮」用 scrim 变暗（Material M1-M3 抽屉官方
+                              // 方案：behind it darkened by a scrim，Flutter
+                              // DrawerController 的 _Scrim 即此）——层级感来自
+                              // 亮度对比（抽屉亮/页面退暗），无阴影无模糊。
+                              // alpha 0.32 为 Material 官方值。foregroundDecoration
+                              // 画在 child 之上（普通 decoration/ColoredBox 是
+                              // 垫底背景，会被不透明页面盖住，真机实测无效）。
+                              child: Container(
+                                foregroundDecoration: BoxDecoration(
+                                  color: Colors.black
+                                      .withValues(alpha: 0.32 * t),
+                                ),
+                                child: pages,
+                              ),
                             ),
                           ),
                         ),
-                      ),
                       ),
                     );
                   },
