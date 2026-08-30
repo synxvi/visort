@@ -140,8 +140,9 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
   void _openDrawer() {
     if (_drawerCtrl.isCompleted) return;
     setState(() => _drawerEverOpened = true);
-    // settleDrawer 可能按剩余行程缩短过 duration，按钮/菜单入口恢复全量。
-    _drawerCtrl.duration = AppDurations.activity;
+    // 快速呼出入口（☰/快速整理页右滑≈迅速滑动语义）：250ms 上限，
+    // 与 fling 路径一致；settleDrawer 缩短过的 duration 在此覆盖。
+    _drawerCtrl.duration = const Duration(milliseconds: _flingSettleMs);
     _drawerCtrl.forward();
   }
 
@@ -191,6 +192,7 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
   // 其右滑呼出走 openDrawer() 播完整动画。
   static const _flingVelocity = 250.0;
   static const _settleThreshold = 0.35; // 慢速松手的展开阈值（拖出 35% 即开）
+  static const _flingSettleMs = 250; // 快甩路径补齐动画的全程上限（ms）
 
   void _onDrawerDragUpdate(DragUpdateDetails d) {
     final drawerW = _drawerWidth(context);
@@ -204,24 +206,27 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
   void _onDrawerDragEnd(DragEndDetails d) {
     final v = d.primaryVelocity ?? 0;
     if (v > _flingVelocity) {
-      _settleDrawer(true);
+      _settleDrawer(true, fling: true);
     } else if (v < -_flingVelocity) {
-      _settleDrawer(false);
+      _settleDrawer(false, fling: true);
     } else {
       // 慢速松手：拖出超过阈值（或已大半展开）→ 展开，否则收回。
       _settleDrawer(_drawerCtrl.value >= _settleThreshold);
     }
   }
 
-  /// 松手后的补齐动画：时长按剩余行程比例缩短（全程 token 350ms），从
-  /// 半程松手只需 ~175ms 落位，跟手体验不被拖沓的定长动画打断。
-  /// 下限 60ms 防退化；方向由 [open] 决定。
-  void _settleDrawer(bool open) {
+  /// 松手后的补齐动画：时长按剩余行程比例缩短，从半程松手只需约一半
+  /// 时间落位，跟手体验不被拖沓的定长动画打断。下限 60ms 防退化。
+  /// [fling]：快速甩动路径——全程上限 250ms（迅速滑动完全展开须 ≤250，
+  /// 用户实测手感要求）；慢速判定回弹用全量 token 350ms。
+  void _settleDrawer(bool open, {bool fling = false}) {
     final remain = open ? 1 - _drawerCtrl.value : _drawerCtrl.value;
     if (remain <= 0) return;
+    final full = fling
+        ? _flingSettleMs
+        : AppDurations.activity.inMilliseconds;
     _drawerCtrl.duration = Duration(
-      milliseconds:
-          (AppDurations.activity.inMilliseconds * remain).round().clamp(60, 350),
+      milliseconds: (full * remain).round().clamp(60, full),
     );
     open ? _drawerCtrl.forward() : _drawerCtrl.reverse();
   }
