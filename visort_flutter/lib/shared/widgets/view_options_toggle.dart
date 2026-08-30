@@ -227,9 +227,11 @@ class _FilterMorphPainter extends CustomPainter {
   /// morph 进度：0 = 收起态（三线筛选），1 = 展开态（✕）。
   final double t;
 
-  /// 收起态三线端点（24 视口，线宽 1.9 圆头）。
-  static const _topA = Offset(5.2, 8.4), _topB = Offset(18.8, 8.4);
-  static const _botA = Offset(5.2, 15.6), _botB = Offset(18.8, 15.6);
+  /// 收起态三线端点（24 视口，线宽 1.9 圆头）。整体轮廓收窄成近方形
+  /// （~11×10），与左侧抽屉按钮的侧栏图形（14×13 方框）轮廓呼应
+  /// （2026-08 用户反馈：宽扁条 → 接近方形矩形）。
+  static const _topA = Offset(6.4, 7.9), _topB = Offset(17.6, 7.9);
+  static const _botA = Offset(6.4, 16.1), _botB = Offset(17.6, 16.1);
 
   /// 展开态 ✕ 两臂端点（上线 → ↘ 臂，下线 → ↗ 臂）。
   static const _xTL = Offset(7.2, 7.2), _xBR = Offset(16.8, 16.8);
@@ -260,7 +262,7 @@ class _FilterMorphPainter extends CustomPainter {
     // 中线：随进度向中心收缩并淡出（收起态比上下线短，filter 语义）。
     final fade = (1 - t).clamp(0.0, 1.0);
     if (fade > 0) {
-      final half = 5.2 * fade;
+      final half = 3.4 * fade;
       canvas.drawLine(
         Offset(12 - half, 12),
         Offset(12 + half, 12),

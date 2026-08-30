@@ -690,7 +690,11 @@ class DrawerMenuButton extends StatelessWidget {
       tooltip: tooltip,
       onPressed: handle?.toggleDrawer,
       icon: Transform.translate(
-        offset: const Offset(0, 1.5),
+        // 光学补偿（不动布局盒/点击区）：x −4 = 字形左缘距屏 16dp，
+        // 与内容区（bucket 网格 hpad12 + tile 内边 4）左右两缘对齐且与
+        // 右侧 ViewOptionsToggle 图标边距对称（真机实测 20dp → 16dp）；
+        // y +1.5 = 字形光学重心偏上补偿（原 menu/close 实测，见类注释）。
+        offset: const Offset(-4, 1.5),
         child: anim != null
             ? AnimatedBuilder(
                 animation: anim,
