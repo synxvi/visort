@@ -140,11 +140,14 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
   void _openDrawer() {
     if (_drawerCtrl.isCompleted) return;
     setState(() => _drawerEverOpened = true);
+    // settleDrawer 可能按剩余行程缩短过 duration，按钮/菜单入口恢复全量。
+    _drawerCtrl.duration = AppDurations.activity;
     _drawerCtrl.forward();
   }
 
   void _closeDrawer() {
     if (_drawerCtrl.isDismissed) return;
+    _drawerCtrl.duration = AppDurations.activity;
     _drawerCtrl.reverse();
   }
 
@@ -180,32 +183,47 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
     const MethodChannel('visort/app').invokeMethod('moveTaskToBack');
   }
 
-  // ── 展开态整屏跟手拖动（推拉手势的另一半：左滑关 / 右滑开）──
-  // 只在 t > 0（展开/动画中）注册识别器：此时页面被 IgnorePointer 屏蔽，
-  // 抽屉面板与缩小页上的水平拖动由本层独占；收起态 handler 为 null 不进
-  // arena，页面自身手势（右滑呼出/模式切换）不受竞争。
+  // ── 跟手拖动（推拉手势核心）──
+  // 收起态：DrawerSwipeWrapper（四页包装）把水平拖动转发到本层，抽屉跟
+  // 手拖出（t 随 dx 增减）；展开态：页面被 IgnorePointer 屏蔽，Shell 顶层
+  // GestureDetector 独占（同一套方法，两个入口共享判定逻辑）。
+  // 快速整理页不参与跟手（整页水平手势归模式切换，避免 arena 竞争），
+  // 其右滑呼出走 openDrawer() 播完整动画。
   static const _flingVelocity = 250.0;
+  static const _settleThreshold = 0.35; // 慢速松手的展开阈值（拖出 35% 即开）
 
-  void _onDrawerDragUpdate(DragUpdateDetails d, double drawerW) {
+  void _onDrawerDragUpdate(DragUpdateDetails d) {
+    final drawerW = _drawerWidth(context);
     // 右滑 dx>0 → t 增大（抽屉展开方向）；clamp 防越界（控制器越界会抛错）。
     _drawerCtrl.value =
         (_drawerCtrl.value + d.delta.dx / drawerW).clamp(0.0, 1.0);
-    if (_drawerCtrl.value == 1.0) {
-      // 拖满程时确保抽屉内容已构建（直接拖开而未经 _openDrawer）
-      if (!_drawerEverOpened) setState(() => _drawerEverOpened = true);
-    }
+    // 跟手拖出即需抽屉内容（不经 _openDrawer 的直接拖开路径）
+    if (!_drawerEverOpened) setState(() => _drawerEverOpened = true);
   }
 
   void _onDrawerDragEnd(DragEndDetails d) {
     final v = d.primaryVelocity ?? 0;
     if (v > _flingVelocity) {
-      _drawerCtrl.forward();
+      _settleDrawer(true);
     } else if (v < -_flingVelocity) {
-      _drawerCtrl.reverse();
+      _settleDrawer(false);
     } else {
-      // 慢速松手按开合进度过半判定回弹方向
-      _drawerCtrl.value > 0.5 ? _drawerCtrl.forward() : _drawerCtrl.reverse();
+      // 慢速松手：拖出超过阈值（或已大半展开）→ 展开，否则收回。
+      _settleDrawer(_drawerCtrl.value >= _settleThreshold);
     }
+  }
+
+  /// 松手后的补齐动画：时长按剩余行程比例缩短（全程 token 350ms），从
+  /// 半程松手只需 ~175ms 落位，跟手体验不被拖沓的定长动画打断。
+  /// 下限 60ms 防退化；方向由 [open] 决定。
+  void _settleDrawer(bool open) {
+    final remain = open ? 1 - _drawerCtrl.value : _drawerCtrl.value;
+    if (remain <= 0) return;
+    _drawerCtrl.duration = Duration(
+      milliseconds:
+          (AppDurations.activity.inMilliseconds * remain).round().clamp(60, 350),
+    );
+    open ? _drawerCtrl.forward() : _drawerCtrl.reverse();
   }
 
   @override
@@ -227,9 +245,7 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
             // 不注册识别器，页面自身手势不受竞争。
             final drawerActive = t > 0;
             return GestureDetector(
-              onHorizontalDragUpdate: drawerActive
-                  ? (d) => _onDrawerDragUpdate(d, drawerW)
-                  : null,
+              onHorizontalDragUpdate: drawerActive ? _onDrawerDragUpdate : null,
               onHorizontalDragEnd: drawerActive ? _onDrawerDragEnd : null,
               child: Stack(
                 children: [
@@ -362,7 +378,11 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
       default:
         throw StateError('unreachable page index $index');
     }
-    return DrawerSwipeWrapper(onSwipeRight: _openDrawer, child: page);
+    return DrawerSwipeWrapper(
+      onDragUpdate: _onDrawerDragUpdate,
+      onDragEnd: _onDrawerDragEnd,
+      child: page,
+    );
   }
 }
 
@@ -467,36 +487,39 @@ class _DrawerItem extends StatelessWidget {
   }
 }
 
-/// 整页右滑呼出抽屉的包装。GestureDetector 只注册水平 drag 识别器：
+/// 收起态整页跟手呼出抽屉的包装。水平拖动实时转发给 Shell（抽屉跟手
+/// 拖出/收回），松手由 Shell 按速度/阈值判定展开或回弹。
 /// 点击/长按与垂直滚动不受影响（arena 裁决垂直归滚动、tap 归 InkWell），
-/// 纯水平拖动由本层赢 → 呼出抽屉。
+/// 纯水平拖动由本层赢。
 ///
 /// 不用左缘窄热区：ColorOS 全面屏的系统返回手势保留左缘 ~24dp，窄热区
 /// 的事件被系统吞掉，Flutter 收不到（真机实测完全不触发）。整页右滑
 /// 绕开系统保留区。
-/// 由 Shell 包裹除快速整理页外的一级页（该页自带整页水平手势分派，
-/// 不套本包装）。
+/// 由 Shell 包裹除快速整理页外的一级页（该页整页水平手势归模式切换，
+/// 与本层同型 recognizer 会竞争，不套本包装——其右滑呼出走
+/// openDrawer() 播完整动画）。
 class DrawerSwipeWrapper extends StatelessWidget {
   const DrawerSwipeWrapper({
     super.key,
     required this.child,
-    required this.onSwipeRight,
+    required this.onDragUpdate,
+    required this.onDragEnd,
   });
 
   final Widget child;
-  final VoidCallback onSwipeRight;
 
-  static const _velocityThreshold = 300.0;
+  /// 转发 Shell 的跟手更新（t 随 dx 增减）。
+  final ValueChanged<DragUpdateDetails> onDragUpdate;
+
+  /// 转发 Shell 的松手判定（速度/阈值 → 展开或回弹）。
+  final ValueChanged<DragEndDetails> onDragEnd;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onHorizontalDragEnd: (d) {
-        if ((d.primaryVelocity ?? 0) > _velocityThreshold) {
-          onSwipeRight();
-        }
-      },
+      onHorizontalDragUpdate: onDragUpdate,
+      onHorizontalDragEnd: onDragEnd,
       child: child,
     );
   }
