@@ -86,6 +86,8 @@ const Map<String, String> stringsEn = {
 
   // ───────── Home (Android, A2) ─────────
   'home_title_android': 'Sort Images',
+  // 抽屉一级页「快速整理」（原首页主屏功能在抽屉里的名称）
+  'quick_sort_title': 'Quick Sort',
   'home_hint_android':
       'Pick a directory. Images will be sorted into subfolders within it.',
   'pick_dir_android': 'Pick Directory',

@@ -1,4 +1,7 @@
-// 安卓 Home 屏幕（双模式分类）—— 统一 MediaStore 方案
+// 安卓「快速整理」屏（抽屉一级页④，原首页主屏）—— 统一 MediaStore 方案
+//
+// 抽屉重构后本屏不再是 `/` 路由（那是 AppShellAndroid），返回键分发/
+// 收藏/回收站/设置入口均移交 Shell；本页只保留整理配置主流程。
 //
 // 两种分类模式（顶部 segmented control 切换）：
 //   模式一 toAlbum（默认）：选源相册 + 选目标相册，move 改 RELATIVE_PATH 到目标相册
@@ -12,7 +15,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:visort_flutter/core/config/models.dart';
@@ -27,17 +29,22 @@ import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/scan/scan_controller.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
-import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
-import 'package:visort_flutter/shared/widgets/visort_logo.dart';
 import 'package:visort_flutter/shared/widgets/resume_button.dart';
-import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
+import 'package:visort_flutter/shared/widgets/spring_popup.dart'
+    show showCenterDialog;
 import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/router.dart';
 import 'package:visort_flutter/ui/router_android.dart';
+import 'package:visort_flutter/ui/screens/app_shell_android.dart'
+    show ShellHandle;
 
 class HomeScreenAndroid extends ConsumerStatefulWidget {
-  const HomeScreenAndroid({super.key});
+  const HomeScreenAndroid({super.key, this.shellHandle});
+
+  /// 抽屉壳注入的句柄：☰ 呼出抽屉、返回键清勾选拦截、切回本页刷新封面。
+  /// null = 非 shell 场景（当前不存在，预留）。
+  final ShellHandle? shellHandle;
 
   @override
   ConsumerState<HomeScreenAndroid> createState() => _HomeScreenAndroidState();
@@ -50,8 +57,6 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   String? _flightTag;
   static const _channel = MediaStoreChannel();
   static const _keyOrder = 'ABCDEFGHIJ'; // 目标相册/子目录的快捷键分配
-  /// 右上角 ⋮ 按钮 key：Overlay 菜单定位（从按钮下方弹出，不遮挡按钮）
-  final GlobalKey _menuBtnKey = GlobalKey();
 
   // 相册数据
   List<MsBucket> _buckets = const [];
@@ -88,12 +93,6 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   bool _sourceExpanded = true;
   bool _targetExpanded = true;
 
-  /// 主界面滚动信号：非模态菜单监听它，滚动时自动收回。
-  final _isScrolling = ValueNotifier<bool>(false);
-
-  /// 当前非模态菜单控制器（收回用）
-  NonModalMenuController? _menuCtl;
-
   /// 是否有可恢复的整理会话(Home 顶部横条)。
   bool _resumeAvailable = false;
 
@@ -110,6 +109,22 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     // P2:从 sort/review 等返回 Home(手势 pop 不重建本页)时重探横条——
     // 决策已直写落盘,pop 回来当帧就该长出「继续上次整理」。
     currentRouteName.addListener(_onRouteChanged);
+    // 返回键拦截（Shell 分发）：勾选态先清空勾选，已消费不落退后台。
+    // （原 PopScope 逻辑上移到 Shell——同路由多 PopScope 会全部同时回调。）
+    widget.shellHandle?.onBack = () {
+      if (_sourceBucketIds.isEmpty && _targetBucketIds.isEmpty) return false;
+      setState(() {
+        _sourceBucketIds.clear();
+        _targetBucketIds.clear();
+      });
+      return true;
+    };
+    // 抽屉从其他一级页切回本页：静默刷新封面 + 重探会话横条
+    //（原「⋮ 进入收藏/回收站 await push 返回后刷新」的等价钩子）。
+    widget.shellHandle?.onActivated = () {
+      _refreshCovers();
+      _checkResumableSession();
+    };
   }
 
   /// 路由回到 Home 时重探横条(全局 RouteNameObserver 驱动)。
@@ -126,8 +141,8 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     _persistTimer?.cancel();
     _parentCtrl.dispose();
     _parentFocus.dispose();
-    _menuCtl?.close();
-    _isScrolling.dispose();
+    widget.shellHandle?.onBack = null;
+    widget.shellHandle?.onActivated = null;
     super.dispose();
   }
 
@@ -490,245 +505,94 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     }
   }
 
-  /// 右上角 3 点菜单：收藏 / 回收站快捷入口（相册浏览走首页列表直接点）。
-  Future<void> _onMenuSelected(String value) async {
-    // 输入框聚焦时先收键盘+清焦点链（同 _dismissAndFlush）：⋮ 菜单挂在
-    // rootOverlay，点击菜单项不会触发 body 的 _interceptIfEditing，若带焦点
-    // 直接 push，返回时路由作用域会把焦点还给输入框、键盘自动弹出。
-    _dismissAndFlush();
-    if (value == 'favorites') {
-      await Navigator.pushNamed(
-        context,
-        AlbumRoutes.album,
-        arguments: const {'favoritesOnly': true},
-      );
-    } else if (value == 'trash') {
-      await Navigator.pushNamed(
-        context,
-        AlbumRoutes.album,
-        arguments: const {'trashedOnly': true},
-      );
-    } else if (value == 'settings') {
-      Navigator.pushNamed(context, AppRoutes.settings);
-      return;
-    }
-    // 收藏/回收站视图返回：可能发生了恢复/彻底删除，刷新首页封面/数量。
-    _refreshCovers();
-  }
-
-  /// 右上角 ⋮ 菜单：非模态浮层——从按钮右下角弹性展开，不阻塞主界面滚动。
-  /// 主界面开始滚动时菜单自动收回（通过 _isScrolling 信号驱动）。
-  void _showOverflowMenu() {
-    // toggle：菜单已展开则收回（播放收回动画），否则新建展开。
-    // 避免重复点击时关旧+开新导致展开动画重播（不符合操作预期）。
-    if (_menuCtl != null && !_menuCtl!.isClosed) {
-      _menuCtl!.close();
-      return;
-    }
-    // 菜单宽度按内容测量（大图 ⋮ 菜单同算法，见 detail_page._showViewerMenu）：
-    // padding 16×2 + 图标 20 + 间距 12 + 最宽文本 + 12 缓冲（TextPainter 实测
-    // 与渲染有 2~3px 误差）。原固定 184 偏宽，按内容收窄（中文约 132，较原宽
-    // 缩小约 1/3）；英文长标签（Favorites ≈ 152）仍完整不溢出。
-    const labelStyle = TextStyle(
-      fontFamily: 'Space Mono',
-      fontFamilyFallback: AppFonts.cjkFallback,
-      color: AppColors.text,
-      fontSize: 14,
-    );
-    final scaler = MediaQuery.textScalerOf(context);
-    const labelKeys = ['favorites_title', 'trash_title', 'settings_title'];
-    double maxText = 0;
-    for (final key in labelKeys) {
-      final tp = TextPainter(
-        text: TextSpan(text: t(ref, key), style: labelStyle),
-        textScaler: scaler,
-        textDirection: TextDirection.ltr,
-      )..layout();
-      if (tp.width > maxText) maxText = tp.width;
-    }
-    final menuWidth = 16 * 2 + 20 + 12 + maxText + 12;
-    _menuCtl = showNonModalMenu(
-      context: context,
-      anchorKey: _menuBtnKey,
-      menuWidth: menuWidth,
-      isScrolling: _isScrolling,
-      menuBuilder: (ctx) => Material(
-        color: AppColors.surfaceElevated,
-        elevation: 3,
-        borderRadius: BorderRadius.circular(12),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildMenuItem(
-              ctx,
-              Icons.favorite,
-              AppColors.text,
-              t(ref, 'favorites_title'),
-              onTap: () {
-                _menuCtl?.close();
-                _onMenuSelected('favorites');
-              },
-            ),
-            _buildMenuItem(
-              ctx,
-              Icons.delete_outline,
-              AppColors.text,
-              t(ref, 'trash_title'),
-              onTap: () {
-                _menuCtl?.close();
-                _onMenuSelected('trash');
-              },
-            ),
-            _buildMenuItem(
-              ctx,
-              Icons.settings_outlined,
-              AppColors.text,
-              t(ref, 'settings_title'),
-              onTap: () {
-                _menuCtl?.close();
-                _onMenuSelected('settings');
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// 菜单单项：图标 + 文本；点击后调用 [onTap]（由调用方负责关闭菜单 + 选中处理）。
-  Widget _buildMenuItem(
-    BuildContext ctx,
-    IconData icon,
-    Color iconColor,
-    String label, {
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      child: SizedBox(
-        height: 48,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Row(
-            children: [
-              Icon(icon, color: iconColor, size: 20),
-              const SizedBox(width: 12),
-              Text(
-                label,
-                style: const TextStyle(
-                  fontFamily: 'Space Mono',
-                  fontFamilyFallback: AppFonts.cjkFallback,
-                  color: AppColors.text,
-                  fontSize: 14,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final config = ref.watch(configProvider);
     // 检测相册内排序是否变化（从相册返回时封面需更新）
     _maybeRefreshCovers();
-    // 首页（根路由）返回:勾选态下先清空所有勾选(不退桌面);无勾选再回桌面。
-    // 对标系统相册:点返回先取消选择,再按一次才退出。
-    // 无勾选时走 moveTaskToBack(task 保留后台,不 finish),需 visort/app channel。
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) return;
-        if (_sourceBucketIds.isNotEmpty || _targetBucketIds.isNotEmpty) {
-          setState(() {
-            _sourceBucketIds.clear();
-            _targetBucketIds.clear();
-          });
-        } else {
-          const MethodChannel('visort/app').invokeMethod('moveTaskToBack');
-        }
-      },
-      child: Scaffold(
-        backgroundColor: AppColors.bg,
-        appBar: AppBar(
-          backgroundColor: AppColors.surface,
-          foregroundColor: AppColors.text,
-          // logo 纯展示——语言切换已移入「设置」（settings_section_general）。
-          title: const VisortLogo(),
-          actions: [
-            // 相册排序（源/目标 section 共用同一排序状态 albumSortBy/Asc）：
-            // 从 section 标题整合到 AppBar，置于 ⋮ 左侧。section 内重复的 SortToggle 已移除。
-            // Transform.translate 右移 SortToggle：内部 Padding(right:5) 让 icon 偏左，
-            // 多 action 场景下视觉离 ⋮ 偏远，translate 抵消使其靠近 ⋮（gallery/album 里
-            // SortToggle 是唯一 action，不受影响，故只在这里包）。
-            // 右移量 14：排序图标↔⋮ 视觉间距从 ~14dp 缩到 ~10dp（约缩 1/4）。
-            Transform.translate(
-              offset: const Offset(14, 0),
-              child: SortToggle(
-                sortBy: config.albumSortBy,
-                asc: config.albumSortAsc,
-                onChanged: _setAlbumSort,
-              ),
-            ),
-            IconButton(
-              key: _menuBtnKey,
-              icon: const Icon(Icons.more_vert, color: AppColors.text),
-              tooltip: t(ref, 'gallery_manage'),
-              onPressed: _showOverflowMenu,
-            ),
-          ],
+    // 返回键不在本页处理：勾选清空/退后台由 Shell 的三段分发经
+    // ShellHandle.onBack 完成（见 initState）。
+    return Scaffold(
+      backgroundColor: AppColors.bg,
+      appBar: AppBar(
+        backgroundColor: AppColors.surface,
+        foregroundColor: AppColors.text,
+        // ☰ 呼出抽屉（原首页为根路由无 leading；logo 已移到 actions 右侧）
+        leading: IconButton(
+          icon: const Icon(Icons.menu, color: AppColors.text),
+          tooltip: t(ref, 'quick_sort_title'),
+          onPressed: () => widget.shellHandle?.openDrawer(),
         ),
-        body: GestureDetector(
-          // 点击空白（非输入框）：收起键盘并立即落盘 toNewDir 待保存编辑。
-          onTap: _dismissAndFlush,
-          // 左右滑动切换移动模式(对标系统相册页间滑动):右滑→相册间,左滑→子目录。
-          onHorizontalDragEnd: _onModeSwipe,
-          behavior: HitTestBehavior.opaque,
-          // edge-to-edge 沉浸：body SafeArea(bottom:false)，卡片流延伸到
-          // 底栏上缘；底栏保持贴边（Column 尾），Container 背景自延伸到
-          // 物理底边、内部 SafeArea(top:false) 避让手势条（底栏自己的延伸，
-          // 非额外黑条）。底栏不做悬浮卡片（用户明确要求保持贴边）。
-          child: SafeArea(
-            bottom: false,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // 模式切换 segmented control
-                _buildModeSelector(),
-                // 顶栏↔源相册分隔线：固定显示。模式选择器自身 bottom:10 已提供到分隔线
-                // 的间距，与选择器 top:10（到顶栏）相等，故不再加额外 SizedBox。
-                const Divider(color: AppColors.border, height: 1),
-                // 主体（在分隔线下方滚动，不进入分隔线区域 → 不被遮挡）
-                // [ente 对齐] 相册排序切换内容交叉淡入 150ms（easeInQuart/easeOutExpo）。
-                Expanded(
-                  child: AnimatedSwitcher(
-                    duration: AppDurations.enteContentSwitch,
-                    switchInCurve: Curves.easeInQuart,
-                    switchOutCurve: Curves.easeOutExpo,
-                    layoutBuilder: (currentChild, previousChildren) => Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        for (final previous in previousChildren)
-                          Positioned.fill(child: previous),
-                        if (currentChild != null)
-                          Positioned.fill(child: currentChild),
-                      ],
-                    ),
-                    transitionBuilder: (child, animation) =>
-                        FadeTransition(opacity: animation, child: child),
-                    child: KeyedSubtree(
-                      key: ValueKey((config.albumSortBy, config.albumSortAsc)),
-                      child: _buildBody(),
-                    ),
+        titleSpacing: 0,
+        title: Text(
+          t(ref, 'quick_sort_title'),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            height: 1.2,
+            fontFamilyFallback: AppFonts.cjkFallback,
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
+          ),
+        ),
+        actions: [
+          // 相册排序（源/目标 section 共用同一排序状态 albumSortBy/Asc）。
+          // 原 Transform.translate(14,0) 是为贴近 ⋮ 的微调，⋮ 已随菜单
+          // 迁入抽屉删除，SortToggle 现为唯一 action，不再需要。
+          // 品牌 logo 已随抽屉定稿移除（只留抽屉头部一处）。
+          SortToggle(
+            sortBy: config.albumSortBy,
+            asc: config.albumSortAsc,
+            onChanged: _setAlbumSort,
+          ),
+        ],
+      ),
+      body: GestureDetector(
+        // 点击空白（非输入框）：收起键盘并立即落盘 toNewDir 待保存编辑。
+        onTap: _dismissAndFlush,
+        // 模式页间滑动 + 抽屉呼出（见 _onModeSwipe 注释）。
+        onHorizontalDragEnd: _onModeSwipe,
+        behavior: HitTestBehavior.opaque,
+        // edge-to-edge 沉浸：body SafeArea(bottom:false)，卡片流延伸到
+        // 底栏上缘；底栏保持贴边（Column 尾），Container 背景自延伸到
+        // 物理底边、内部 SafeArea(top:false) 避让手势条（底栏自己的延伸，
+        // 非额外黑条）。底栏不做悬浮卡片（用户明确要求保持贴边）。
+        child: SafeArea(
+          bottom: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 模式切换 segmented control
+              _buildModeSelector(),
+              // 顶栏↔源相册分隔线：固定显示。模式选择器自身 bottom:10 已提供到分隔线
+              // 的间距，与选择器 top:10（到顶栏）相等，故不再加额外 SizedBox。
+              const Divider(color: AppColors.border, height: 1),
+              // 主体（在分隔线下方滚动，不进入分隔线区域 → 不被遮挡）
+              // [ente 对齐] 相册排序切换内容交叉淡入 150ms（easeInQuart/easeOutExpo）。
+              Expanded(
+                child: AnimatedSwitcher(
+                  duration: AppDurations.enteContentSwitch,
+                  switchInCurve: Curves.easeInQuart,
+                  switchOutCurve: Curves.easeOutExpo,
+                  layoutBuilder: (currentChild, previousChildren) => Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      for (final previous in previousChildren)
+                        Positioned.fill(child: previous),
+                      if (currentChild != null)
+                        Positioned.fill(child: currentChild),
+                    ],
+                  ),
+                  transitionBuilder: (child, animation) =>
+                      FadeTransition(opacity: animation, child: child),
+                  child: KeyedSubtree(
+                    key: ValueKey((config.albumSortBy, config.albumSortAsc)),
+                    child: _buildBody(),
                   ),
                 ),
-                // 底部 Start（贴边，非悬浮）
-                _buildBottomBar(),
-              ],
-            ),
+              ),
+              // 底部 Start（贴边，非悬浮）
+              _buildBottomBar(),
+            ],
           ),
         ),
       ),
@@ -820,12 +684,19 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     });
   }
 
-  /// 左右滑动切换移动模式:右滑(正速度)→子目录(toNewDir);左滑→相册间(toAlbum)。
+  /// 水平滑动分派（用户定稿的线性退让链 [抽屉 ← 子目录 ← 相册间]）：
+  /// 右滑(正速度) 相册间→子目录（原行为）；子目录→呼出抽屉（新——
+  /// 原本子目录态右滑是无操作，正好接到抽屉上）。
+  /// 左滑→相册间（原行为）；相册间态左滑无操作（不变）。
   /// 阈值 300px/s 避免误触。垂直滚动(ListView)不受影响——水平 drag 由本层独占。
   void _onModeSwipe(DragEndDetails details) {
     final v = details.primaryVelocity ?? 0;
-    if (v > 300 && _mode != ClassifyMode.toNewDir) {
-      _applyMode(ClassifyMode.toNewDir);
+    if (v > 300) {
+      if (_mode != ClassifyMode.toNewDir) {
+        _applyMode(ClassifyMode.toNewDir);
+      } else {
+        widget.shellHandle?.openDrawer();
+      }
     } else if (v < -300 && _mode != ClassifyMode.toAlbum) {
       _applyMode(ClassifyMode.toAlbum);
     }
@@ -1025,16 +896,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         ),
       );
     }
-    return NotificationListener<ScrollNotification>(
-      onNotification: (n) {
-        if (n is ScrollStartNotification) {
-          _isScrolling.value = true;
-        } else if (n is ScrollEndNotification) {
-          _isScrolling.value = false;
-        }
-        return false;
-      },
-      child: ListView(
+    return ListView(
         // 动画对齐 ente：iOS 式回弹滚动物理。
         physics: const BouncingScrollPhysics(),
         // 分隔线（固定在上）到源相册 header 内容 = 10：top:5 + 源相册 header top:5
@@ -1069,7 +931,6 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             child: _buildModePanels(),
           ),
         ],
-      ),
     );
   }
 

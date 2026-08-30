@@ -21,9 +21,15 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
+import 'package:visort_flutter/ui/screens/app_shell_android.dart'
+    show ShellHandle;
 
 class SettingsScreen extends ConsumerWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({super.key, this.shellHandle});
+
+  /// 抽屉壳句柄：非 null = 嵌入安卓 Shell 的一级页（顶栏 ☰ 呼出抽屉，
+  /// 无返回箭头）；null = push 的普通页面（桌面入口，自动返回箭头）。
+  final ShellHandle? shellHandle;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -35,6 +41,13 @@ class SettingsScreen extends ConsumerWidget {
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.text,
+        leading: shellHandle != null
+            ? IconButton(
+                icon: const Icon(Icons.menu, color: AppColors.text),
+                tooltip: t(ref, 'settings_title'),
+                onPressed: shellHandle!.openDrawer,
+              )
+            : null,
         title: Text(t(ref, 'settings_title'),
             style: const TextStyle(
               fontFamily: 'Space Mono', height: 1.2,

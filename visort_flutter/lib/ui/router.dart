@@ -17,7 +17,7 @@ import 'screens/results_screen.dart';
 import 'screens/review_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/home_screen.dart';
-import 'screens/home_screen_android.dart';
+import 'screens/app_shell_android.dart';
 import 'screens/sort_screen.dart';
 import 'screens/sort_screen_android.dart';
 
@@ -70,8 +70,10 @@ Route<dynamic>? onGenerateRoute(RouteSettings settings) {
   switch (settings.name) {
     case AppRoutes.home:
       // 根路由（首屏，实际无可见转场；popTo Home / 相册返回首页时 200ms 淡入）。
+      // 安卓 = 抽屉壳（相册为默认屏，快速整理等 5 个一级页住在壳里）；
+      // 桌面 = 键盘流首页，无抽屉。
       Widget homeBuilder(BuildContext _) => Platform.isAndroid
-          ? const HomeScreenAndroid()
+          ? const AppShellAndroid()
           : const HomeScreen();
       return enteFadeRoute(builder: homeBuilder, settings: settings);
     case AppRoutes.sort:

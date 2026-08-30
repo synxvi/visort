@@ -31,9 +31,12 @@ class AlbumRoutes {
 ///
 /// 这些页面有大面积滚动列表/全屏看图，每帧全屏 alpha 合成会拖慢渲染；
 /// 且「看照片」时颗粒质感无意义，故绕过。见 currentRouteName 说明。
-/// （原 /gallery 相册列表屏已不可达——首页 bucket 网格直接进 /album；
-///  GalleryScreen 与其路由已随死代码清理移除。）
+/// `/`（AppRoutes.home，字面量避免与 router.dart 循环引用）也在名单：
+/// 抽屉壳的默认屏是相册封面网格（大滚动列表），且壳内 5 个一级页共用
+/// 同一路由名，噪点层无法按页区分——整壳豁免，快速整理/设置随之失去
+/// 噪点质感（卡片流影响甚微，换取相册滚动满帧）。
 const albumNoiseDisabledRoutes = {
+  '/',
   AlbumRoutes.album,
   AlbumRoutes.photoViewer,
 };
