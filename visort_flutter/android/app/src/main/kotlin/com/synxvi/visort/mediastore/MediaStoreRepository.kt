@@ -809,13 +809,17 @@ class MediaStoreRepository(private val context: Context) {
 
     /// 预缓存进度统计（设置页进度行数据源，一次查询全给齐）：
     ///   - cached：`visort_full/{targetWidth}` 目录的文件数（已缓存张数）
-    ///   - total：全库非回收站、非 GIF 图片总数（应缓存目标）
+    ///   - total：全库（含回收站）、非 GIF 图片总数（应缓存目标）
     ///   - full/thumb：磁盘占用字节数（与 [imageCacheBytes] 同源）
     ///
-    /// total 的 count 查询走 Bundle MATCH_EXCLUDE（与 scanImages 一致，
-    /// ColorOS 对 MANAGE_MEDIA app 的 selection 不可靠）；GIF 排除因 viewer
-    /// 走多帧路径不读 full 盘缓存。手动彻底删除图片会同步删缓存文件
-    /// （deleteImageCacheFiles），cached 随轮询即时反映。
+    /// total 口径须与 cached 对齐——缓存目录里可以有回收站图的缓存
+    /// （回收站视图也能浏览、触发 full 落盘，且移入回收站不删缓存），
+    /// 若 total 排除回收站会出现「cached > total」（真机实证）。故显式
+    /// MATCH_INCLUDE（显式声明跨 ROM 一致：AOSP 默认排除回收站，ColorOS
+    /// 对 MANAGE_MEDIA app 默认包含——不能依赖默认）。GIF 仍排除：viewer
+    /// GIF 走 readBytes 多帧路径，永远不写 full 盘缓存，cached 里不会有
+    /// 它。手动彻底删除图片会同步删缓存文件（deleteImageCacheFiles），
+    /// cached 随轮询即时反映。
     fun fullCacheStats(targetWidth: Int): Map<String, Any> {
         var cached = 0
         try {
@@ -833,7 +837,7 @@ class MediaStoreRepository(private val context: Context) {
                     android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
                     arrayOf("image/gif"),
                 )
-                putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_EXCLUDE)
+                putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
             }
             contentResolver.query(collection, arrayOf(MediaStore.Images.Media._ID), bundle, null)
                 ?.use { it.count } ?: 0
