@@ -119,6 +119,64 @@ void main() {
     });
   });
 
+  group('skipRemaining（审核按钮提前收尾）', () {
+    test('剩余全部标记 skip，游标到末尾进完成态', () {
+      initSession();
+      controller.decide(DecisionAction.move, destKey: 'A'); // a.jpg → idx 1
+      controller.skipRemaining();
+      final s = controller.state;
+      expect(s.currentIndex, 3);
+      expect(s.isComplete, true, reason: '完成态由 SortSessionGate 自动跳 Review');
+      expect(s.decisions!.length, 3);
+      expect(s.decisions!['a.jpg']!.action, DecisionAction.move,
+          reason: '已决策的 a 不被覆盖');
+      expect(s.decisions!['b.jpg']!.action, DecisionAction.skip);
+      expect(s.decisions!['c.jpg']!.action, DecisionAction.skip);
+    });
+
+    test('中途调用：当前未决策的这张也一并跳过', () {
+      initSession();
+      controller.decide(DecisionAction.delete); // a.jpg → idx 1
+      controller.skipRemaining();
+      final s = controller.state;
+      expect(s.decisions!.length, 3);
+      expect(s.decisions!['b.jpg']!.action, DecisionAction.skip);
+      expect(s.decisions!['c.jpg']!.action, DecisionAction.skip);
+    });
+
+    test('已完成 session 调用不产生新决策', () {
+      initSession();
+      controller.decide(DecisionAction.skip); // a
+      controller.decide(DecisionAction.skip); // b
+      controller.decide(DecisionAction.skip); // c → 完成
+      controller.skipRemaining();
+      expect(controller.state.decisions!.length, 3);
+      expect(controller.state.currentIndex, 3);
+    });
+
+    test('审核后仍可逐个 undo 回退（Review 返回继续整理的兜底）', () {
+      initSession();
+      controller.decide(DecisionAction.move, destKey: 'A'); // a → idx 1
+      controller.skipRemaining(); // b, c skip → idx 3
+      controller.undo(); // 撤 c
+      final s = controller.state;
+      expect(s.currentIndex, 2);
+      expect(s.decisions!.containsKey('c.jpg'), false);
+      expect(s.decisions!['b.jpg']!.action, DecisionAction.skip);
+    });
+
+    test('审核后统计：undecided=0，skipped 含剩余张数', () {
+      initSession();
+      controller.decide(DecisionAction.move, destKey: 'A'); // a
+      controller.skipRemaining(); // b, c skip
+      final stats = computeReviewStats(controller.state);
+      expect(stats.moved, 1);
+      expect(stats.skipped, 2);
+      expect(stats.undecided, 0);
+      expect(stats.undecidedIds, isEmpty);
+    });
+  });
+
   group('undo', () {
     test('撤销最后一个决策，索引回退到该图', () {
       initSession();

@@ -189,6 +189,7 @@ const Map<String, String> stringsZh = {
   'undo': '撤销',
   'delete_btn': '删除',
   'skip': '跳过',
+  'audit': '审核',
   'review_go': '审核 →',
   'preview_na': ' [预览不可用]',
   'created': '创建 ',

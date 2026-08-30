@@ -31,7 +31,10 @@ class MainActivity : FlutterActivity() {
      * - isXxxContrastEnforced=false（API 29+）：系统对透明系统栏强制叠加的半透明
      *   scrim 关闭——ColorOS 手势条「半透明背景」的直接来源（XML 无对应 theme
      *   attr，只能代码设）。
-     * - statusBarColor 透明后状态栏后面是窗口背景（launch_bg 深色），不回退白闪。
+     * - 系统栏色用 0x00010000 而非纯 TRANSPARENT：ColorOS 把全零当「未设置」
+     *   而回退默认 scrim（状态栏黑底在抽屉动画中页面缩小、顶部条带露出时
+     *   可见；导航栏同坑已修，此处两栏一并锁）。透明后栏后是窗口背景
+     *   （launch_bg 深色），不回退白闪。
      */
     private fun applyEdgeToEdgeWindow() {
         // minSdk 30：isXxxContrastEnforced（API 29+）恒可用
@@ -43,9 +46,9 @@ class MainActivity : FlutterActivity() {
             android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
             android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
         @Suppress("DEPRECATION")
-        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.statusBarColor = 0x00010000
         @Suppress("DEPRECATION")
-        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        window.navigationBarColor = 0x00010000
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

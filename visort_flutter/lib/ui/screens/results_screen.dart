@@ -10,7 +10,6 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/run/run_controller.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
-import 'package:visort_flutter/ui/router.dart';
 
 class ResultsScreen extends ConsumerStatefulWidget {
   const ResultsScreen({super.key});
@@ -246,10 +245,12 @@ class _DoneView extends ConsumerWidget {
                   width: double.infinity,
                   child: FilledButton(
                     onPressed: () {
-                      // 重置 session 回 Home
+                      // 重置 session，回移动前的一级页（安卓 shell 保留
+                      // _currentPage——快速整理页的模式/勾选/滚动都在；
+                      // 桌面回 HomeScreen 保留输入状态）。不能重建 home：
+                      // pushNamedAndRemoveUntil 会重建 shell，落回默认相册页。
                       ref.read(sessionControllerProvider.notifier).reset();
-                      Navigator.pushNamedAndRemoveUntil(
-                          context, AppRoutes.home, (_) => false);
+                      Navigator.popUntil(context, (r) => r.isFirst);
                     },
                     child: Text(t(ref, 'continue_btn')),
                   ),

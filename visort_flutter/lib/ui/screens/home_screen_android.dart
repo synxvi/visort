@@ -96,6 +96,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   /// 是否有可恢复的整理会话(Home 顶部横条)。
   bool _resumeAvailable = false;
 
+  /// 本轮是否发起过整理(Start/恢复)。整理流程结束(session reset)返回时
+  /// 据此清勾选并复位;未发起过(如仅切相册页浏览返回)不动勾选草稿。
+  bool _sortStarted = false;
+
   @override
   void initState() {
     super.initState();
@@ -127,11 +131,27 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     };
   }
 
-  /// 路由回到 Home 时重探横条(全局 RouteNameObserver 驱动)。
+  /// 路由回到 Home 时(全局 RouteNameObserver 驱动):重探横条 + 刷新
+  /// 封面/数量 + 整理流程结束后清勾选。
   void _onRouteChanged() {
-    if (currentRouteName.value == AppRoutes.home) {
-      _checkResumableSession();
+    if (currentRouteName.value != AppRoutes.home) return;
+    // 整理流程结束(session 已 reset → 空态)返回:清空源/目标勾选,页面
+    // 不再停留勾选态——否则移动过的相册仍高亮勾着(真机实测)。
+    // 中途退出(session 仍在,「继续」可恢复)保留勾选草稿,便于续整理。
+    final s = ref.read(sessionControllerProvider);
+    if (s.isEmpty && _sortStarted) {
+      _sortStarted = false;
+      if (_sourceBucketIds.isNotEmpty || _targetBucketIds.isNotEmpty) {
+        setState(() {
+          _sourceBucketIds.clear();
+          _targetBucketIds.clear();
+        });
+      }
     }
+    // 全量重查 buckets:源相册封面/数量随移动变化(移走第一张后封面
+    // 可能变更、count 减一;目标相册 count 增一)。
+    _refreshCovers();
+    _checkResumableSession();
   }
 
   @override
@@ -372,6 +392,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         // 黑屏(其自动跳 Review 只挂在决策完成回调上,恢复路径不经过)。
         final target =
             ref.read(sessionControllerProvider).isComplete ? '/review' : '/sort';
+        _sortStarted = true;
         await Navigator.of(context).pushNamed(target);
         await _checkResumableSession();
         return;
@@ -496,6 +517,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         toast(context, t(ref, err));
         return;
       }
+      _sortStarted = true;
       Navigator.pushNamed(context, AppRoutes.sort);
     } catch (e) {
       debugPrint('[startScan] $e');

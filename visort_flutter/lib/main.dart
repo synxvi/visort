@@ -154,15 +154,17 @@ Future<void> _setupWindows() async {
 /// 实色状态栏挤偏。深色 App 用亮色系统栏图标。
 ///
 /// 手势条（小横条）无背景的两个关键点（对齐 ente photos main.dart）：
-///   - systemNavigationBarColor 用 0x00010000 而非纯 0x00000000——部分 ROM
-///     （ColorOS 实测）把全零当作「未设置」而回退默认半透明 scrim；
+///   - 两个系统栏色都用 0x00010000 而非纯 0x00000000——部分 ROM（ColorOS
+///     实测）把全零当作「未设置」而回退默认 scrim。状态栏同坑：抽屉动画
+///     中页面缩小、顶部条带露出时被 ColorOS 默认黑 scrim 盖住（底部手势条
+///     早已修过、顶部漏网，真机实测「顶部黑底部正常」的不对称即此）；
 ///   - 两个 contrastEnforced=false：关闭系统对透明系统栏强加的半透明
 ///     对比度遮罩。窗口层的同款设置在 MainActivity.onCreate 已提前完成。
 void _enableEdgeToEdge() {
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
     // ente 同款 workaround：alpha=0 但 RGB 非零，避免被 ROM 当未设置忽略。
+    statusBarColor: Color(0x00010000),
     systemNavigationBarColor: Color(0x00010000),
     systemNavigationBarDividerColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light, // 深底白字

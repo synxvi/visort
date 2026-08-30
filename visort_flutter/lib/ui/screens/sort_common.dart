@@ -46,6 +46,15 @@ class SortSessionGate extends ConsumerWidget {
     // 空 session（未扫描直接进入）→ 回 Home
     if (session.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        // isCurrent 判定（完成态分支同款）：pop 出的路由在退出动画（200ms）
+        // 期间 Element 仍 mounted，mounted 守卫拦不住——Results Continue 的
+        // reset() 触发本分支时 sort 正被 popUntil 弹出（isCurrent 已 false），
+        // 此时 pushNamedAndRemoveUntil(home) 会重建壳层，从快速整理页发起的
+        // 整理被甩回相册"首页"（真机 logcat 实证：连建 3 个壳层实例）。
+        // 非栈顶 = 本路由正在退出，不再回退 home。
+        final isCurrent = ModalRoute.of(context)?.isCurrent ?? false;
+        if (!isCurrent) return;
         Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (_) => false);
       });
       return const Scaffold(body: SizedBox.shrink());

@@ -194,6 +194,7 @@ const Map<String, String> stringsEn = {
   'undo': 'Undo',
   'delete_btn': 'Delete',
   'skip': 'Skip',
+  'audit': 'Audit',
   'review_go': 'Review →',
   'preview_na': ' [Preview unavailable]',
   'created': 'Created ',
