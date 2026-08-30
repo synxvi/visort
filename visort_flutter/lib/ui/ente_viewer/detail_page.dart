@@ -35,6 +35,7 @@ import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart' show configProvider, t;
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
+import 'package:visort_flutter/shared/widgets/back_glyph_button.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/middle_ellipsis_text.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
@@ -810,18 +811,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                 height: 56,
                                 child: Row(
                                   children: [
-                                    IconButton(
+                                    BackGlyphButton(
                                       // 与相册页 AppBar 返回箭头对齐（主分支同款 padding）。
-                                      padding: const EdgeInsets.fromLTRB(
-                                        16,
-                                        8,
-                                        8,
-                                        8,
-                                      ),
-                                      icon: const Icon(
-                                        Icons.arrow_back,
-                                        color: AppColors.text,
-                                      ),
+                                      // 自绘细线箭头：与抽屉侧栏 / 选项三线按钮同形制。
                                       tooltip: t(ref, 'back'),
                                       onPressed: () =>
                                           Navigator.maybePop(context),

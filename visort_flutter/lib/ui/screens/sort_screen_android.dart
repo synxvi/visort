@@ -16,6 +16,7 @@ import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
+import 'package:visort_flutter/shared/widgets/back_glyph_button.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/features/session/session_models.dart';
 import 'package:visort_flutter/shared/widgets/middle_ellipsis_text.dart';
@@ -234,9 +235,8 @@ class _AndroidTopInfoState extends ConsumerState<_AndroidTopInfo> {
                   // 返回按钮（与 photo_viewer 顶部完全一致）：
                   // 回移动前的一级页——shell 保留 _currentPage（快速整理页
                   // 的模式/勾选都在），重建 home 会落回默认相册页。
-                  IconButton(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-                    icon: const Icon(Icons.arrow_back, color: AppColors.text),
+                  // 自绘细线箭头：与抽屉侧栏 / 选项三线按钮同形制。
+                  BackGlyphButton(
                     tooltip: t(ref, 'back'),
                     onPressed: () =>
                         Navigator.popUntil(context, (r) => r.isFirst),

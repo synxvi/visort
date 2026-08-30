@@ -28,6 +28,7 @@ import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/ui/router_android.dart';
 import 'package:visort_flutter/ui/screens/app_shell_android.dart'
     show DrawerMenuButton, ShellHandle;
+import 'package:visort_flutter/shared/widgets/back_glyph_button.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
 import 'package:visort_flutter/shared/widgets/rename_dialog.dart';
@@ -369,14 +370,19 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           backgroundColor: AppColors.surface,
           foregroundColor: AppColors.text,
           // 嵌入 Shell（收藏/回收站一级页）：☰ morph 按钮呼出抽屉；push
-          // 模式保持默认返回箭头（勾选态时 PopScope canPop=false 自动隐藏，
-          // 现状）。
+          // 模式用自绘返回箭头（与抽屉侧栏 / 选项三线按钮同形制），
+          // hideWhenCannotPop 复刻系统 BackButton：勾选态 PopScope
+          // canPop=false 时自动隐藏。
           leading: widget._embedded
               ? DrawerMenuButton(
                   handle: widget.shellHandle,
                   tooltip: t(ref, 'gallery_manage'),
                 )
-              : null,
+              : BackGlyphButton(
+                  tooltip: t(ref, 'back'),
+                  hideWhenCannotPop: true,
+                  onPressed: () => Navigator.maybePop(context),
+                ),
           // 标题紧贴返回箭头（默认 titleSpacing 16 会显得相册名离箭头太远）
           titleSpacing: 0,
           title: _selectMode
