@@ -73,6 +73,24 @@ class SettingsScreen extends ConsumerWidget {
                 ],
                 onSelected: (v) => setLanguage(ref, v),
               ),
+              // 默认首页（仅安卓 Shell）：启动进入的一级页 + 其它一级页
+              // 返回键的应用内终点。选中后下次启动生效。
+              if (Platform.isAndroid)
+                _PickerRow<DefaultHomePage>(
+                  label: t(ref, 'settings_default_home'),
+                  value: config.defaultHomePage,
+                  valueLabel: switch (config.defaultHomePage) {
+                    DefaultHomePage.gallery => t(ref, 'gallery_title'),
+                    DefaultHomePage.sort => t(ref, 'quick_sort_title'),
+                    DefaultHomePage.favorites => t(ref, 'favorites_title'),
+                  },
+                  options: [
+                    (DefaultHomePage.gallery, t(ref, 'gallery_title')),
+                    (DefaultHomePage.sort, t(ref, 'quick_sort_title')),
+                    (DefaultHomePage.favorites, t(ref, 'favorites_title')),
+                  ],
+                  onSelected: (v) => _update(ref, defaultHomePage: v),
+                ),
               // 抽屉动画档位（仅安卓 Shell 有抽屉；桌面端不显示）。
               // 快速 = 250/200ms（Material 官方黄金值，默认）；舒适 =
               // 320/240ms（emphasized 方向，节奏沉稳）。开/关非对称。
@@ -106,9 +124,11 @@ class SettingsScreen extends ConsumerWidget {
   Future<void> _update(
     WidgetRef ref, {
     DrawerAnimSpeed? drawerAnimSpeed,
+    DefaultHomePage? defaultHomePage,
   }) async {
     final updated = ref.read(configProvider).copyWith(
           drawerAnimSpeed: drawerAnimSpeed,
+          defaultHomePage: defaultHomePage,
         );
     ref.read(configProvider.notifier).state = updated;
     await ref.read(profilesServiceProvider).save(updated);

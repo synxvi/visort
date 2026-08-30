@@ -1,8 +1,8 @@
 // 安卓抽屉壳层 —— 左侧抽屉 + 一级页容器
 //
 // `/` 路由（仅安卓）挂本壳。5 个一级页以惰性 IndexedStack 保活：
-//   ① 相册（新独立浏览页，默认屏） ② 收藏 ③ 回收站 ④ 快速整理（原首页）
-//   ⑤ 设置
+//   ① 相册 ② SORT（快速整理，2026-08 更名+提位） ③ 收藏 ④ 回收站
+//   ⑤ 设置。默认首页可配（设置 → 通用，默认相册）——启动屏与返回终点。
 // 「惰性」= 访问过的页才真正 build（位掩码标记），未访问槽位放空盒——
 // 避免冷启时 5 页同时 initState（3 路 MediaStore 查询互相覆盖 loadToken、
 // 权限弹窗与数据加载竞态）。已访问页常驻，状态保留（快速整理页的勾选/
@@ -19,8 +19,9 @@
 // 全部同时回调，一级页不得再注册，一律走 [ShellHandle.onBack]）：
 //   1. 抽屉展开 → 收起抽屉
 //   2. 当前页勾选态 → 退出勾选（ShellHandle.onBack 返回 true 表示已消费）
-//   3. 非首页（相册页）→ 切回首页——首页是所有返回操作的应用内终点
-//   4. 首页 → moveTaskToBack 回桌面
+//   3. 非默认页 → 切回默认页——默认页是所有返回操作的应用内终点
+//      （设置 → 通用 → 默认首页，相册 / SORT / 收藏）
+//   4. 默认页 → moveTaskToBack 回桌面
 //
 // 手势分派（设计定稿）：
 //   - 快速整理页：整页右滑 = 呼出抽屉（子目录模式，原先无操作）/
@@ -38,7 +39,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:visort_flutter/core/config/models.dart' show DrawerAnimSpeed;
+import 'package:visort_flutter/core/config/models.dart'
+    show DefaultHomePage, DrawerAnimSpeed;
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
@@ -84,13 +86,20 @@ class AppShellAndroid extends ConsumerStatefulWidget {
 
 class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
     with TickerProviderStateMixin {
-  // 一级页下标（抽屉菜单顺序）
+  // 一级页下标（抽屉菜单顺序；SORT 提到第 2 项——2026-08 用户定稿）
   static const _pageAlbums = 0;
-  static const _pageFavorites = 1;
-  static const _pageTrash = 2;
-  static const _pageQuickSort = 3;
+  static const _pageQuickSort = 1;
+  static const _pageFavorites = 2;
+  static const _pageTrash = 3;
   static const _pageSettings = 4;
   static const _pageCount = 5;
+
+  /// 默认首页（[DefaultHomePage] 配置）对应的一级页下标。
+  int _homeIndexOf(DefaultHomePage page) => switch (page) {
+        DefaultHomePage.gallery => _pageAlbums,
+        DefaultHomePage.sort => _pageQuickSort,
+        DefaultHomePage.favorites => _pageFavorites,
+      };
 
   /// 缩放推拉动画参数（参考演示实测观感）：
   /// 抽屉宽 = 屏宽 66%（窄屏夹 250 / 宽屏夹 340）；当前页 scale 0.88、
@@ -99,8 +108,9 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
   static const _pageRadius = 16.0;
   static const _drawerParallax = 0.25; // 抽屉入场反向偏移（视差）
 
-  int _currentPage = _pageAlbums; // 默认屏 = 相册
-  int _visited = 1 << _pageAlbums;
+  /// 当前页下标。初始 = 默认首页（设置 → 通用，默认相册；下次启动生效）。
+  late int _currentPage;
+  late int _visited;
   bool _drawerEverOpened = false; // 抽屉内容惰性构建（logo 入场动画随首开播放）
   Timer? _prewarmTimer;
 
@@ -119,6 +129,10 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
   @override
   void initState() {
     super.initState();
+    // 启动屏 = 配置的默认首页（下次启动生效语义：读的是持久化配置）。
+    _currentPage =
+        _homeIndexOf(ref.read(configProvider).defaultHomePage);
+    _visited = 1 << _currentPage;
     _drawerCtrl = AnimationController(
       vsync: this,
       duration: AppDurations.activity,
@@ -248,8 +262,9 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
     _handles[index].onActivated?.call();
   }
 
-  /// 返回键四段分发（类注释）：首页是所有返回操作的应用内终点——
-  /// 非首页页按返回切回首页，仅首页退桌面（moveTaskToBack）。
+  /// 返回键四段分发（类注释）：默认首页是所有返回操作的应用内终点——
+  /// 非默认页按返回切回默认页（设置 → 通用 → 默认首页，2026-08 起可配，
+  /// 原硬编码相册页），仅默认页退桌面（moveTaskToBack）。
   void _onBackInvoked(bool didPop, _) {
     if (didPop) return;
     if (_drawerCtrl.value > 0) {
@@ -258,8 +273,9 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
     }
     final handler = _handles[_currentPage].onBack;
     if (handler != null && handler()) return;
-    if (_currentPage != _pageAlbums) {
-      _fadeToPage(_pageAlbums);
+    final homeIndex = _homeIndexOf(ref.read(configProvider).defaultHomePage);
+    if (_currentPage != homeIndex) {
+      _fadeToPage(homeIndex);
       return;
     }
     const MethodChannel('visort/app').invokeMethod('moveTaskToBack');
@@ -500,9 +516,9 @@ class _DrawerContent extends ConsumerWidget {
 
   static const _items = [
     (0, Icons.photo_library_outlined, 'gallery_title'),
-    (1, Icons.favorite_border, 'favorites_title'),
-    (2, Icons.delete_outline, 'trash_title'),
-    (3, Icons.bolt_outlined, 'quick_sort_title'),
+    (1, Icons.bolt_outlined, 'quick_sort_title'),
+    (2, Icons.favorite_border, 'favorites_title'),
+    (3, Icons.delete_outline, 'trash_title'),
     (4, Icons.settings_outlined, 'settings_title'),
   ];
 

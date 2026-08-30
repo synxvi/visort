@@ -87,7 +87,8 @@ const Map<String, String> stringsEn = {
   // ───────── Home (Android, A2) ─────────
   'home_title_android': 'Sort Images',
   // 抽屉一级页「快速整理」（原首页主屏功能在抽屉里的名称）
-  'quick_sort_title': 'Quick Sort',
+  // 抽屉一级页「SORT」（原「Quick Sort」，2026-08 用户更名，双语文案一致）
+  'quick_sort_title': 'SORT',
   // 设置-通用：抽屉动画档位（舒适 320/240ms，快速 250/200ms）
   'settings_drawer_speed': 'Drawer animation',
   'drawer_speed_fast': 'Fast',
@@ -319,6 +320,7 @@ const Map<String, String> stringsEn = {
   // ───────── 设置 ─────────
   'settings_section_general': 'General',
   'lang_setting': 'Language',
+  'settings_default_home': 'Default Home',
   'settings_section_cache': 'Cache',
   'settings_precache': 'Idle Precache',
   'settings_precache_quota': 'Quota',

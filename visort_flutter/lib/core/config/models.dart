@@ -42,6 +42,10 @@ enum HomeLayout { list, grid }
 ///   更沉稳。两档都保持「关比开快」的非对称（退出不需要用户注意力）。
 enum DrawerAnimSpeed { fast, comfortable }
 
+/// 默认首页（仅安卓 Shell）：启动进入的一级页，也是其它一级页返回键的
+/// 应用内终点（设置 → 通用 → 默认首页）。
+enum DefaultHomePage { gallery, sort, favorites }
+
 /// 文件夹模板：快捷键 + 显示名（不含路径）。
 ///
 /// 路径在 [FolderDescriptor]（profiles_service.dart）里拼装。
@@ -251,6 +255,7 @@ class AppConfig {
     this.precacheEnabled = true,
     this.precacheQuotaMb = 1024,
     this.drawerAnimSpeed = DrawerAnimSpeed.fast,
+    this.defaultHomePage = DefaultHomePage.gallery,
     this.galleryLayout = HomeLayout.grid,
     this.galleryGridColumns = 3,
   });
@@ -307,6 +312,9 @@ class AppConfig {
   /// 抽屉开合动画档位（舒适/快速），默认快速（Material 黄金值）。
   final DrawerAnimSpeed drawerAnimSpeed;
 
+  /// 默认首页：启动进入的一级页 + 其它一级页返回键的终点。
+  final DefaultHomePage defaultHomePage;
+
   /// 首页（原「相册」页，返回终点）布局：列表 / 网格。与快速整理页的
   /// [homeLayout]/[homeGridColumns]（沿用历史字段名）完全解耦。
   final HomeLayout galleryLayout;
@@ -349,6 +357,7 @@ class AppConfig {
     bool? precacheEnabled,
     int? precacheQuotaMb,
     DrawerAnimSpeed? drawerAnimSpeed,
+    DefaultHomePage? defaultHomePage,
     HomeLayout? galleryLayout,
     int? galleryGridColumns,
   }) =>
@@ -371,6 +380,7 @@ class AppConfig {
         precacheEnabled: precacheEnabled ?? this.precacheEnabled,
         precacheQuotaMb: precacheQuotaMb ?? this.precacheQuotaMb,
         drawerAnimSpeed: drawerAnimSpeed ?? this.drawerAnimSpeed,
+        defaultHomePage: defaultHomePage ?? this.defaultHomePage,
         galleryLayout: galleryLayout ?? this.galleryLayout,
         galleryGridColumns: galleryGridColumns ?? this.galleryGridColumns,
       );
@@ -394,6 +404,7 @@ class AppConfig {
         'precache_enabled': precacheEnabled,
         'precache_quota_mb': precacheQuotaMb,
         'drawer_anim_speed': drawerAnimSpeed.name,
+        'default_home_page': defaultHomePage.name,
         'gallery_layout': galleryLayout.name,
         'gallery_grid_columns': galleryGridColumns,
         'profiles': {
@@ -465,6 +476,8 @@ class AppConfig {
       precacheQuotaMb: (json['precache_quota_mb'] as int?) ?? 1024,
       drawerAnimSpeed: _parseDrawerAnimSpeed(
           json['drawer_anim_speed'], DrawerAnimSpeed.fast),
+      defaultHomePage: _parseDefaultHomePage(
+          json['default_home_page'], DefaultHomePage.gallery),
       galleryLayout: _parseHomeLayout(
           json['gallery_layout'], HomeLayout.grid),
       galleryGridColumns:
@@ -480,6 +493,20 @@ DrawerAnimSpeed _parseDrawerAnimSpeed(
       return DrawerAnimSpeed.comfortable;
     case 'fast':
       return DrawerAnimSpeed.fast;
+    default:
+      return fallback;
+  }
+}
+
+DefaultHomePage _parseDefaultHomePage(
+    Object? value, DefaultHomePage fallback) {
+  switch (value) {
+    case 'gallery':
+      return DefaultHomePage.gallery;
+    case 'sort':
+      return DefaultHomePage.sort;
+    case 'favorites':
+      return DefaultHomePage.favorites;
     default:
       return fallback;
   }

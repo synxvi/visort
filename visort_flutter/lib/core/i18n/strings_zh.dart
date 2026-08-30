@@ -86,8 +86,8 @@ const Map<String, String> stringsZh = {
 
   // ───────── Home (Android, A2) ─────────
   'home_title_android': '整理图片',
-  // 抽屉一级页「快速整理」（原首页主屏功能在抽屉里的名称）
-  'quick_sort_title': '快速整理',
+  // 抽屉一级页「SORT」（原「快速整理」，2026-08 用户更名）
+  'quick_sort_title': 'SORT',
   // 设置-通用：抽屉动画档位（舒适 320/240ms，快速 250/200ms）
   'settings_drawer_speed': '抽屉动画',
   'drawer_speed_fast': '快速',
@@ -313,6 +313,7 @@ const Map<String, String> stringsZh = {
   // ───────── 设置 ─────────
   'settings_section_general': '通用',
   'lang_setting': '语言',
+  'settings_default_home': '默认首页',
   'settings_title': '设置',
   // ── 缓存 ──
   'settings_section_cache': '缓存',
