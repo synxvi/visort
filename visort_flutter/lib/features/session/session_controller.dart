@@ -163,6 +163,29 @@ class SessionController extends Notifier<SessionState> {
     return DecideResult(nextIndex: nextIndex, done: done);
   }
 
+  // ───────────────────────── 提前收尾 ─────────────────────────
+
+  /// 提前结束整理：当前及剩余所有未决策图片全部标记 skip，游标推到末尾。
+  ///
+  /// sort 屏「审核」按钮用——整理到一半剩下的来不及处理，一键跳过全部
+  /// 直进审核变更界面（currentIndex 越界 → isComplete → SortSessionGate
+  /// 自动跳 Review）。已决策的图不动（Review → 继续分类回退后可能遇到）。
+  /// 落盘逐张 upsert，与 decide 同口径，杀进程恢复后语义一致。
+  void skipRemaining() {
+    final decisions = {...?state.decisions};
+    var index = state.currentIndex;
+    for (final img in state.images.skip(index)) {
+      if (decisions.containsKey(img.id)) continue; // 已决策的防御跳过
+      decisions[img.id] = Decision.skip();
+      final seq = _decisionSeq++;
+      _seqById[img.id] = seq;
+      _store.upsertDecision(img.id, Decision.skip(), seq);
+      index++;
+    }
+    state = state.copyWith(currentIndex: index, decisions: decisions);
+    _store.updateCurrentIndex(index);
+  }
+
   // ───────────────────────── 撤销 ─────────────────────────
 
   /// 撤销：删除最后一个决策，并把 currentIndex 回退到那张图。

@@ -288,7 +288,7 @@ class _SortPanel extends ConsumerWidget {
               },
             ),
           ),
-          // 操作行：撤销/删除/跳过
+          // 操作行：撤销/删除/跳过 + 审核（提前收尾：剩余全部跳过直进 Review）
           Row(
             children: [
               Expanded(
@@ -315,6 +315,14 @@ class _SortPanel extends ConsumerWidget {
                   kbd: actionKeys.skip,
                   onTap: () =>
                       controller.decide(DecisionAction.skip),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _ActionButton(
+                  label: t(ref, 'audit'),
+                  accent: true,
+                  onTap: () => controller.skipRemaining(),
                 ),
               ),
             ],
@@ -411,40 +419,63 @@ class _RootButton extends StatelessWidget {
 class _ActionButton extends StatelessWidget {
   const _ActionButton({
     required this.label,
-    required this.kbd,
     required this.onTap,
+    this.kbd,
     this.danger = false,
+    this.accent = false,
   });
   final String label;
-  final String kbd;
+  /// 快捷键提示行；null 则不渲染（「审核」无快捷键，单行强调按钮）
+  final String? kbd;
   final VoidCallback onTap;
   final bool danger;
+  /// 主操作强调（审核按钮用）——accent 优先于 danger
+  final bool accent;
 
   @override
   Widget build(BuildContext context) {
+    // 三态配色：危险红 / 主操作黄绿 / 默认灰面
+    final Color fg;
+    final Color border;
+    final Color bg;
+    if (accent) {
+      fg = AppColors.accent;
+      border = AppColors.accent;
+      bg = AppColors.accent.withValues(alpha: 0.08);
+    } else if (danger) {
+      fg = AppColors.danger;
+      border = AppColors.danger;
+      bg = AppColors.danger.withValues(alpha: 0.1);
+    } else {
+      fg = AppColors.text;
+      border = AppColors.border;
+      bg = AppColors.surface;
+    }
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(6),
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
-          color: danger ? AppColors.danger.withValues(alpha: 0.1) : AppColors.surface,
-          border: Border.all(
-              color: danger ? AppColors.danger : AppColors.border),
+          color: bg,
+          border: Border.all(color: border),
           borderRadius: BorderRadius.circular(6),
         ),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Text(label,
                 style: TextStyle(
                     fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback,
                     fontWeight: FontWeight.w700,
                     fontSize: 12,
-                    color: danger ? AppColors.danger : AppColors.text)),
-            const SizedBox(height: 2),
-            Text(kbd,
-                style: const TextStyle(
-                    fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback, fontSize: 10, color: AppColors.muted)),
+                    color: fg)),
+            if (kbd != null) ...[
+              const SizedBox(height: 2),
+              Text(kbd!,
+                  style: const TextStyle(
+                      fontFamily: 'Space Mono', height: 1.2, fontFamilyFallback: AppFonts.cjkFallback, fontSize: 10, color: AppColors.muted)),
+            ],
           ],
         ),
       ),

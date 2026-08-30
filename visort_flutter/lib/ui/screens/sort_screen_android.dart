@@ -359,7 +359,8 @@ class _AndroidBottomBar extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 8),
-          // 操作行：撤销 / 删除 / 跳过（roadmap 共识 #4 可选手势）
+          // 操作行：撤销 / 删除 / 跳过 / 审核（roadmap 共识 #4 可选手势；
+          // 审核 = 剩余全部跳过，提前收尾直进 Review）
           Row(
             children: [
               Expanded(
@@ -384,6 +385,15 @@ class _AndroidBottomBar extends ConsumerWidget {
                   label: t(ref, 'skip'),
                   icon: Icons.skip_next,
                   onTap: () => controller.decide(DecisionAction.skip),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _AndroidActionChip(
+                  label: t(ref, 'audit'),
+                  icon: Icons.fact_check_outlined,
+                  accent: true,
+                  onTap: () => controller.skipRemaining(),
                 ),
               ),
             ],
@@ -444,16 +454,36 @@ class _AndroidActionChip extends StatelessWidget {
     required this.icon,
     required this.onTap,
     this.danger = false,
+    this.accent = false,
   });
   final String label;
   final IconData icon;
   final VoidCallback onTap;
   final bool danger;
+  /// 主操作强调（审核按钮用）——accent 优先于 danger
+  final bool accent;
 
   @override
   Widget build(BuildContext context) {
+    // 三态配色：危险红 / 主操作黄绿 / 默认灰面
+    final Color fg;
+    final Color border;
+    final Color bg;
+    if (accent) {
+      fg = AppColors.accent;
+      border = AppColors.accent;
+      bg = AppColors.accent.withValues(alpha: 0.08);
+    } else if (danger) {
+      fg = AppColors.danger;
+      border = AppColors.danger;
+      bg = AppColors.danger.withValues(alpha: 0.1);
+    } else {
+      fg = AppColors.text;
+      border = AppColors.border;
+      bg = AppColors.surface;
+    }
     return Material(
-      color: danger ? AppColors.danger.withValues(alpha: 0.1) : AppColors.surface,
+      color: bg,
       borderRadius: BorderRadius.circular(8),
       child: InkWell(
         onTap: onTap,
@@ -462,15 +492,12 @@ class _AndroidActionChip extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 12),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-                color: danger ? AppColors.danger : AppColors.border),
+            border: Border.all(color: border),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon,
-                  size: 18,
-                  color: danger ? AppColors.danger : AppColors.text),
+              Icon(icon, size: 18, color: fg),
               const SizedBox(height: 2),
               Text(label,
                   style: TextStyle(
@@ -478,7 +505,7 @@ class _AndroidActionChip extends StatelessWidget {
                       fontFamilyFallback: AppFonts.cjkFallback,
                       fontWeight: FontWeight.w700,
                       fontSize: 11,
-                      color: danger ? AppColors.danger : AppColors.text)),
+                      color: fg)),
             ],
           ),
         ),
