@@ -19,7 +19,6 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/features/session/session_models.dart';
 import 'package:visort_flutter/shared/widgets/middle_ellipsis_text.dart';
-import 'package:visort_flutter/ui/router.dart';
 import 'package:visort_flutter/ui/screens/sort_common.dart';
 
 class SortScreenAndroid extends StatelessWidget {
@@ -232,13 +231,15 @@ class _AndroidTopInfoState extends ConsumerState<_AndroidTopInfo> {
               height: 56,
               child: Row(
                 children: [
-                  // 返回按钮（与 photo_viewer 顶部完全一致）
+                  // 返回按钮（与 photo_viewer 顶部完全一致）：
+                  // 回移动前的一级页——shell 保留 _currentPage（快速整理页
+                  // 的模式/勾选都在），重建 home 会落回默认相册页。
                   IconButton(
                     padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
                     icon: const Icon(Icons.arrow_back, color: AppColors.text),
                     tooltip: t(ref, 'back'),
-                    onPressed: () => Navigator.pushNamedAndRemoveUntil(
-                        context, AppRoutes.home, (_) => false),
+                    onPressed: () =>
+                        Navigator.popUntil(context, (r) => r.isFirst),
                   ),
                   // 图片名称（中段省略保留扩展名）
                   // Expanded 占满空间把序号推到最右；内部 ConstrainedBox 收窄

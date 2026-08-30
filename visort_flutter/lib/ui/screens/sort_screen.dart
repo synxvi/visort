@@ -43,8 +43,9 @@ class SortScreen extends StatelessWidget {
             elevation: 0,
             leading: IconButton(
               icon: const Icon(Icons.arrow_back),
-              onPressed: () => Navigator.pushNamedAndRemoveUntil(
-                  context, AppRoutes.home, (_) => false),
+              // 回移动前的一级页（安卓 shell 保留当前页；桌面 HomeScreen
+              // 保留输入状态）。重建 home 会丢状态、安卓落回默认相册页。
+              onPressed: () => Navigator.popUntil(context, (r) => r.isFirst),
             ),
             title: const VisortLogo(),
             // 语言切换已移入「设置」（settings_section_general）。
