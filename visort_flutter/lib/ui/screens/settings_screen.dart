@@ -1,9 +1,8 @@
 // 设置屏 —— 分组卡片式（iOS / Material Settings 风格）
 //
 // 信息架构：section header（分组标题）+ 卡片（组内项以缩进分隔线关联）。
-// 设计原则：网格列数属「首页」组的第二项（与布局同卡、分隔线关联），
-//           而非缩进子项——避免「缩进错位」的视觉歧义，层级靠卡片聚合表达。
-// 相册网格列数独属「相册」组。
+// 布局/列数设置已整体迁出（[ente 对齐]）：各页面右上角 ViewOptionsToggle
+// 选项面板就地调节，设置页只留语言/抽屉动画与缓存。
 // 选择器：弹簧菜单 showSpringPopupFromAnchor，宽度自适应、右缘对齐箭头、从 ▾ 弹出；
 //         弹窗底色 surfaceElevated（比卡片 surface 提亮，层级区分）。
 // 改动即时写回 configProvider 并持久化（shared_preferences）。
@@ -35,8 +34,6 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final config = ref.watch(configProvider);
-    final isGrid = config.homeLayout == HomeLayout.grid;
-    final suffix = t(ref, 'cols_unit');
     return Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
@@ -97,65 +94,6 @@ class SettingsScreen extends ConsumerWidget {
                 ),
             ],
           ),
-          // ── 布局：首页（bucket 网格）与快速整理各自独立配置，完全解耦 ──
-          _SectionHeader(t(ref, 'settings_section_home')),
-          _SettingsCard(
-            children: [
-              _PickerRow<HomeLayout>(
-                label: t(ref, 'settings_homepage_layout'),
-                value: config.galleryLayout,
-                valueLabel: config.galleryLayout == HomeLayout.grid
-                    ? t(ref, 'layout_grid')
-                    : t(ref, 'layout_list'),
-                options: [
-                  (HomeLayout.list, t(ref, 'layout_list')),
-                  (HomeLayout.grid, t(ref, 'layout_grid')),
-                ],
-                onSelected: (v) => _update(ref, galleryLayout: v),
-              ),
-              if (config.galleryLayout == HomeLayout.grid)
-                _PickerRow<int>(
-                  label: t(ref, 'settings_homepage_grid_cols'),
-                  value: config.galleryGridColumns,
-                  valueLabel: '${config.galleryGridColumns} $suffix',
-                  options: [(3, '3 $suffix'), (4, '4 $suffix')],
-                  onSelected: (v) => _update(ref, galleryGridColumns: v),
-                ),
-              _PickerRow<HomeLayout>(
-                label: t(ref, 'settings_home_layout'),
-                value: config.homeLayout,
-                valueLabel:
-                    isGrid ? t(ref, 'layout_grid') : t(ref, 'layout_list'),
-                options: [
-                  (HomeLayout.list, t(ref, 'layout_list')),
-                  (HomeLayout.grid, t(ref, 'layout_grid')),
-                ],
-                onSelected: (v) => _update(ref, homeLayout: v),
-              ),
-              if (isGrid)
-                _PickerRow<int>(
-                  label: t(ref, 'settings_home_grid_cols'),
-                  value: config.homeGridColumns,
-                  valueLabel: '${config.homeGridColumns} $suffix',
-                  options: [(3, '3 $suffix'), (4, '4 $suffix')],
-                  onSelected: (v) => _update(ref, homeGridColumns: v),
-                ),
-              // 相册内照片网格列数（原「相册」节唯一项，并入布局节；
-              // 「相册」节随之取消）。
-              _PickerRow<int>(
-                label: t(ref, 'settings_album_grid_cols'),
-                value: config.photoGridColumns,
-                valueLabel: '${config.photoGridColumns} $suffix',
-                options: [
-                  (2, '2 $suffix'),
-                  (3, '3 $suffix'),
-                  (4, '4 $suffix'),
-                  (5, '5 $suffix'),
-                ],
-                onSelected: (v) => _update(ref, photoGridColumns: v),
-              ),
-            ],
-          ),
           // ── 缓存 ──
           _SectionHeader(t(ref, 'settings_section_cache')),
           const _CacheSection(),
@@ -167,20 +105,10 @@ class SettingsScreen extends ConsumerWidget {
   /// 写回 configProvider + 持久化（与 _setAlbumSort 同模式）。
   Future<void> _update(
     WidgetRef ref, {
-    HomeLayout? homeLayout,
-    int? homeGridColumns,
-    int? photoGridColumns,
     DrawerAnimSpeed? drawerAnimSpeed,
-    HomeLayout? galleryLayout,
-    int? galleryGridColumns,
   }) async {
     final updated = ref.read(configProvider).copyWith(
-          homeLayout: homeLayout,
-          homeGridColumns: homeGridColumns,
-          photoGridColumns: photoGridColumns,
           drawerAnimSpeed: drawerAnimSpeed,
-          galleryLayout: galleryLayout,
-          galleryGridColumns: galleryGridColumns,
         );
     ref.read(configProvider.notifier).state = updated;
     await ref.read(profilesServiceProvider).save(updated);

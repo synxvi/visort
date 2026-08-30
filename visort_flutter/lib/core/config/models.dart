@@ -244,13 +244,15 @@ class AppConfig {
     this.photoSortAsc = false,
     this.photoTimelineView = false,
     this.homeLayout = HomeLayout.grid,
-    this.homeGridColumns = 4,
+    this.homeGridColumns = 3,
     this.photoGridColumns = 4,
+    this.favoritesGridColumns = 4,
+    this.trashGridColumns = 4,
     this.precacheEnabled = true,
     this.precacheQuotaMb = 1024,
     this.drawerAnimSpeed = DrawerAnimSpeed.fast,
     this.galleryLayout = HomeLayout.grid,
-    this.galleryGridColumns = 4,
+    this.galleryGridColumns = 3,
   });
 
   /// 所有 Profile（name → Profile）。
@@ -282,11 +284,18 @@ class AppConfig {
   /// 首页（Home 源相册区）布局：列表 / 网格。
   final HomeLayout homeLayout;
 
-  /// 首页网格列数（3 或 4）。
+  /// 首页网格列数（2–4，默认 3；选项面板步进调节）。
   final int homeGridColumns;
 
-  /// 相册内照片网格列数（2–5）。
+  /// 相册内照片网格列数（3–5；选项面板步进调节）。
+  /// 收藏/回收站同属照片网格，列数独立记忆（见下方两个字段）。
   final int photoGridColumns;
+
+  /// 收藏视图网格列数（3–5，独立于相册内）。
+  final int favoritesGridColumns;
+
+  /// 回收站视图网格列数（3–5，独立于相册内）。
+  final int trashGridColumns;
 
   /// 空闲预缓存开关：交互静默 + 解码管线空闲时后台预生成全相册
   /// screenNail（full 档盘缓存），加快浏览。关闭时由设置页清空全量缓存。
@@ -302,7 +311,7 @@ class AppConfig {
   /// [homeLayout]/[homeGridColumns]（沿用历史字段名）完全解耦。
   final HomeLayout galleryLayout;
 
-  /// 首页网格列数（3 或 4）。
+  /// 首页网格列数（2–4，默认 3；选项面板步进调节）。
   final int galleryGridColumns;
 
   /// 当前激活 Profile 的数据（便捷访问）。
@@ -335,6 +344,8 @@ class AppConfig {
     HomeLayout? homeLayout,
     int? homeGridColumns,
     int? photoGridColumns,
+    int? favoritesGridColumns,
+    int? trashGridColumns,
     bool? precacheEnabled,
     int? precacheQuotaMb,
     DrawerAnimSpeed? drawerAnimSpeed,
@@ -355,6 +366,8 @@ class AppConfig {
         homeLayout: homeLayout ?? this.homeLayout,
         homeGridColumns: homeGridColumns ?? this.homeGridColumns,
         photoGridColumns: photoGridColumns ?? this.photoGridColumns,
+        favoritesGridColumns: favoritesGridColumns ?? this.favoritesGridColumns,
+        trashGridColumns: trashGridColumns ?? this.trashGridColumns,
         precacheEnabled: precacheEnabled ?? this.precacheEnabled,
         precacheQuotaMb: precacheQuotaMb ?? this.precacheQuotaMb,
         drawerAnimSpeed: drawerAnimSpeed ?? this.drawerAnimSpeed,
@@ -376,6 +389,8 @@ class AppConfig {
         'home_layout': homeLayout.name,
         'home_grid_columns': homeGridColumns,
         'photo_grid_columns': photoGridColumns,
+        'favorites_grid_columns': favoritesGridColumns,
+        'trash_grid_columns': trashGridColumns,
         'precache_enabled': precacheEnabled,
         'precache_quota_mb': precacheQuotaMb,
         'drawer_anim_speed': drawerAnimSpeed.name,
@@ -439,10 +454,13 @@ class AppConfig {
       homeLayout: _parseHomeLayout(
           json['home_layout'] ?? json['homeLayout'], HomeLayout.grid),
       homeGridColumns:
-          (json['home_grid_columns'] ?? json['homeGridColumns'] as int?) ?? 4,
+          (json['home_grid_columns'] ?? json['homeGridColumns'] as int?) ?? 3,
       photoGridColumns:
           (json['photo_grid_columns'] ?? json['photoGridColumns'] as int?) ??
               4,
+      favoritesGridColumns:
+          (json['favorites_grid_columns'] as int?) ?? 4,
+      trashGridColumns: (json['trash_grid_columns'] as int?) ?? 4,
       precacheEnabled: (json['precache_enabled'] as bool?) ?? true,
       precacheQuotaMb: (json['precache_quota_mb'] as int?) ?? 1024,
       drawerAnimSpeed: _parseDrawerAnimSpeed(
@@ -450,7 +468,7 @@ class AppConfig {
       galleryLayout: _parseHomeLayout(
           json['gallery_layout'], HomeLayout.grid),
       galleryGridColumns:
-          (json['gallery_grid_columns'] as int?) ?? 4,
+          (json['gallery_grid_columns'] as int?) ?? 3,
     );
   }
 }

@@ -55,7 +55,7 @@ class ShellHandle {
   VoidCallback? _openDrawer;
   VoidCallback? _toggleDrawer;
 
-  /// 抽屉开合动画（0=收起 / 1=展开）。供顶栏 ☰ morph 成 ✕
+  /// 抽屉开合动画（0=收起 / 1=展开）。供顶栏侧栏图形 morph 成 ✕
   ///（[DrawerMenuButton]）——morph 严格限定在抽屉开合动画时长内。
   Animation<double>? drawerAnimation;
 
@@ -669,10 +669,12 @@ class DrawerSwipeWrapper extends StatelessWidget {
 }
 
 /// 一级页顶栏的抽屉按钮（四页共用）：随抽屉开合在开合动画时长内
-/// morph 为 ✕（AnimatedIcons.menu_close，进度 = Shell 的抽屉动画），
-/// 展开态点按收起、收起态点按展开。
+/// morph 为 ✕（自绘侧栏图形 ↔ ✕，进度 = Shell 的抽屉动画），展开态
+/// 点按收起、收起态点按展开。侧栏图形（面板框 + 左分隔线）与右侧选项
+/// 按钮 ViewOptionsToggle 的三线筛选图标分属不同形状族，避免 ☰ 的
+/// 同形冲突（2026-08 用户反馈）。
 ///
-/// 视觉下移 1.5dp 补偿：menu/close 字形光学重心在 24px 框内偏上，与
+/// 视觉下移 1.5dp 补偿：字形光学重心在 24px 框内偏上，与
 /// 16px Space Mono 标题（height 1.2）水平居中对齐时观感偏高（真机实测）；
 /// Transform.translate 不动布局盒，点击区不受影响。
 class DrawerMenuButton extends StatelessWidget {
@@ -692,14 +694,71 @@ class DrawerMenuButton extends StatelessWidget {
         child: anim != null
             ? AnimatedBuilder(
                 animation: anim,
-                builder: (ctx, _) => AnimatedIcon(
-                  icon: AnimatedIcons.menu_close,
-                  progress: anim,
-                  color: AppColors.text,
+                builder: (ctx, _) => CustomPaint(
+                  size: const Size.square(24),
+                  painter: _SidebarMorphPainter(anim.value),
                 ),
               )
-            : const Icon(Icons.menu, color: AppColors.text),
+            : const Icon(Icons.view_sidebar_outlined, color: AppColors.text),
       ),
     );
   }
+}
+
+/// 抽屉按钮配套 morph：0 = 侧栏图形（圆角面板框 + 左侧竖分隔线），
+/// 1 = ✕。面板框绕中心收缩淡出、✕ 两臂自中心生长，在抽屉开合动画
+/// 时长内连续形变（接替 AnimatedIcons.menu_close——其收起态 ☰ 与
+/// 右侧三线筛选图标同形族冲突）。
+class _SidebarMorphPainter extends CustomPainter {
+  const _SidebarMorphPainter(this.t);
+
+  /// morph 进度：0 = 侧栏图形（抽屉收起），1 = ✕（抽屉展开）。
+  final double t;
+
+  /// ✕ 四臂端点（24 视口，与 _FilterMorphPainter 同几何）。
+  static const _x1 = Offset(7.2, 7.2), _x2 = Offset(16.8, 16.8);
+  static const _x3 = Offset(16.8, 7.2), _x4 = Offset(7.2, 16.8);
+  static const _c = Offset(12, 12);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 24);
+    final stroke = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.9
+      ..strokeCap = StrokeCap.round;
+
+    // 面板框 + 左分隔线：绕中心收缩（1 → 0.5）并淡出。
+    final frameAlpha = (1 - t).clamp(0.0, 1.0);
+    if (frameAlpha > 0) {
+      stroke.color = AppColors.text.withValues(alpha: frameAlpha);
+      final s = 1 - 0.5 * t;
+      final rect = Rect.fromCenter(
+        center: _c,
+        width: 14 * s,
+        height: 13 * s,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(2)),
+        stroke,
+      );
+      final dx = rect.left + rect.width * 0.32;
+      canvas.drawLine(Offset(dx, rect.top), Offset(dx, rect.bottom), stroke);
+    }
+
+    // ✕ 两臂：自中心向外生长。
+    final xAlpha = t.clamp(0.0, 1.0);
+    if (xAlpha > 0) {
+      stroke.color = AppColors.text.withValues(alpha: xAlpha);
+      Offset grow(Offset p) =>
+          Offset(_c.dx + (p.dx - _c.dx) * t, _c.dy + (p.dy - _c.dy) * t);
+      canvas.drawLine(grow(_x1), grow(_x2), stroke);
+      canvas.drawLine(grow(_x3), grow(_x4), stroke);
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_SidebarMorphPainter oldDelegate) => oldDelegate.t != t;
 }

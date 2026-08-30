@@ -173,6 +173,11 @@ class GalleryState extends State<Gallery> {
       _setGroupHeaderExtent();
       needsRegroup = true;
     }
+    // 网格列数变化（选项面板步进）：GalleryGroups 缓存的行布局/缩略图
+    // 档位都按列数预算，必须重算——曾漏此条致「改列数不生效」（真机实证）。
+    if (oldWidget.crossAxisCount != widget.crossAxisCount) {
+      needsRegroup = true;
+    }
     if (oldWidget.sortOrderAsc != widget.sortOrderAsc) {
       _sortOrderAsc = widget.sortOrderAsc;
       needsRegroup = true;

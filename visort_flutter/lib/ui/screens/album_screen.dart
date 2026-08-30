@@ -31,8 +31,8 @@ import 'package:visort_flutter/ui/screens/app_shell_android.dart'
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
 import 'package:visort_flutter/shared/widgets/rename_dialog.dart';
-import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
+import 'package:visort_flutter/shared/widgets/view_options_toggle.dart';
 
 import 'album_picker_screen.dart';
 
@@ -203,6 +203,28 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             .setPhotoSort(SortBy.dateCreated, c.photoSortAsc);
       }
     }
+  }
+
+  /// 当前视图的照片网格列数：相册内/收藏/回收站各自独立记忆（同属照片
+  /// 网格，范围 3–5，用户要求分别控制）。
+  int _photoColsOf(AppConfig config) => widget.favoritesOnly
+      ? config.favoritesGridColumns
+      : (widget.trashedOnly ? config.trashGridColumns : config.photoGridColumns);
+
+  /// 步进当前视图的照片网格列数并持久化（选项面板回调；日期视图复用
+  /// 沉浸网格列数）。
+  Future<void> _setViewGridColumns(int cols) async {
+    final config = ref.read(configProvider);
+    final AppConfig updated;
+    if (widget.favoritesOnly) {
+      updated = config.copyWith(favoritesGridColumns: cols);
+    } else if (widget.trashedOnly) {
+      updated = config.copyWith(trashGridColumns: cols);
+    } else {
+      updated = config.copyWith(photoGridColumns: cols);
+    }
+    ref.read(configProvider.notifier).state = updated;
+    await ref.read(profilesServiceProvider).save(updated);
   }
 
   @override
@@ -426,55 +448,32 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                     ),
                 ]
               : [
-                  // 与首页顶栏一致的排版：SortToggle 右移 14 贴近右侧按钮
-                  Transform.translate(
-                    offset: const Offset(14, 0),
-                    child: Padding(
-                      // 收藏/回收站没有右侧视图切换按钮(48px)——补右距
-                      // 对齐普通相册排序图标位置（否则紧贴屏幕右缘）。
-                      padding: EdgeInsets.only(
-                        // 收藏/回收站没有右侧视图切换按钮(48px)——补右距
-                        // 对齐标准 action 图标边距（视觉距右缘 ~18px）。
-                        right: (widget.favoritesOnly || widget.trashedOnly)
-                            ? 24
-                            : 0,
-                      ),
-                      child: SortToggle(
-                        // 日期视图固定按创建日期，只留升/降序
-                        sortBy: _timelineView
-                            ? SortBy.dateCreated
-                            : gallery.effectivePhotoSortBy,
-                        asc: gallery.photoSortAsc,
-                        // dateOnly 仅在日期视图实际生效时（收藏/回收站
-                        // 不走日期视图 body，但 _timelineView 若从普通相册
-                        // 偏好恢复为 true，会把菜单误砍成只剩升/降序）。
-                        dateOnly:
-                            _timelineView &&
-                            !widget.favoritesOnly &&
-                            !widget.trashedOnly,
-                        // 回收站视图额外提供「按删除日期」
-                        showDateTrashed: widget.trashedOnly,
-                        onChanged: (by, asc) => ref
-                            .read(galleryControllerProvider.notifier)
-                            .setPhotoSort(by, asc),
-                      ),
-                    ),
+                  // 视图选项（[ente 对齐]）：视图切换（第一行，仅普通相册，
+                  // 原独立按钮已收进面板）+ 列数步进（相册内/收藏/回收站
+                  // 各自独立记忆）+ 排序（点按换向）。相册内恒网格——不传
+                  // layout。
+                  ViewOptionsToggle(
+                    timelineView: (widget.favoritesOnly || widget.trashedOnly)
+                        ? null
+                        : _timelineView,
+                    onTimelineViewChanged: _toggleViewMode,
+                    gridColumns: _photoColsOf(ref.watch(configProvider)),
+                    onGridColumnsChanged: _setViewGridColumns,
+                    gridColumnsMin: 3,
+                    gridColumnsMax: 5,
+                    // 日期视图固定按创建日期，排序段只剩单行（点行换向）
+                    sortBy: _timelineView
+                        ? SortBy.dateCreated
+                        : gallery.effectivePhotoSortBy,
+                    asc: gallery.photoSortAsc,
+                    // 日期视图的排序段单行化由面板按当前视图动态推导
+                    // （收藏/回收站不传 timelineView，天然恒全维度）。
+                    // 回收站视图额外提供「按删除日期」
+                    showDateTrashed: widget.trashedOnly,
+                    onSortChanged: (by, asc) => ref
+                        .read(galleryControllerProvider.notifier)
+                        .setPhotoSort(by, asc),
                   ),
-                  // 视图切换（排序组件右侧；仅普通相册，收藏/回收站保持沉浸）
-                  if (!widget.favoritesOnly && !widget.trashedOnly)
-                    IconButton(
-                      icon: Icon(
-                        _timelineView
-                            ? Icons.calendar_view_day
-                            : Icons.view_module,
-                        color: AppColors.text,
-                      ),
-                      tooltip: t(
-                        ref,
-                        _timelineView ? 'view_immersive' : 'view_date',
-                      ),
-                      onPressed: _toggleViewMode,
-                    ),
                 ],
         ),
         // 视图切换淡入（TweenAnimationBuilder）：AnimatedSwitcher 的交叉
@@ -511,7 +510,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   }
 
   Widget _buildBody(GalleryState gallery) {
-    final cols = ref.watch(configProvider).photoGridColumns;
+    final cols = _photoColsOf(ref.watch(configProvider));
     // 日期分组视图（仅普通相册）：按创建日期分组 + sticky 日期头。
     if (_timelineView && !widget.favoritesOnly && !widget.trashedOnly) {
       // 进入动画期间先渲染轻量占位：日期视图多 sliver（每组一个 SliverGrid）
@@ -635,12 +634,12 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   }
 
   /// 日期分组视图：按创建日期(dateAddedMs)分组，组头 + 整行照片混合的单
-  /// SliverList。网格列数复用 config.photoGridColumns（与沉浸视图一致）。
+  /// SliverList。网格列数复用当前视图列数（与沉浸视图一致）。
   /// 扁平化：多 sliver（每组分 SliverGrid）在组数多时 build 重，进入动画帧
   /// 叠加会卡顿；单 SliverList 只 layout 可见项 → 动画流畅 + 直接清晰缩略图
   /// （128→300 正常渐进，无低质量跳变）。全量加载后 itemCount 固定，extent 稳定。
   Widget _buildTimelineBody(GalleryState gallery) {
-    final cols = ref.watch(configProvider).photoGridColumns;
+    final cols = _photoColsOf(ref.watch(configProvider));
     final photos = gallery.photos;
     if (photos.isEmpty) {
       if (!gallery.firstPageLoaded) {
@@ -1149,7 +1148,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// [ente 移植] 网格已换 ente Gallery：行高 = cellW + 2px 间距；日期视图
   /// 额外累加组头 32（GroupHeaderWidget 高），组边界用 GroupType.day 判定。
   void _scrollToCellRow(int index) {
-    final cols = ref.read(configProvider).photoGridColumns;
+    final cols = _photoColsOf(ref.read(configProvider));
     final screen = MediaQuery.sizeOf(context);
     final cellW = (screen.width - (cols - 1) * GalleryGroups.spacing) / cols;
     final cellH = cellW + GalleryGroups.spacing;
@@ -1263,6 +1262,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         files: photos,
         initialIndex: index,
         onIndexChanged: _onViewerIndexChanged,
+        // 来源视图列数：缩略图条 cell 尺寸与网格一致（ImageCache 档命中）
+        gridCols: _photoColsOf(ref.read(configProvider)),
       ),
       settings: const RouteSettings(name: AlbumRoutes.photoViewer),
       fullscreenDialog: true,

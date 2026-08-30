@@ -144,15 +144,13 @@ const Map<String, String> stringsZh = {
   // ───────── Gallery (相册浏览) ─────────
   // 首页（概念上的返回终点；文案仍称「相册」——bucket 网格浏览入口）
   'gallery_title': '相册',
-  'album_sort': '排序',
+  'view_options': '查看选项',
   'view_immersive': '沉浸视图',
   'view_date': '日期视图',
   'sort_by_name': '按名称',
   'sort_by_date_created': '按创建日期',
   'sort_by_date_modified': '按修改时间',
   'sort_by_date_trashed': '按删除日期',
-  'sort_asc': '升序',
-  'sort_desc': '降序',
   'album_empty': '相册为空',
   'today': '今天',
   'yesterday': '昨天',
@@ -315,15 +313,7 @@ const Map<String, String> stringsZh = {
   // ───────── 设置 ─────────
   'settings_section_general': '通用',
   'lang_setting': '语言',
-  'settings_section_home': '布局',
-  'settings_section_album': '相册',
   'settings_title': '设置',
-  'settings_home_layout': '快速整理布局',
-  'settings_home_grid_cols': '快速整理列数',
-  // 布局节：相册页（返回终点）与快速整理页各自独立配置
-  'settings_homepage_layout': '相册布局',
-  'settings_homepage_grid_cols': '相册列数',
-  'settings_album_grid_cols': '相册内网格列数',
   // ── 缓存 ──
   'settings_section_cache': '缓存',
   'settings_precache': '空闲预缓存大图',
@@ -341,7 +331,7 @@ const Map<String, String> stringsZh = {
   'settings_cache_cleared': '已释放',
   'layout_list': '列表',
   'layout_grid': '网格',
-  'cols_unit': '列',
+  'grid_columns': '网格列数',
   // 日期分组/详情面板
   'date_today': '今天',
   'date_yesterday': '昨天',
