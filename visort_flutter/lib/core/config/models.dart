@@ -254,6 +254,9 @@ class AppConfig {
     this.trashGridColumns = 4,
     this.precacheEnabled = true,
     this.precacheQuotaMb = 1024,
+    this.mlIndexEnabled = false,
+    this.mlFaceEnabled = false,
+    this.mlPlaceEnabled = true,
     this.drawerAnimSpeed = DrawerAnimSpeed.fast,
     this.defaultHomePage = DefaultHomePage.gallery,
     this.galleryLayout = HomeLayout.grid,
@@ -309,6 +312,20 @@ class AppConfig {
   /// 空闲预缓存磁盘配额（MB）。档位见设置页（256MB~2GB），默认 1GB。
   final int precacheQuotaMb;
 
+  // ── 机器学习（搜索页分类索引，设置页「机器学习」区开关）──
+  // [ente 对齐] 总开关 + 分能力开关：索引扫描全库 EXIF GPS 建「位置」
+  // 分类数据（进度持久化，设置页展示）；人物识别依赖人脸检测模型，
+  // 当前版本未内置（开关预留，搜索页人物分类显示空态说明）。
+
+  /// 机器学习索引总开关：开启后后台扫描全部照片提取 EXIF GPS 建索引。
+  final bool mlIndexEnabled;
+
+  /// 人物识别开关：预留（需要人脸检测模型，当前版本未内置）。
+  final bool mlFaceEnabled;
+
+  /// 位置识别开关：控制搜索页「位置」分类是否展示。
+  final bool mlPlaceEnabled;
+
   /// 抽屉开合动画档位（舒适/快速），默认快速（Material 黄金值）。
   final DrawerAnimSpeed drawerAnimSpeed;
 
@@ -356,6 +373,9 @@ class AppConfig {
     int? trashGridColumns,
     bool? precacheEnabled,
     int? precacheQuotaMb,
+    bool? mlIndexEnabled,
+    bool? mlFaceEnabled,
+    bool? mlPlaceEnabled,
     DrawerAnimSpeed? drawerAnimSpeed,
     DefaultHomePage? defaultHomePage,
     HomeLayout? galleryLayout,
@@ -379,6 +399,9 @@ class AppConfig {
         trashGridColumns: trashGridColumns ?? this.trashGridColumns,
         precacheEnabled: precacheEnabled ?? this.precacheEnabled,
         precacheQuotaMb: precacheQuotaMb ?? this.precacheQuotaMb,
+        mlIndexEnabled: mlIndexEnabled ?? this.mlIndexEnabled,
+        mlFaceEnabled: mlFaceEnabled ?? this.mlFaceEnabled,
+        mlPlaceEnabled: mlPlaceEnabled ?? this.mlPlaceEnabled,
         drawerAnimSpeed: drawerAnimSpeed ?? this.drawerAnimSpeed,
         defaultHomePage: defaultHomePage ?? this.defaultHomePage,
         galleryLayout: galleryLayout ?? this.galleryLayout,
@@ -403,6 +426,9 @@ class AppConfig {
         'trash_grid_columns': trashGridColumns,
         'precache_enabled': precacheEnabled,
         'precache_quota_mb': precacheQuotaMb,
+        'ml_index_enabled': mlIndexEnabled,
+        'ml_face_enabled': mlFaceEnabled,
+        'ml_place_enabled': mlPlaceEnabled,
         'drawer_anim_speed': drawerAnimSpeed.name,
         'default_home_page': defaultHomePage.name,
         'gallery_layout': galleryLayout.name,
@@ -474,6 +500,9 @@ class AppConfig {
       trashGridColumns: (json['trash_grid_columns'] as int?) ?? 4,
       precacheEnabled: (json['precache_enabled'] as bool?) ?? true,
       precacheQuotaMb: (json['precache_quota_mb'] as int?) ?? 1024,
+      mlIndexEnabled: (json['ml_index_enabled'] as bool?) ?? false,
+      mlFaceEnabled: (json['ml_face_enabled'] as bool?) ?? false,
+      mlPlaceEnabled: (json['ml_place_enabled'] as bool?) ?? true,
       drawerAnimSpeed: _parseDrawerAnimSpeed(
           json['drawer_anim_speed'], DrawerAnimSpeed.fast),
       defaultHomePage: _parseDefaultHomePage(

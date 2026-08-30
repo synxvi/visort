@@ -18,6 +18,7 @@ import 'package:visort_flutter/core/fs/image_loader.dart'
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
+import 'package:visort_flutter/features/search/ml_index_service.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
@@ -115,6 +116,9 @@ class SettingsScreen extends ConsumerWidget {
           // ── 缓存 ──
           _SectionHeader(t(ref, 'settings_section_cache')),
           const _CacheSection(),
+          // ── 机器学习（[ente 对齐] ENTE ML 设置页精简：开关+进度+注释）──
+          _SectionHeader(t(ref, 'settings_section_ml')),
+          const _MlSection(),
         ],
       ),
     );
@@ -621,6 +625,168 @@ class _CacheSectionState extends ConsumerState<_CacheSection> {
             ),
           ),
         ),
+      ],
+    );
+  }
+}
+
+// ─────────────── 机器学习组：索引开关 + 进度 + 分能力开关 + 注释 ───────────────
+
+/// 机器学习区（[ente 对齐] ENTE machine_learning_settings_page 精简版）。
+///
+/// 索引总开关驱动后台全库 EXIF GPS 扫描（进度实时落 provider，无需轮询）；
+/// 位置/人物为分能力开关。每个开关下方注释说明功能（用户要求）。人物识别
+/// 依赖人脸检测模型（当前版本未内置）——开关预留，搜索页人物分类为空态。
+class _MlSection extends ConsumerStatefulWidget {
+  const _MlSection();
+
+  @override
+  ConsumerState<_MlSection> createState() => _MlSectionState();
+}
+
+class _MlSectionState extends ConsumerState<_MlSection> {
+  @override
+  void initState() {
+    super.initState();
+    // 恢复持久化索引（进度 + 位置数据），搜索页「位置」分类同源读取。
+    ref.read(mlIndexServiceProvider.notifier).load();
+  }
+
+  Future<void> _update({
+    bool? mlIndexEnabled,
+    bool? mlFaceEnabled,
+    bool? mlPlaceEnabled,
+  }) async {
+    final updated = ref.read(configProvider).copyWith(
+          mlIndexEnabled: mlIndexEnabled,
+          mlFaceEnabled: mlFaceEnabled,
+          mlPlaceEnabled: mlPlaceEnabled,
+        );
+    ref.read(configProvider.notifier).state = updated;
+    await ref.read(profilesServiceProvider).save(updated);
+  }
+
+  /// 索引总开关：开→启动后台扫描；关→确认后清索引数据（[ente 对齐]
+  /// ENTE 关 ML 清库语义）。
+  Future<void> _onIndexToggle(bool enable) async {
+    final notifier = ref.read(mlIndexServiceProvider.notifier);
+    if (enable) {
+      await _update(mlIndexEnabled: true);
+      // 后台分批跑，不 await（设置页停留期间进度实时更新）。
+      notifier.start();
+    } else {
+      final confirmed = await showConfirmSheet(
+        context,
+        title: t(ref, 'settings_ml_off_title'),
+        desc: t(ref, 'settings_ml_off_desc'),
+        cancelText: t(ref, 'cancel'),
+        confirmText: t(ref, 'confirm'),
+      ).confirmed;
+      if (confirmed != true || !mounted) return;
+      notifier.cancel(); // 先停批循环，避免清完又被写回（同预缓存清库竞态）
+      await _update(mlIndexEnabled: false);
+      await notifier.clear();
+    }
+  }
+
+  /// 进度行文案：running → 「正在索引… 已索引 x / y 张」；done → 完成态。
+  String _progressLine(MlIndexState ml) {
+    final indexed = t(ref, 'settings_ml_indexed_of', [ml.processed, ml.total]);
+    if (ml.running) return '${t(ref, 'settings_ml_running')} $indexed';
+    if (ml.done) return '${t(ref, 'settings_ml_done')} · $indexed';
+    return '—';
+  }
+
+  Widget _switchRow(String labelKey, bool value, ValueChanged<bool> onChanged) {
+    return InkWell(
+      onTap: () => onChanged(!value),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            Text(t(ref, labelKey),
+                style: const TextStyle(
+                  color: AppColors.text,
+                  fontFamily: 'Space Mono',
+                  height: 1.2,
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  fontSize: 14,
+                )),
+            const Spacer(),
+            Switch(
+              value: value,
+              activeColor: AppColors.accent,
+              onChanged: onChanged,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 开关下注释：小号 muted 说明功能（用户要求「添加注释说明各开关功能」）。
+  Widget _note(String noteKey) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      child: Text(
+        t(ref, noteKey),
+        style: const TextStyle(
+          fontFamily: 'Space Mono',
+          height: 1.3,
+          fontFamilyFallback: AppFonts.cjkFallback,
+          color: AppColors.muted,
+          fontSize: 11,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final config = ref.watch(configProvider);
+    final ml = ref.watch(mlIndexServiceProvider);
+    return _SettingsCard(
+      children: [
+        // 索引总开关 + 注释。
+        _switchRow('settings_ml_index', config.mlIndexEnabled,
+            (v) => _onIndexToggle(v)),
+        _note('settings_ml_index_note'),
+        // 进度行：provider 状态驱动（批处理逐批更新），点按重新从 SP 恢复。
+        InkWell(
+          onTap: () => ref.read(mlIndexServiceProvider.notifier).load(),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(
+              children: [
+                Text(t(ref, 'settings_ml_progress'),
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontFamily: 'Space Mono',
+                      height: 1.2,
+                      fontFamilyFallback: AppFonts.cjkFallback,
+                      fontSize: 14,
+                    )),
+                const Spacer(),
+                Text(
+                  _progressLine(ml),
+                  style: const TextStyle(
+                      fontFamily: 'Space Mono',
+                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                      color: AppColors.muted,
+                      fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // 分能力开关组（分隔线区分于索引主开关）。
+        const Divider(height: 1, thickness: 1, color: AppColors.border),
+        _switchRow('settings_ml_place', config.mlPlaceEnabled,
+            (v) => _update(mlPlaceEnabled: v)),
+        _note('settings_ml_place_note'),
+        _switchRow('settings_ml_face', config.mlFaceEnabled,
+            (v) => _update(mlFaceEnabled: v)),
+        _note('settings_ml_face_note'),
       ],
     );
   }

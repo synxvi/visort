@@ -94,6 +94,14 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
           ),
         ),
         actions: [
+          // 搜索（[ente 对齐] 选项按钮左侧）：进入分类搜索页
+          //（人物/位置/文件类型），页内支持文件名过滤与结果网格。
+          IconButton(
+            icon: const Icon(Icons.search, color: AppColors.text),
+            tooltip: t(ref, 'search'),
+            onPressed: () =>
+                Navigator.pushNamed(context, AlbumRoutes.search),
+          ),
           ViewOptionsToggle(
             layout: config.galleryLayout,
             onLayoutChanged: _setLayout,
