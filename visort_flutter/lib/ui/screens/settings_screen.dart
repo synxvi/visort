@@ -97,10 +97,30 @@ class SettingsScreen extends ConsumerWidget {
                 ),
             ],
           ),
-          // ── 首页 ──
+          // ── 布局：首页（bucket 网格）与快速整理各自独立配置，完全解耦 ──
           _SectionHeader(t(ref, 'settings_section_home')),
           _SettingsCard(
             children: [
+              _PickerRow<HomeLayout>(
+                label: t(ref, 'settings_homepage_layout'),
+                value: config.galleryLayout,
+                valueLabel: config.galleryLayout == HomeLayout.grid
+                    ? t(ref, 'layout_grid')
+                    : t(ref, 'layout_list'),
+                options: [
+                  (HomeLayout.list, t(ref, 'layout_list')),
+                  (HomeLayout.grid, t(ref, 'layout_grid')),
+                ],
+                onSelected: (v) => _update(ref, galleryLayout: v),
+              ),
+              if (config.galleryLayout == HomeLayout.grid)
+                _PickerRow<int>(
+                  label: t(ref, 'settings_homepage_grid_cols'),
+                  value: config.galleryGridColumns,
+                  valueLabel: '${config.galleryGridColumns} $suffix',
+                  options: [(3, '3 $suffix'), (4, '4 $suffix')],
+                  onSelected: (v) => _update(ref, galleryGridColumns: v),
+                ),
               _PickerRow<HomeLayout>(
                 label: t(ref, 'settings_home_layout'),
                 value: config.homeLayout,
@@ -120,12 +140,8 @@ class SettingsScreen extends ConsumerWidget {
                   options: [(3, '3 $suffix'), (4, '4 $suffix')],
                   onSelected: (v) => _update(ref, homeGridColumns: v),
                 ),
-            ],
-          ),
-          // ── 相册 ──
-          _SectionHeader(t(ref, 'settings_section_album')),
-          _SettingsCard(
-            children: [
+              // 相册内照片网格列数（原「相册」节唯一项，并入布局节；
+              // 「相册」节随之取消）。
               _PickerRow<int>(
                 label: t(ref, 'settings_album_grid_cols'),
                 value: config.photoGridColumns,
@@ -155,12 +171,16 @@ class SettingsScreen extends ConsumerWidget {
     int? homeGridColumns,
     int? photoGridColumns,
     DrawerAnimSpeed? drawerAnimSpeed,
+    HomeLayout? galleryLayout,
+    int? galleryGridColumns,
   }) async {
     final updated = ref.read(configProvider).copyWith(
           homeLayout: homeLayout,
           homeGridColumns: homeGridColumns,
           photoGridColumns: photoGridColumns,
           drawerAnimSpeed: drawerAnimSpeed,
+          galleryLayout: galleryLayout,
+          galleryGridColumns: galleryGridColumns,
         );
     ref.read(configProvider.notifier).state = updated;
     await ref.read(profilesServiceProvider).save(updated);

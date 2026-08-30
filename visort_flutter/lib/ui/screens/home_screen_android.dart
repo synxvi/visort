@@ -1337,8 +1337,11 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             itemBuilder: (ctx, idx, animation) =>
                 _buildSubDirRow(idx, _subDirs[idx], animation),
           ),
-          // 预览路径
-          const SizedBox(height: 12),
+          // 预览路径：贴子目录末项，间距与子目录行间一致（8px）。
+          // 原 12px 在深色背景上观感为一条过大的黑边；且 AnimatedList
+          // 移除行时预览块随高度收缩上移（shrinkWrap 跟随），间距一致
+          // 后「覆盖/下移」的错位观感消除。
+          const SizedBox(height: 8),
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(10),

@@ -249,6 +249,8 @@ class AppConfig {
     this.precacheEnabled = true,
     this.precacheQuotaMb = 1024,
     this.drawerAnimSpeed = DrawerAnimSpeed.fast,
+    this.galleryLayout = HomeLayout.grid,
+    this.galleryGridColumns = 4,
   });
 
   /// 所有 Profile（name → Profile）。
@@ -296,6 +298,13 @@ class AppConfig {
   /// 抽屉开合动画档位（舒适/快速），默认快速（Material 黄金值）。
   final DrawerAnimSpeed drawerAnimSpeed;
 
+  /// 首页（原「相册」页，返回终点）布局：列表 / 网格。与快速整理页的
+  /// [homeLayout]/[homeGridColumns]（沿用历史字段名）完全解耦。
+  final HomeLayout galleryLayout;
+
+  /// 首页网格列数（3 或 4）。
+  final int galleryGridColumns;
+
   /// 当前激活 Profile 的数据（便捷访问）。
   Profile get activeProfileData =>
       profiles[activeProfile] ?? profiles.values.first;
@@ -329,6 +338,8 @@ class AppConfig {
     bool? precacheEnabled,
     int? precacheQuotaMb,
     DrawerAnimSpeed? drawerAnimSpeed,
+    HomeLayout? galleryLayout,
+    int? galleryGridColumns,
   }) =>
       AppConfig(
         profiles: profiles ?? this.profiles,
@@ -347,6 +358,8 @@ class AppConfig {
         precacheEnabled: precacheEnabled ?? this.precacheEnabled,
         precacheQuotaMb: precacheQuotaMb ?? this.precacheQuotaMb,
         drawerAnimSpeed: drawerAnimSpeed ?? this.drawerAnimSpeed,
+        galleryLayout: galleryLayout ?? this.galleryLayout,
+        galleryGridColumns: galleryGridColumns ?? this.galleryGridColumns,
       );
 
   /// 序列化为 JSON（可逆，见 [fromJson]）。
@@ -366,6 +379,8 @@ class AppConfig {
         'precache_enabled': precacheEnabled,
         'precache_quota_mb': precacheQuotaMb,
         'drawer_anim_speed': drawerAnimSpeed.name,
+        'gallery_layout': galleryLayout.name,
+        'gallery_grid_columns': galleryGridColumns,
         'profiles': {
           for (final e in profiles.entries) e.key: e.value.toJson(),
         },
@@ -432,6 +447,10 @@ class AppConfig {
       precacheQuotaMb: (json['precache_quota_mb'] as int?) ?? 1024,
       drawerAnimSpeed: _parseDrawerAnimSpeed(
           json['drawer_anim_speed'], DrawerAnimSpeed.fast),
+      galleryLayout: _parseHomeLayout(
+          json['gallery_layout'], HomeLayout.grid),
+      galleryGridColumns:
+          (json['gallery_grid_columns'] as int?) ?? 4,
     );
   }
 }

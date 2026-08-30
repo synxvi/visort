@@ -142,6 +142,7 @@ const Map<String, String> stringsZh = {
   'enable': '开启',
 
   // ───────── Gallery (相册浏览) ─────────
+  // 首页（概念上的返回终点；文案仍称「相册」——bucket 网格浏览入口）
   'gallery_title': '相册',
   'album_sort': '排序',
   'view_immersive': '沉浸视图',
@@ -313,12 +314,15 @@ const Map<String, String> stringsZh = {
   // ───────── 设置 ─────────
   'settings_section_general': '通用',
   'lang_setting': '语言',
-  'settings_section_home': '首页',
+  'settings_section_home': '布局',
   'settings_section_album': '相册',
   'settings_title': '设置',
-  'settings_home_layout': '首页布局',
-  'settings_home_grid_cols': '首页网格列数',
-  'settings_album_grid_cols': '相册网格列数',
+  'settings_home_layout': '快速整理布局',
+  'settings_home_grid_cols': '快速整理列数',
+  // 布局节：相册页（返回终点）与快速整理页各自独立配置
+  'settings_homepage_layout': '相册布局',
+  'settings_homepage_grid_cols': '相册列数',
+  'settings_album_grid_cols': '相册内网格列数',
   // ── 缓存 ──
   'settings_section_cache': '缓存',
   'settings_precache': '空闲预缓存大图',
