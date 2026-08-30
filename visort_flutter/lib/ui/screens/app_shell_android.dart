@@ -276,25 +276,18 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
                         alignment: Alignment.topLeft,
                         scale: s,
                         child: DecoratedBox(
-                        // 卡片阴影（凸显缩小页与 surface 底色的分离）：
-                        // 一枚四周环绕+向下（浮起感），一枚左缘加深（贴抽屉
-                        // 分层的层次感）。alpha 随 t 渐入，收起态无阴影。
+                        // 卡片阴影：轻量单枚（小 blur + 轻微下沉）——大 blur
+                        // 双枚会在 surface 底色上糊出宽环带、与页面 bg 形成
+                        // 明显分层（真机实测），收敛到只做边缘描离。
+                        // alpha 随 t 渐入，收起态无阴影。
                         decoration: BoxDecoration(
                           boxShadow: [
-                            if (t > 0) ...[
+                            if (t > 0)
                               BoxShadow(
-                                color:
-                                    Colors.black.withValues(alpha: 0.55 * t),
-                                blurRadius: 40,
-                                offset: const Offset(0, 6),
+                                color: Colors.black.withValues(alpha: 0.35 * t),
+                                blurRadius: 14,
+                                offset: const Offset(0, 2),
                               ),
-                              BoxShadow(
-                                color:
-                                    Colors.black.withValues(alpha: 0.35 * t),
-                                blurRadius: 18,
-                                offset: const Offset(-6, 0),
-                              ),
-                            ],
                           ],
                         ),
                         child: ClipRRect(

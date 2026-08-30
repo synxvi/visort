@@ -19,7 +19,6 @@ import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
-import 'package:visort_flutter/shared/widgets/press_scale.dart';
 import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/ui/router.dart';
 import 'package:visort_flutter/ui/router_android.dart';
@@ -165,32 +164,44 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
     final buckets = gallery.sortedBuckets;
     // 尾部 inset = 手势条高度 + 网格间距：末行封面不被手势条压住。
     final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
-    return RefreshIndicator(
-      color: AppColors.accent,
-      onRefresh: () =>
-          ref.read(galleryControllerProvider.notifier).loadBuckets(silent: true),
-      child: GridView.builder(
-        // 动画对齐 ente：iOS 式回弹滚动物理。
-        physics: const BouncingScrollPhysics(
-          parent: AlwaysScrollableScrollPhysics(),
-        ),
-        padding: EdgeInsets.fromLTRB(12, 8, 12, 16 + bottomInset),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 14,
-          // cell 高 = 封面(正方形) + 名称/数量两行文字 ≈ 1.33 倍宽
-          childAspectRatio: 0.75,
-        ),
-        itemCount: buckets.length,
-        itemBuilder: (ctx, i) {
-          return _AlbumTile(
-            bucket: buckets[i],
-            flightTag: _flightTag,
-            onFlightStart: (tag) => setState(() => _flightTag = tag),
-          );
-        },
-      ),
+    // 网格结构与快速整理页完全一致：Wrap + 固定列宽（GridView 的
+    // childAspectRatio 会锁死 cell 高留白，见 home_screen_android 同款注释），
+    // 列数共用 homeGridColumns 配置——两处网格视觉统一。
+    final cols = ref.watch(configProvider).homeGridColumns;
+    const spacing = 4.0;
+    const hpad = 12.0;
+    return LayoutBuilder(
+      builder: (ctx, c) {
+        final cellW = (c.maxWidth - hpad * 2 - spacing * (cols - 1)) / cols;
+        return RefreshIndicator(
+          color: AppColors.accent,
+          onRefresh: () => ref
+              .read(galleryControllerProvider.notifier)
+              .loadBuckets(silent: true),
+          child: SingleChildScrollView(
+            // 动画对齐 ente：iOS 式回弹滚动物理（AlwaysScrollable 保下拉刷新）。
+            physics: const BouncingScrollPhysics(
+              parent: AlwaysScrollableScrollPhysics(),
+            ),
+            padding: EdgeInsets.fromLTRB(hpad, 8, hpad, 16 + bottomInset),
+            child: Wrap(
+              spacing: spacing,
+              runSpacing: spacing,
+              children: [
+                for (final bucket in buckets)
+                  SizedBox(
+                    width: cellW,
+                    child: _AlbumTile(
+                      bucket: bucket,
+                      flightTag: _flightTag,
+                      onFlightStart: (tag) => setState(() => _flightTag = tag),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -246,41 +257,76 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
   @override
   Widget build(BuildContext context) {
     final bucket = widget.bucket;
-    return PressScale(
-      onTap: _open,
+    // 点击行为对齐快速整理页的相册 tile：裸 GestureDetector 无按压反馈
+    //（Hero 封面飞行即反馈；旧版 PressScale 按压缩放是已废弃的交互）。
+    // 数量为封面左下角内嵌黑 badge，名称单行紧贴封面下。
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _CoverThumb(
-            coverId: bucket.coverId,
-            heroTag: _heroTag,
-            heroEnabled:
-                widget.flightTag == null || widget.flightTag == _heroTag,
-          ),
-          const SizedBox(height: 6),
-          Text(
-            bucket.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontFamily: 'Space Mono',
-              height: 1.2,
-              fontFamilyFallback: AppFonts.cjkFallback,
-              fontWeight: FontWeight.w600,
-              fontSize: 12,
-              color: AppColors.text,
+          AspectRatio(
+            aspectRatio: 1,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                GestureDetector(
+                  onTap: _open,
+                  child: LayoutBuilder(
+                    builder: (ctx, c) => _CoverThumb(
+                      coverId: bucket.coverId,
+                      heroTag: _heroTag,
+                      heroEnabled: widget.flightTag == null ||
+                          widget.flightTag == _heroTag,
+                      size: c.maxWidth,
+                    ),
+                  ),
+                ),
+                // 数量 badge：封面左下角内嵌（IgnorePointer 穿透点击进相册）
+                Positioned(
+                  left: 4,
+                  bottom: 4,
+                  child: IgnorePointer(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 1,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        '${bucket.count}',
+                        style: const TextStyle(
+                          fontSize: 9,
+                          color: Colors.white,
+                          fontFamily: 'Space Mono',
+                          height: 1.2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 1),
-          Text(
-            t(ref, 'photo_count', [bucket.count]),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontFamily: 'Space Mono',
-              fontFamilyFallback: AppFonts.cjkFallback,
-              fontSize: 10,
-              color: AppColors.muted,
+          const SizedBox(height: 4),
+          GestureDetector(
+            onTap: _open,
+            behavior: HitTestBehavior.opaque,
+            child: Text(
+              bucket.name.isEmpty ? t(ref, 'root_dir') : bucket.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontFamily: 'Space Mono',
+                height: 1.2,
+                fontFamilyFallback: AppFonts.cjkFallback,
+                fontWeight: FontWeight.w700,
+                fontSize: 11,
+                color: AppColors.text,
+              ),
             ),
           ),
         ],
@@ -289,15 +335,19 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
   }
 }
 
-/// 封面缩略图（正方形，圆角 10）。无封面时显示占位图标。
+/// 封面缩略图（正方形，圆角 8，与快速整理页 tile 一致）。无封面时占位图标。
 class _CoverThumb extends StatelessWidget {
   const _CoverThumb({
     required this.coverId,
+    required this.size,
     this.heroTag,
     this.heroEnabled = true,
   });
 
   final String? coverId;
+
+  /// 显示边长（cell 宽，LayoutBuilder 传入）。
+  final double size;
 
   /// 封面 Hero tag（网格第一张 id，enterBucket 后动态更新）；null 时用 coverId。
   final String? heroTag;
@@ -311,7 +361,7 @@ class _CoverThumb extends StatelessWidget {
       return Container(
         decoration: BoxDecoration(
           color: AppColors.surface,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(8),
           border: Border.all(color: AppColors.border),
         ),
         child: const Icon(Icons.photo_outlined,
@@ -320,9 +370,8 @@ class _CoverThumb extends StatelessWidget {
     }
     final ref = imageRefFromMediaStoreId(coverId!);
     // 封面缩略图像素尺寸 = 显示尺寸 × dpr（物理对齐，替代固定 300）
-    final side = MediaQuery.sizeOf(context).width / 3 - 14;
     final thumbSize =
-        (side * MediaQuery.devicePixelRatioOf(context)).round().clamp(96, 512);
+        (size * MediaQuery.devicePixelRatioOf(context)).round().clamp(96, 512);
     // [ente 对齐] 封面包 Hero：与相册网格第一张 cell（GalleryFileWidget
     // tag 'photo_${id}'）配对 → 进入/返回时封面↔第一张图飞行。
     return AspectRatio(
@@ -336,7 +385,7 @@ class _CoverThumb extends StatelessWidget {
                   (toHeroContext.widget as Hero).child,
           transitionOnUserGestures: true,
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(8),
             child: Image(
               image:
                   buildThumbnailProvider(ref, size: thumbSize, squareCrop: true),
