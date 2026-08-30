@@ -46,6 +46,11 @@ class SortSessionGate extends ConsumerWidget {
     // 空 session（未扫描直接进入）→ 回 Home
     if (session.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        // mounted 守卫：Results Continue 先 reset()（session 变空触发本分支）
+        // 再 popUntil，本回调执行时 sort 路由已被 pop、context 已失效——
+        // 无守卫会用死 context 重建 home，壳层重挂默认相册页，从快速整理页
+        // 发起的整理被甩回"首页"（真机实测）。完成态分支同款守卫。
+        if (!context.mounted) return;
         Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (_) => false);
       });
       return const Scaffold(body: SizedBox.shrink());
