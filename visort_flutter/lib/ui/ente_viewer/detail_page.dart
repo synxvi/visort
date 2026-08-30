@@ -35,6 +35,7 @@ import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart' show configProvider, t;
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
+import 'package:visort_flutter/shared/widgets/back_glyph_button.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/middle_ellipsis_text.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
@@ -107,11 +108,16 @@ class DetailPage extends ConsumerStatefulWidget {
   /// 翻页回调：网格滚动到当前行（Hero pop 时 cell 在视口才找得到飞行目标）。
   final ValueChanged<int>? onIndexChanged;
 
+  /// 来源视图的网格列数（相册内/收藏/回收站各自独立）：缩略图条按它取
+  /// cell 尺寸以命中网格的 ImageCache 档。null = 回退 config 相册内列数。
+  final int? gridCols;
+
   const DetailPage({
     super.key,
     required this.files,
     required this.initialIndex,
     this.onIndexChanged,
+    this.gridCols,
   });
 
   @override
@@ -642,8 +648,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
               // 页索引：顶层双击路由（Scrollable ballistic 中 ignorePointer
               // 屏蔽页内 tap → 双击由 detail_page 顶层捕获后按索引分发）。
               pageIndex: index,
-              // 与相册网格同列数：cell 缩略图尺寸一致（ImageCache key 命中）。
-              gridCols: ref.watch(configProvider).photoGridColumns,
+              // 与来源网格同列数：cell 缩略图尺寸一致（ImageCache key 命中）。
+              gridCols: widget.gridCols ??
+                  ref.watch(configProvider).photoGridColumns,
               shouldDisableScroll: (value) {
                 if (_shouldDisableScroll != value) {
                   setState(() => _shouldDisableScroll = value);
@@ -804,18 +811,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                 height: 56,
                                 child: Row(
                                   children: [
-                                    IconButton(
+                                    BackGlyphButton(
                                       // 与相册页 AppBar 返回箭头对齐（主分支同款 padding）。
-                                      padding: const EdgeInsets.fromLTRB(
-                                        16,
-                                        8,
-                                        8,
-                                        8,
-                                      ),
-                                      icon: const Icon(
-                                        Icons.arrow_back,
-                                        color: AppColors.text,
-                                      ),
+                                      // 自绘细线箭头：与抽屉侧栏 / 选项三线按钮同形制。
                                       tooltip: t(ref, 'back'),
                                       onPressed: () =>
                                           Navigator.maybePop(context),

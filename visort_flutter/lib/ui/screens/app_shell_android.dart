@@ -1,8 +1,8 @@
 // 安卓抽屉壳层 —— 左侧抽屉 + 一级页容器
 //
 // `/` 路由（仅安卓）挂本壳。5 个一级页以惰性 IndexedStack 保活：
-//   ① 相册（新独立浏览页，默认屏） ② 收藏 ③ 回收站 ④ 快速整理（原首页）
-//   ⑤ 设置
+//   ① 相册 ② SORT（快速整理，2026-08 更名+提位） ③ 收藏 ④ 回收站
+//   ⑤ 设置。默认首页可配（设置 → 通用，默认相册）——启动屏与返回终点。
 // 「惰性」= 访问过的页才真正 build（位掩码标记），未访问槽位放空盒——
 // 避免冷启时 5 页同时 initState（3 路 MediaStore 查询互相覆盖 loadToken、
 // 权限弹窗与数据加载竞态）。已访问页常驻，状态保留（快速整理页的勾选/
@@ -19,8 +19,9 @@
 // 全部同时回调，一级页不得再注册，一律走 [ShellHandle.onBack]）：
 //   1. 抽屉展开 → 收起抽屉
 //   2. 当前页勾选态 → 退出勾选（ShellHandle.onBack 返回 true 表示已消费）
-//   3. 非首页（相册页）→ 切回首页——首页是所有返回操作的应用内终点
-//   4. 首页 → moveTaskToBack 回桌面
+//   3. 非默认页 → 切回默认页——默认页是所有返回操作的应用内终点
+//      （设置 → 通用 → 默认首页，相册 / SORT / 收藏）
+//   4. 默认页 → moveTaskToBack 回桌面
 //
 // 手势分派（设计定稿）：
 //   - 快速整理页：整页右滑 = 呼出抽屉（子目录模式，原先无操作）/
@@ -38,7 +39,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:visort_flutter/core/config/models.dart' show DrawerAnimSpeed;
+import 'package:visort_flutter/core/config/models.dart'
+    show DefaultHomePage, DrawerAnimSpeed;
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
@@ -55,7 +57,7 @@ class ShellHandle {
   VoidCallback? _openDrawer;
   VoidCallback? _toggleDrawer;
 
-  /// 抽屉开合动画（0=收起 / 1=展开）。供顶栏 ☰ morph 成 ✕
+  /// 抽屉开合动画（0=收起 / 1=展开）。供顶栏侧栏图形 morph 成 ✕
   ///（[DrawerMenuButton]）——morph 严格限定在抽屉开合动画时长内。
   Animation<double>? drawerAnimation;
 
@@ -84,13 +86,20 @@ class AppShellAndroid extends ConsumerStatefulWidget {
 
 class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
     with TickerProviderStateMixin {
-  // 一级页下标（抽屉菜单顺序）
+  // 一级页下标（抽屉菜单顺序；SORT 提到第 2 项——2026-08 用户定稿）
   static const _pageAlbums = 0;
-  static const _pageFavorites = 1;
-  static const _pageTrash = 2;
-  static const _pageQuickSort = 3;
+  static const _pageQuickSort = 1;
+  static const _pageFavorites = 2;
+  static const _pageTrash = 3;
   static const _pageSettings = 4;
   static const _pageCount = 5;
+
+  /// 默认首页（[DefaultHomePage] 配置）对应的一级页下标。
+  int _homeIndexOf(DefaultHomePage page) => switch (page) {
+        DefaultHomePage.gallery => _pageAlbums,
+        DefaultHomePage.sort => _pageQuickSort,
+        DefaultHomePage.favorites => _pageFavorites,
+      };
 
   /// 缩放推拉动画参数（参考演示实测观感）：
   /// 抽屉宽 = 屏宽 66%（窄屏夹 250 / 宽屏夹 340）；当前页 scale 0.88、
@@ -99,8 +108,9 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
   static const _pageRadius = 16.0;
   static const _drawerParallax = 0.25; // 抽屉入场反向偏移（视差）
 
-  int _currentPage = _pageAlbums; // 默认屏 = 相册
-  int _visited = 1 << _pageAlbums;
+  /// 当前页下标。初始 = 默认首页（设置 → 通用，默认相册；下次启动生效）。
+  late int _currentPage;
+  late int _visited;
   bool _drawerEverOpened = false; // 抽屉内容惰性构建（logo 入场动画随首开播放）
   Timer? _prewarmTimer;
 
@@ -119,6 +129,10 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
   @override
   void initState() {
     super.initState();
+    // 启动屏 = 配置的默认首页（下次启动生效语义：读的是持久化配置）。
+    _currentPage =
+        _homeIndexOf(ref.read(configProvider).defaultHomePage);
+    _visited = 1 << _currentPage;
     _drawerCtrl = AnimationController(
       vsync: this,
       duration: AppDurations.activity,
@@ -248,8 +262,9 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
     _handles[index].onActivated?.call();
   }
 
-  /// 返回键四段分发（类注释）：首页是所有返回操作的应用内终点——
-  /// 非首页页按返回切回首页，仅首页退桌面（moveTaskToBack）。
+  /// 返回键四段分发（类注释）：默认首页是所有返回操作的应用内终点——
+  /// 非默认页按返回切回默认页（设置 → 通用 → 默认首页，2026-08 起可配，
+  /// 原硬编码相册页），仅默认页退桌面（moveTaskToBack）。
   void _onBackInvoked(bool didPop, _) {
     if (didPop) return;
     if (_drawerCtrl.value > 0) {
@@ -258,8 +273,9 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
     }
     final handler = _handles[_currentPage].onBack;
     if (handler != null && handler()) return;
-    if (_currentPage != _pageAlbums) {
-      _fadeToPage(_pageAlbums);
+    final homeIndex = _homeIndexOf(ref.read(configProvider).defaultHomePage);
+    if (_currentPage != homeIndex) {
+      _fadeToPage(homeIndex);
       return;
     }
     const MethodChannel('visort/app').invokeMethod('moveTaskToBack');
@@ -500,9 +516,9 @@ class _DrawerContent extends ConsumerWidget {
 
   static const _items = [
     (0, Icons.photo_library_outlined, 'gallery_title'),
-    (1, Icons.favorite_border, 'favorites_title'),
-    (2, Icons.delete_outline, 'trash_title'),
-    (3, Icons.bolt_outlined, 'quick_sort_title'),
+    (1, Icons.bolt_outlined, 'quick_sort_title'),
+    (2, Icons.favorite_border, 'favorites_title'),
+    (3, Icons.delete_outline, 'trash_title'),
     (4, Icons.settings_outlined, 'settings_title'),
   ];
 
@@ -669,10 +685,12 @@ class DrawerSwipeWrapper extends StatelessWidget {
 }
 
 /// 一级页顶栏的抽屉按钮（四页共用）：随抽屉开合在开合动画时长内
-/// morph 为 ✕（AnimatedIcons.menu_close，进度 = Shell 的抽屉动画），
-/// 展开态点按收起、收起态点按展开。
+/// morph 为 ✕（自绘侧栏图形 ↔ ✕，进度 = Shell 的抽屉动画），展开态
+/// 点按收起、收起态点按展开。侧栏图形（面板框 + 左分隔线）与右侧选项
+/// 按钮 ViewOptionsToggle 的三线筛选图标分属不同形状族，避免 ☰ 的
+/// 同形冲突（2026-08 用户反馈）。
 ///
-/// 视觉下移 1.5dp 补偿：menu/close 字形光学重心在 24px 框内偏上，与
+/// 视觉下移 1.5dp 补偿：字形光学重心在 24px 框内偏上，与
 /// 16px Space Mono 标题（height 1.2）水平居中对齐时观感偏高（真机实测）；
 /// Transform.translate 不动布局盒，点击区不受影响。
 class DrawerMenuButton extends StatelessWidget {
@@ -688,18 +706,79 @@ class DrawerMenuButton extends StatelessWidget {
       tooltip: tooltip,
       onPressed: handle?.toggleDrawer,
       icon: Transform.translate(
-        offset: const Offset(0, 1.5),
+        // 光学补偿（不动布局盒/点击区）：x −4 = 字形左缘距屏 16dp，
+        // 与内容区（bucket 网格 hpad12 + tile 内边 4）左右两缘对齐且与
+        // 右侧 ViewOptionsToggle 图标边距对称（真机实测 20dp → 16dp）；
+        // y +1.5 = 字形光学重心偏上补偿（原 menu/close 实测，见类注释）。
+        offset: const Offset(-4, 1.5),
         child: anim != null
             ? AnimatedBuilder(
                 animation: anim,
-                builder: (ctx, _) => AnimatedIcon(
-                  icon: AnimatedIcons.menu_close,
-                  progress: anim,
-                  color: AppColors.text,
+                builder: (ctx, _) => CustomPaint(
+                  size: const Size.square(24),
+                  painter: _SidebarMorphPainter(anim.value),
                 ),
               )
-            : const Icon(Icons.menu, color: AppColors.text),
+            : const Icon(Icons.view_sidebar_outlined, color: AppColors.text),
       ),
     );
   }
+}
+
+/// 抽屉按钮配套 morph：0 = 侧栏图形（圆角面板框 + 左侧竖分隔线），
+/// 1 = ✕。面板框绕中心收缩淡出、✕ 两臂自中心生长，在抽屉开合动画
+/// 时长内连续形变（接替 AnimatedIcons.menu_close——其收起态 ☰ 与
+/// 右侧三线筛选图标同形族冲突）。
+class _SidebarMorphPainter extends CustomPainter {
+  const _SidebarMorphPainter(this.t);
+
+  /// morph 进度：0 = 侧栏图形（抽屉收起），1 = ✕（抽屉展开）。
+  final double t;
+
+  /// ✕ 四臂端点（24 视口，与 _FilterMorphPainter 同几何）。
+  static const _x1 = Offset(7.2, 7.2), _x2 = Offset(16.8, 16.8);
+  static const _x3 = Offset(16.8, 7.2), _x4 = Offset(7.2, 16.8);
+  static const _c = Offset(12, 12);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 24);
+    final stroke = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.9
+      ..strokeCap = StrokeCap.round;
+
+    // 面板框 + 左分隔线：绕中心收缩（1 → 0.5）并淡出。
+    final frameAlpha = (1 - t).clamp(0.0, 1.0);
+    if (frameAlpha > 0) {
+      stroke.color = AppColors.text.withValues(alpha: frameAlpha);
+      final s = 1 - 0.5 * t;
+      final rect = Rect.fromCenter(
+        center: _c,
+        width: 14 * s,
+        height: 13 * s,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(2)),
+        stroke,
+      );
+      final dx = rect.left + rect.width * 0.32;
+      canvas.drawLine(Offset(dx, rect.top), Offset(dx, rect.bottom), stroke);
+    }
+
+    // ✕ 两臂：自中心向外生长。
+    final xAlpha = t.clamp(0.0, 1.0);
+    if (xAlpha > 0) {
+      stroke.color = AppColors.text.withValues(alpha: xAlpha);
+      Offset grow(Offset p) =>
+          Offset(_c.dx + (p.dx - _c.dx) * t, _c.dy + (p.dy - _c.dy) * t);
+      canvas.drawLine(grow(_x1), grow(_x2), stroke);
+      canvas.drawLine(grow(_x3), grow(_x4), stroke);
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_SidebarMorphPainter oldDelegate) => oldDelegate.t != t;
 }

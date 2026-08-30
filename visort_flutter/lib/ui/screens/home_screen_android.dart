@@ -30,9 +30,9 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/scan/scan_controller.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/shared/widgets/resume_button.dart';
-import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart'
     show showCenterDialog;
+import 'package:visort_flutter/shared/widgets/view_options_toggle.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/router.dart';
 import 'package:visort_flutter/ui/router_android.dart';
@@ -556,14 +556,17 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           ),
         ),
         actions: [
-          // 相册排序（源/目标 section 共用同一排序状态 albumSortBy/Asc）。
-          // 原 Transform.translate(14,0) 是为贴近 ⋮ 的微调，⋮ 已随菜单
-          // 迁入抽屉删除，SortToggle 现为唯一 action，不再需要。
+          // 视图选项（[ente 对齐]）：布局切换 + 网格列数 + 排序收口到一个
+          // 选项按钮；相册排序为源/目标 section 共用状态 albumSortBy/Asc。
           // 品牌 logo 已随抽屉定稿移除（只留抽屉头部一处）。
-          SortToggle(
+          ViewOptionsToggle(
+            layout: config.homeLayout,
+            onLayoutChanged: _setHomeLayout,
+            gridColumns: config.homeGridColumns,
+            onGridColumnsChanged: _setHomeGridColumns,
             sortBy: config.albumSortBy,
             asc: config.albumSortAsc,
-            onChanged: _setAlbumSort,
+            onSortChanged: _setAlbumSort,
           ),
         ],
       ),
@@ -606,7 +609,8 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                   transitionBuilder: (child, animation) =>
                       FadeTransition(opacity: animation, child: child),
                   child: KeyedSubtree(
-                    key: ValueKey((config.albumSortBy, config.albumSortAsc)),
+                    key: ValueKey(
+                        (config.albumSortBy, config.albumSortAsc, config.homeLayout)),
                     child: _buildBody(),
                   ),
                 ),
@@ -1186,6 +1190,20 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     ref.read(configProvider.notifier).state = updated;
     await ref.read(profilesServiceProvider).save(updated);
     setState(() {});
+  }
+
+  /// 切换源相册区布局（列表↔网格）并持久化（选项面板回调）。
+  Future<void> _setHomeLayout(HomeLayout layout) async {
+    final updated = ref.read(configProvider).copyWith(homeLayout: layout);
+    ref.read(configProvider.notifier).state = updated;
+    await ref.read(profilesServiceProvider).save(updated);
+  }
+
+  /// 步进源相册区网格列数并持久化（选项面板回调）。
+  Future<void> _setHomeGridColumns(int cols) async {
+    final updated = ref.read(configProvider).copyWith(homeGridColumns: cols);
+    ref.read(configProvider.notifier).state = updated;
+    await ref.read(profilesServiceProvider).save(updated);
   }
 
   /// 实时持久化 toNewDir 编辑（父目录 + 子目录）到 config：内存即时更新，

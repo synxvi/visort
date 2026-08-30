@@ -87,7 +87,8 @@ const Map<String, String> stringsEn = {
   // ───────── Home (Android, A2) ─────────
   'home_title_android': 'Sort Images',
   // 抽屉一级页「快速整理」（原首页主屏功能在抽屉里的名称）
-  'quick_sort_title': 'Quick Sort',
+  // 抽屉一级页「SORT」（原「Quick Sort」，2026-08 用户更名，双语文案一致）
+  'quick_sort_title': 'SORT',
   // 设置-通用：抽屉动画档位（舒适 320/240ms，快速 250/200ms）
   'settings_drawer_speed': 'Drawer animation',
   'drawer_speed_fast': 'Fast',
@@ -147,15 +148,13 @@ const Map<String, String> stringsEn = {
   // ───────── Gallery (相册浏览) ─────────
   // 首页（概念上的返回终点；文案仍称「相册」——bucket 网格浏览入口）
   'gallery_title': 'Albums',
-  'album_sort': 'Sort',
+  'view_options': 'View Options',
   'view_immersive': 'Immersive view',
   'view_date': 'Date view',
   'sort_by_name': 'By Name',
   'sort_by_date_created': 'By Created Date',
   'sort_by_date_modified': 'By Modified Date',
   'sort_by_date_trashed': 'By Deleted Date',
-  'sort_asc': 'Ascending',
-  'sort_desc': 'Descending',
   'photo_count': '{0} photos',
   'album_empty': 'This album is empty',
   'today': 'Today',
@@ -321,8 +320,7 @@ const Map<String, String> stringsEn = {
   // ───────── 设置 ─────────
   'settings_section_general': 'General',
   'lang_setting': 'Language',
-  'settings_section_home': 'Layout',
-  'settings_section_album': 'Album',
+  'settings_default_home': 'Default Home',
   'settings_section_cache': 'Cache',
   'settings_precache': 'Idle Precache',
   'settings_precache_quota': 'Quota',
@@ -340,15 +338,9 @@ const Map<String, String> stringsEn = {
       'All full-image and thumbnail caches will be cleared and regenerated on next browse',
   'settings_cache_cleared': 'Freed',
   'settings_title': 'Settings',
-  'settings_home_layout': 'Quick Sort Layout',
-  'settings_home_grid_cols': 'Quick Sort Columns',
-  // 布局节：相册页（返回终点）与快速整理页各自独立配置
-  'settings_homepage_layout': 'Album Layout',
-  'settings_homepage_grid_cols': 'Album Columns',
-  'settings_album_grid_cols': 'In-album Grid Columns',
   'layout_list': 'List',
   'layout_grid': 'Grid',
-  'cols_unit': 'columns',
+  'grid_columns': 'Grid Columns',
   // 日期分组/详情面板
   'date_today': 'Today',
   'date_yesterday': 'Yesterday',

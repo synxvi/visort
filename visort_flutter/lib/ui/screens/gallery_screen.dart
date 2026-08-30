@@ -5,7 +5,9 @@
 // （行式列表 + 源相册勾选 Checkbox + 收藏/回收站入口行）已随抽屉重构
 // 重写：勾选职责归快速整理页、收藏/回收站归抽屉一级页，本页只做浏览。
 //
-// 排序：AppBar 右侧 SortToggle（GalleryController.albumSortBy，偏好持久化）。
+// 视图选项：AppBar 右侧 ViewOptionsToggle（[ente 对齐] 布局列表↔网格单条目
+// 切换 + 网格列数步进 + 排序点按换向），排序态在 GalleryController、布局/
+// 列数在 configProvider，均持久化。
 //
 // 刷新时机：initState（首启）、抽屉切回本页（ShellHandle.onActivated）、
 // 从相册内/看图器 pop 回 `/`（currentRouteName 监听）——三处都静默重查
@@ -20,7 +22,7 @@ import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
-import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
+import 'package:visort_flutter/shared/widgets/view_options_toggle.dart';
 import 'package:visort_flutter/ui/router.dart';
 import 'package:visort_flutter/ui/router_android.dart';
 import 'package:visort_flutter/ui/screens/app_shell_android.dart'
@@ -70,6 +72,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
   @override
   Widget build(BuildContext context) {
     final gallery = ref.watch(galleryControllerProvider);
+    final config = ref.watch(configProvider);
     return Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
@@ -91,16 +94,21 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
           ),
         ),
         actions: [
-          SortToggle(
+          ViewOptionsToggle(
+            layout: config.galleryLayout,
+            onLayoutChanged: _setLayout,
+            gridColumns: config.galleryGridColumns,
+            onGridColumnsChanged: _setGridColumns,
             sortBy: gallery.albumSortBy,
             asc: gallery.albumSortAsc,
-            onChanged: (by, asc) => ref
+            onSortChanged: (by, asc) => ref
                 .read(galleryControllerProvider.notifier)
                 .setAlbumSort(by, asc),
           ),
         ],
       ),
-      // [ente 对齐] 排序切换内容交叉淡入 150ms（easeInQuart / easeOutExpo）。
+      // [ente 对齐] 排序/布局切换内容交叉淡入 150ms（easeInQuart / easeOutExpo）。
+      // 列数步进不参与 key：网格 cell 宽度跟随 reflow 即可，交叉淡入反而闪。
       // edge-to-edge：bottom:false，网格延伸到物理底边，尾部 inset 避让手势条。
       body: SafeArea(
         bottom: false,
@@ -119,12 +127,29 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
           transitionBuilder: (child, animation) =>
               FadeTransition(opacity: animation, child: child),
           child: KeyedSubtree(
-            key: ValueKey((gallery.albumSortBy, gallery.albumSortAsc)),
+            key: ValueKey(
+                (gallery.albumSortBy, gallery.albumSortAsc, config.galleryLayout)),
             child: _buildBody(gallery),
           ),
         ),
       ),
     );
+  }
+
+  /// 切换相册页布局（列表↔网格）并持久化。
+  Future<void> _setLayout(HomeLayout layout) async {
+    final updated =
+        ref.read(configProvider).copyWith(galleryLayout: layout);
+    ref.read(configProvider.notifier).state = updated;
+    await ref.read(profilesServiceProvider).save(updated);
+  }
+
+  /// 步进相册页网格列数并持久化。
+  Future<void> _setGridColumns(int cols) async {
+    final updated =
+        ref.read(configProvider).copyWith(galleryGridColumns: cols);
+    ref.read(configProvider.notifier).state = updated;
+    await ref.read(profilesServiceProvider).save(updated);
   }
 
   Widget _buildBody(GalleryState gallery) {
