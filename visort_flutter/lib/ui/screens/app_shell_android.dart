@@ -320,13 +320,22 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
   }
 
   /// 惰性 IndexedStack：未访问槽位空盒，访问过的页常驻保活。
+  ///
+  /// 每页外包 HeroMode：仅当前活动页的 Hero 参与 flight——IndexedStack 的
+  /// 非活动页（含预热的快速整理页）虽不绘制但 render 树在、坐标真实，
+  /// 其相册 tile 的 Hero tag（photo_coverId）与活动页目标 tile 的
+  /// （photo_第一张id，封面=第一张时相等）冲突，Hero 解析按遍历序后者
+  /// 覆盖前者 → 飞行起点取到不可见页的 tile 坐标（右下角起飞，真机实测）。
   Widget _buildPages() {
     return IndexedStack(
       index: _currentPage,
       children: [
         for (var i = 0; i < _pageCount; i++)
           (_visited & (1 << i)) != 0
-              ? _pageWidget(i)
+              ? HeroMode(
+                  enabled: i == _currentPage,
+                  child: _pageWidget(i),
+                )
               : const SizedBox.shrink(),
       ],
     );
