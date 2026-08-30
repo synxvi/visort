@@ -35,6 +35,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:visort_flutter/core/config/models.dart' show DrawerAnimSpeed;
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
@@ -49,9 +50,17 @@ import 'package:visort_flutter/ui/screens/settings_screen.dart';
 /// 页在 initState 挂回调、dispose 摘除（[onBack]/[onActivated] 置 null）。
 class ShellHandle {
   VoidCallback? _openDrawer;
+  VoidCallback? _toggleDrawer;
+
+  /// 抽屉开合动画（0=收起 / 1=展开）。供顶栏 ☰ morph 成 ✕
+  ///（[DrawerMenuButton]）——morph 严格限定在抽屉开合动画时长内。
+  Animation<double>? drawerAnimation;
 
   /// 呼出抽屉（页面 ☰ 按钮 / 快速整理页子目录模式右滑）。
   void openDrawer() => _openDrawer?.call();
+
+  /// 切换抽屉（展开态点 ✕ = 收起）。[DrawerMenuButton] 用。
+  void toggleDrawer() => _toggleDrawer?.call();
 
   /// 返回键拦截：非 null 时在 moveTaskToBack 前调用；返回 true = 已消费
   /// （如退出勾选态），false = 落到退后台。仅当前页的拦截会被咨询。
@@ -112,6 +121,8 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
     _handles = List.generate(_pageCount, (_) => ShellHandle());
     for (final h in _handles) {
       h._openDrawer = _openDrawer;
+      h._toggleDrawer = _toggleDrawer;
+      h.drawerAnimation = _drawerAnim;
     }
     // 空闲预热快速整理页：冷启动 2.5s 后（首屏相册网格解码已让位）offstage
     // 预构建——IndexedStack 非活动页 build+layout 但不 paint，buckets 查询与
@@ -140,17 +151,20 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
   void _openDrawer() {
     if (_drawerCtrl.isCompleted) return;
     setState(() => _drawerEverOpened = true);
-    // 快速呼出入口（☰/快速整理页右滑≈迅速滑动语义）：250ms 上限，
-    // 与 fling 路径一致；settleDrawer 缩短过的 duration 在此覆盖。
-    _drawerCtrl.duration = const Duration(milliseconds: _flingSettleMs);
+    // ☰/快速右滑≈迅速滑动语义：恒用黄金值（250ms 上限），与档位无关。
+    _drawerCtrl.duration = const Duration(milliseconds: _flingOpenMs);
     _drawerCtrl.forward();
   }
 
   void _closeDrawer() {
     if (_drawerCtrl.isDismissed) return;
-    _drawerCtrl.duration = AppDurations.activity;
+    _drawerCtrl.duration = _closeDuration;
     _drawerCtrl.reverse();
   }
+
+  /// ☰/✕ 按钮切换：展开态（过半）点按 = 收起，否则展开。
+  void _toggleDrawer() =>
+      _drawerAnim.value > 0.5 ? _closeDrawer() : _openDrawer();
 
   /// 切换一级页：先收抽屉（关闭动画正好把新页从缩小态推回全屏，遮住切换），
   /// 再切 IndexedStack 下标；收藏/回收站静默重查（silent 保留旧数据直到
@@ -184,52 +198,17 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
     const MethodChannel('visort/app').invokeMethod('moveTaskToBack');
   }
 
-  // ── 跟手拖动（推拉手势核心）──
-  // 收起态：DrawerSwipeWrapper（四页包装）把水平拖动转发到本层，抽屉跟
-  // 手拖出（t 随 dx 增减）；展开态：页面被 IgnorePointer 屏蔽，Shell 顶层
-  // GestureDetector 独占（同一套方法，两个入口共享判定逻辑）。
-  // 快速整理页不参与跟手（整页水平手势归模式切换，避免 arena 竞争），
-  // 其右滑呼出走 openDrawer() 播完整动画。
-  static const _flingVelocity = 250.0;
-  static const _settleThreshold = 0.35; // 慢速松手的展开阈值（拖出 35% 即开）
-  static const _flingSettleMs = 250; // 快甩路径补齐动画的全程上限（ms）
+  // ── 开合时长（无跟手——用户定稿：仅 ☰ 按钮与快速右滑触发）──
+  // 呼出（按钮/快甩）：恒 250ms 黄金值；收起按设置档位（非对称，关快于开）。
+  static const _flingOpenMs = 250;
+  static const _flingCloseMs = 200;
 
-  void _onDrawerDragUpdate(DragUpdateDetails d) {
-    final drawerW = _drawerWidth(context);
-    // 右滑 dx>0 → t 增大（抽屉展开方向）；clamp 防越界（控制器越界会抛错）。
-    _drawerCtrl.value =
-        (_drawerCtrl.value + d.delta.dx / drawerW).clamp(0.0, 1.0);
-    // 跟手拖出即需抽屉内容（不经 _openDrawer 的直接拖开路径）
-    if (!_drawerEverOpened) setState(() => _drawerEverOpened = true);
-  }
-
-  void _onDrawerDragEnd(DragEndDetails d) {
-    final v = d.primaryVelocity ?? 0;
-    if (v > _flingVelocity) {
-      _settleDrawer(true, fling: true);
-    } else if (v < -_flingVelocity) {
-      _settleDrawer(false, fling: true);
-    } else {
-      // 慢速松手：拖出超过阈值（或已大半展开）→ 展开，否则收回。
-      _settleDrawer(_drawerCtrl.value >= _settleThreshold);
-    }
-  }
-
-  /// 松手后的补齐动画：时长按剩余行程比例缩短，从半程松手只需约一半
-  /// 时间落位，跟手体验不被拖沓的定长动画打断。下限 60ms 防退化。
-  /// [fling]：快速甩动路径——全程上限 250ms（迅速滑动完全展开须 ≤250，
-  /// 用户实测手感要求）；慢速判定回弹用全量 token 350ms。
-  void _settleDrawer(bool open, {bool fling = false}) {
-    final remain = open ? 1 - _drawerCtrl.value : _drawerCtrl.value;
-    if (remain <= 0) return;
-    final full = fling
-        ? _flingSettleMs
-        : AppDurations.activity.inMilliseconds;
-    _drawerCtrl.duration = Duration(
-      milliseconds: (full * remain).round().clamp(60, full),
-    );
-    open ? _drawerCtrl.forward() : _drawerCtrl.reverse();
-  }
+  /// 收起档位时长（设置「抽屉动画」）：快速 200 / 舒适 240。
+  Duration get _closeDuration => Duration(
+      milliseconds:
+          ref.read(configProvider).drawerAnimSpeed == DrawerAnimSpeed.fast
+              ? _flingCloseMs
+              : 240);
 
   @override
   Widget build(BuildContext context) {
@@ -246,44 +225,39 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
           builder: (ctx, pages) {
             final t = _drawerAnim.value;
             final drawerW = _drawerWidth(ctx);
-            // 展开态（含开/关动画过程中）整屏跟手；收起态 handler 全 null
-            // 不注册识别器，页面自身手势不受竞争。
-            final drawerActive = t > 0;
-            return GestureDetector(
-              onHorizontalDragUpdate: drawerActive ? _onDrawerDragUpdate : null,
-              onHorizontalDragEnd: drawerActive ? _onDrawerDragEnd : null,
-              child: Stack(
-                children: [
-                  // ── 退让区底色：bg → surface 随 t 过渡 ──
-                  // 展开时缩小页四周露出的底色与抽屉面板统一（surface），
-                  // 收起态（t=0）保持 bg（页面满屏盖住，不可见）。
-                  Positioned.fill(
-                    child: ColoredBox(
-                      color: ColorTween(
-                        begin: AppColors.bg,
-                        end: AppColors.surface,
-                      ).evaluate(_drawerAnim) ?? AppColors.bg,
+            return Stack(
+              children: [
+                // ── 退让区底色：bg → surface 随 t 过渡 ──
+                // 展开时缩小页四周露出的底色与抽屉面板统一（surface），
+                // 收起态（t=0）保持 bg（页面满屏盖住，不可见）。
+                Positioned.fill(
+                  child: ColoredBox(
+                    color: ColorTween(
+                      begin: AppColors.bg,
+                      end: AppColors.surface,
+                    ).evaluate(_drawerAnim) ?? AppColors.bg,
+                  ),
+                ),
+                // ── 抽屉（底层）：视差滑入 ──
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: drawerW,
+                  child: Transform.translate(
+                    offset: Offset(-_drawerParallax * drawerW * (1 - t), 0),
+                    child: Material(
+                      color: AppColors.surface,
+                      child: _drawerEverOpened
+                          ? _DrawerContent(
+                              current: _currentPage,
+                              onSelect: _selectPage,
+                              progress: _drawerAnim.value,
+                            )
+                          : const SizedBox.shrink(),
                     ),
                   ),
-                  // ── 抽屉（底层）：视差滑入 ──
-                  Positioned(
-                    left: 0,
-                    top: 0,
-                    bottom: 0,
-                    width: drawerW,
-                    child: Transform.translate(
-                      offset: Offset(-_drawerParallax * drawerW * (1 - t), 0),
-                      child: Material(
-                        color: AppColors.surface,
-                        child: _drawerEverOpened
-                            ? _DrawerContent(
-                                current: _currentPage,
-                                onSelect: _selectPage,
-                              )
-                            : const SizedBox.shrink(),
-                      ),
-                    ),
-                  ),
+                ),
                   // ── 当前页（顶层）：缩小 + 右移 + 圆角 + 投影 ──
                   // 垂直居中用显式数学（topLeft 锚点 + y 平移 (1-s)h/2），
                   // 上下留白严格对称，不依赖 alignment 的 pivot 语义
@@ -332,7 +306,6 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
                   },
                   ),
                 ],
-              ),
             );
           },
         ),
@@ -383,20 +356,28 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
       default:
         throw StateError('unreachable page index $index');
     }
-    return DrawerSwipeWrapper(
-      onDragUpdate: _onDrawerDragUpdate,
-      onDragEnd: _onDrawerDragEnd,
-      child: page,
-    );
+    return DrawerSwipeWrapper(onSwipeRight: _openDrawer, child: page);
   }
 }
 
 /// 抽屉面板：VISORT 品牌头部 + 5 项菜单（当前项 accent pill 高亮 + 圆点）。
+///
+/// [t] = 抽屉开合进度：头部与各项依次错峰显现——由左向右滑入 + 淡入，
+/// 顺序由上到下（头部→相册→…→设置），错峰窗口占开合动画的 60%，每项
+/// 自身时长 40%，全部在抽屉展开/消失的动画时长内完成。收起时按同一
+/// 插值反向退场（与面板整体左滑方向一致）。
 class _DrawerContent extends ConsumerWidget {
-  const _DrawerContent({required this.current, required this.onSelect});
+  const _DrawerContent({
+    required this.current,
+    required this.onSelect,
+    required this.progress,
+  });
 
   final int current;
   final ValueChanged<int> onSelect;
+
+  /// 抽屉开合进度（0~1）。命名避开 i18n 的全局 [t] 函数。
+  final double progress;
 
   static const _items = [
     (0, Icons.photo_library_outlined, 'gallery_title'),
@@ -406,25 +387,53 @@ class _DrawerContent extends ConsumerWidget {
     (4, Icons.settings_outlined, 'settings_title'),
   ];
 
+  /// 单元素错峰显现：[i]/[total] 决定错峰起点，easeOutCubic 快起缓收。
+  Widget _staggerIn(int i, int total, Widget child) {
+    final begin = (i / total) * 0.6;
+    final v = Interval(begin, begin + 0.4, curve: Curves.easeOutCubic)
+        .transform(progress.clamp(0.0, 1.0));
+    return Opacity(
+      opacity: v,
+      child: Transform.translate(
+        offset: Offset(-28 * (1 - v), 0),
+        child: child,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // 参与错峰的元素数（头部 + 5 项；_items.length 非 const 可表达式，硬编码）
+    const total = 6;
     return SafeArea(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // 品牌头部：VisortLogo 首实例播放入场动画（惰性构建 → 随首次
           // 开抽屉播放；若快速整理页先被访问，则在该页顶栏播放，闸门一致）。
-          const Padding(
-            padding: EdgeInsets.fromLTRB(20, 18, 20, 10),
-            child: VisortLogo(),
+          _staggerIn(
+            0,
+            total,
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 18, 20, 10),
+              child: VisortLogo(),
+            ),
           ),
-          const SizedBox(height: 18),
+          _staggerIn(
+            0,
+            total,
+            const SizedBox(height: 18),
+          ),
           for (final (index, icon, labelKey) in _items)
-            _DrawerItem(
-              icon: icon,
-              label: t(ref, labelKey),
-              active: index == current,
-              onTap: () => onSelect(index),
+            _staggerIn(
+              index + 1,
+              total,
+              _DrawerItem(
+                icon: icon,
+                label: t(ref, labelKey),
+                active: index == current,
+                onTap: () => onSelect(index),
+              ),
             ),
           const Spacer(),
         ],
@@ -492,8 +501,8 @@ class _DrawerItem extends StatelessWidget {
   }
 }
 
-/// 收起态整页跟手呼出抽屉的包装。水平拖动实时转发给 Shell（抽屉跟手
-/// 拖出/收回），松手由 Shell 按速度/阈值判定展开或回弹。
+/// 收起态整页快速右滑呼出抽屉的包装。无跟手（用户定稿：仅 ☰ 按钮与
+/// 快速右滑触发，松手判速度后播完整开合动画）。
 /// 点击/长按与垂直滚动不受影响（arena 裁决垂直归滚动、tap 归 InkWell），
 /// 纯水平拖动由本层赢。
 ///
@@ -507,25 +516,60 @@ class DrawerSwipeWrapper extends StatelessWidget {
   const DrawerSwipeWrapper({
     super.key,
     required this.child,
-    required this.onDragUpdate,
-    required this.onDragEnd,
+    required this.onSwipeRight,
   });
 
   final Widget child;
+  final VoidCallback onSwipeRight;
 
-  /// 转发 Shell 的跟手更新（t 随 dx 增减）。
-  final ValueChanged<DragUpdateDetails> onDragUpdate;
-
-  /// 转发 Shell 的松手判定（速度/阈值 → 展开或回弹）。
-  final ValueChanged<DragEndDetails> onDragEnd;
+  static const _velocityThreshold = 300.0;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onHorizontalDragUpdate: onDragUpdate,
-      onHorizontalDragEnd: onDragEnd,
+      onHorizontalDragEnd: (d) {
+        if ((d.primaryVelocity ?? 0) > _velocityThreshold) {
+          onSwipeRight();
+        }
+      },
       child: child,
+    );
+  }
+}
+
+/// 一级页顶栏的抽屉按钮（四页共用）：随抽屉开合在开合动画时长内
+/// morph 为 ✕（AnimatedIcons.menu_close，进度 = Shell 的抽屉动画），
+/// 展开态点按收起、收起态点按展开。
+///
+/// 视觉下移 1.5dp 补偿：menu/close 字形光学重心在 24px 框内偏上，与
+/// 16px Space Mono 标题（height 1.2）水平居中对齐时观感偏高（真机实测）；
+/// Transform.translate 不动布局盒，点击区不受影响。
+class DrawerMenuButton extends StatelessWidget {
+  const DrawerMenuButton({super.key, this.handle, this.tooltip});
+
+  final ShellHandle? handle;
+  final String? tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final anim = handle?.drawerAnimation;
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: handle?.toggleDrawer,
+      icon: Transform.translate(
+        offset: const Offset(0, 1.5),
+        child: anim != null
+            ? AnimatedBuilder(
+                animation: anim,
+                builder: (ctx, _) => AnimatedIcon(
+                  icon: AnimatedIcons.menu_close,
+                  progress: anim,
+                  color: AppColors.text,
+                ),
+              )
+            : const Icon(Icons.menu, color: AppColors.text),
+      ),
     );
   }
 }

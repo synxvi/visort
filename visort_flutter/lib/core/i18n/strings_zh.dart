@@ -88,6 +88,10 @@ const Map<String, String> stringsZh = {
   'home_title_android': '整理图片',
   // 抽屉一级页「快速整理」（原首页主屏功能在抽屉里的名称）
   'quick_sort_title': '快速整理',
+  // 设置-通用：抽屉动画档位（舒适 320/240ms，快速 250/200ms）
+  'settings_drawer_speed': '抽屉动画',
+  'drawer_speed_fast': '快速',
+  'drawer_speed_comfortable': '舒适',
   'home_hint_android': '选择一个目录，图片将分类到其中的子文件夹。',
   'pick_dir_android': '选择目录',
   'auth_revoked': '目录访问权限已被撤销，请重新选择。',

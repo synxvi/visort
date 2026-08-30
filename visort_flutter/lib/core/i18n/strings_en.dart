@@ -88,6 +88,10 @@ const Map<String, String> stringsEn = {
   'home_title_android': 'Sort Images',
   // 抽屉一级页「快速整理」（原首页主屏功能在抽屉里的名称）
   'quick_sort_title': 'Quick Sort',
+  // 设置-通用：抽屉动画档位（舒适 320/240ms，快速 250/200ms）
+  'settings_drawer_speed': 'Drawer animation',
+  'drawer_speed_fast': 'Fast',
+  'drawer_speed_comfortable': 'Comfortable',
   'home_hint_android':
       'Pick a directory. Images will be sorted into subfolders within it.',
   'pick_dir_android': 'Pick Directory',

@@ -23,7 +23,7 @@ import 'package:visort_flutter/shared/widgets/sort_toggle.dart';
 import 'package:visort_flutter/ui/router.dart';
 import 'package:visort_flutter/ui/router_android.dart';
 import 'package:visort_flutter/ui/screens/app_shell_android.dart'
-    show ShellHandle;
+    show DrawerMenuButton, ShellHandle;
 
 class GalleryScreen extends ConsumerStatefulWidget {
   const GalleryScreen({super.key, this.shellHandle});
@@ -74,10 +74,9 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.text,
-        leading: IconButton(
-          icon: const Icon(Icons.menu, color: AppColors.text),
+        leading: DrawerMenuButton(
+          handle: widget.shellHandle,
           tooltip: t(ref, 'gallery_title'),
-          onPressed: () => widget.shellHandle?.openDrawer(),
         ),
         titleSpacing: 0,
         title: Text(

@@ -27,7 +27,7 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/ui/router_android.dart';
 import 'package:visort_flutter/ui/screens/app_shell_android.dart'
-    show ShellHandle;
+    show DrawerMenuButton, ShellHandle;
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
 import 'package:visort_flutter/shared/widgets/rename_dialog.dart';
@@ -346,13 +346,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         appBar: AppBar(
           backgroundColor: AppColors.surface,
           foregroundColor: AppColors.text,
-          // 嵌入 Shell（收藏/回收站一级页）：☰ 呼出抽屉；push 模式保持
-          // 默认返回箭头（勾选态时 PopScope canPop=false 自动隐藏，现状）。
+          // 嵌入 Shell（收藏/回收站一级页）：☰ morph 按钮呼出抽屉；push
+          // 模式保持默认返回箭头（勾选态时 PopScope canPop=false 自动隐藏，
+          // 现状）。
           leading: widget._embedded
-              ? IconButton(
-                  icon: const Icon(Icons.menu, color: AppColors.text),
+              ? DrawerMenuButton(
+                  handle: widget.shellHandle,
                   tooltip: t(ref, 'gallery_manage'),
-                  onPressed: () => widget.shellHandle!.openDrawer(),
                 )
               : null,
           // 标题紧贴返回箭头（默认 titleSpacing 16 会显得相册名离箭头太远）

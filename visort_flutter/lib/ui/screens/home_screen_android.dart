@@ -37,7 +37,7 @@ import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/router.dart';
 import 'package:visort_flutter/ui/router_android.dart';
 import 'package:visort_flutter/ui/screens/app_shell_android.dart'
-    show ShellHandle;
+    show DrawerMenuButton, ShellHandle;
 
 class HomeScreenAndroid extends ConsumerStatefulWidget {
   const HomeScreenAndroid({super.key, this.shellHandle});
@@ -517,11 +517,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.text,
-        // ☰ 呼出抽屉（原首页为根路由无 leading；logo 已移到 actions 右侧）
-        leading: IconButton(
-          icon: const Icon(Icons.menu, color: AppColors.text),
+        // ☰ 呼出抽屉（原首页为根路由无 leading；logo 已移除，只留抽屉头部）
+        leading: DrawerMenuButton(
+          handle: widget.shellHandle,
           tooltip: t(ref, 'quick_sort_title'),
-          onPressed: () => widget.shellHandle?.openDrawer(),
         ),
         titleSpacing: 0,
         title: Text(
