@@ -61,26 +61,20 @@ class FilterChipWidget extends StatelessWidget {
           children: [
             Icon(filter.icon, size: 13, color: selected ? fg : AppColors.muted),
             const SizedBox(width: 6),
-            Text(
-              filter.label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontFamily: 'Space Mono',
-                height: 1.2,
-                fontFamilyFallback: AppFonts.cjkFallback,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
-                fontSize: 12,
-                color: fg,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              '${filter.ids.length}',
-              style: TextStyle(
-                fontFamily: 'Space Mono',
-                fontSize: 10,
-                color: selected ? fg : AppColors.muted,
+            Flexible(
+              child: Text(
+                filter.label,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.fade,
+                style: TextStyle(
+                  fontFamily: 'Space Mono',
+                  height: 1.2,
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+                  fontSize: 12,
+                  color: fg,
+                ),
               ),
             ),
           ],
