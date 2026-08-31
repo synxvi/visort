@@ -693,11 +693,12 @@ class _MlSectionState extends ConsumerState<_MlSection> {
   int? _percent(MlIndexState ml) =>
       ml.total <= 0 ? null : (ml.processed * 100 / ml.total).round().clamp(0, 100);
 
-  /// 进度状态副行：索引中/已完成/未开启。
-  String _statusLine(MlIndexState ml) {
+  /// 进度状态副行：索引中/已完成；其余（刚开启未起跑/中断）无文案
+  /// 返回 null 不渲染——避免与主行占位符叠出双「—」。
+  String? _statusLine(MlIndexState ml) {
     if (ml.running) return t(ref, 'settings_ml_running');
     if (ml.done) return t(ref, 'settings_ml_done');
-    return '—';
+    return null;
   }
 
   static const _labelStyle = TextStyle(
@@ -756,6 +757,7 @@ class _MlSectionState extends ConsumerState<_MlSection> {
     final config = ref.watch(configProvider);
     final ml = ref.watch(mlIndexServiceProvider);
     final pct = _percent(ml);
+    final status = _statusLine(ml);
     return _SettingsCard(
       children: [
         // 索引总开关 + 注释（一组）。
@@ -765,34 +767,39 @@ class _MlSectionState extends ConsumerState<_MlSection> {
           value: config.mlIndexEnabled,
           onChanged: (v) => _onIndexToggle(v),
         ),
-        // 进度组：主行百分比数字，副行状态。点按重新从 SP 恢复。
-        InkWell(
-          onTap: () => ref.read(mlIndexServiceProvider.notifier).load(),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(t(ref, 'settings_ml_progress'), style: _labelStyle),
-                    const Spacer(),
-                    Text(
-                      pct == null ? '—' : '$pct%',
-                      style: const TextStyle(
-                          fontFamily: 'Space Mono',
-                          fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                          color: AppColors.muted,
-                          fontSize: 13),
-                    ),
+        // 进度组：主行百分比数字，副行状态；仅开启时显示（缓存区配额行
+        // 同款模式）。关闭时显示 = 主行副行各一个「—」占位，视觉噪音。
+        if (config.mlIndexEnabled)
+          InkWell(
+            onTap: () => ref.read(mlIndexServiceProvider.notifier).load(),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(t(ref, 'settings_ml_progress'), style: _labelStyle),
+                      const Spacer(),
+                      Text(
+                        // pct null = 刚开启 total 未就绪，'…' 单占位
+                        pct == null ? '…' : '$pct%',
+                        style: const TextStyle(
+                            fontFamily: 'Space Mono',
+                            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                            color: AppColors.muted,
+                            fontSize: 13),
+                      ),
+                    ],
+                  ),
+                  if (status != null) ...[
+                    const SizedBox(height: 2),
+                    Text(status, style: _noteStyle),
                   ],
-                ),
-                const SizedBox(height: 2),
-                Text(_statusLine(ml), style: _noteStyle),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
         // 分能力开关（各一组，自动线分隔）。
         _switchGroup(
           labelKey: 'settings_ml_place',

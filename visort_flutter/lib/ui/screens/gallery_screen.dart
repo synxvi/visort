@@ -101,6 +101,9 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
           IconButton(
             icon: const _SearchGlyphIcon(),
             tooltip: t(ref, 'search'),
+            // 水平收紧点击盒（48→32）：向右侧选项按钮靠近，图标间隙
+            // 20dp→12dp（真机反馈两按钮距离偏远）。
+            visualDensity: const VisualDensity(horizontal: -2),
             onPressed: () =>
                 Navigator.pushNamed(context, AlbumRoutes.search),
           ),
