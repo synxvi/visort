@@ -19,7 +19,10 @@ import 'package:visort_flutter/features/search/ml_index_service.dart';
 import 'package:visort_flutter/shared/widgets/back_glyph_button.dart';
 import 'package:visort_flutter/ui/ente_viewer/detail_page.dart';
 import 'package:visort_flutter/ui/ente_viewer/gallery.dart';
+import 'package:visort_flutter/ui/ente_viewer/gallery_boundaries_provider.dart';
+import 'package:visort_flutter/ui/ente_viewer/gallery_files_inherited_widget.dart';
 import 'package:visort_flutter/ui/ente_viewer/group_type.dart';
+import 'package:visort_flutter/ui/ente_viewer/selected_files.dart';
 import 'package:visort_flutter/ui/router_android.dart';
 import 'package:visort_flutter/ui/route_transitions.dart';
 
@@ -39,6 +42,10 @@ class SearchScreen extends ConsumerStatefulWidget {
 class _SearchScreenState extends ConsumerState<SearchScreen> {
   final TextEditingController _queryCtrl = TextEditingController();
   final MediaStoreChannel _channel = const MediaStoreChannel();
+
+  /// 多选状态恒传（非选择模式恒空）：Gallery 依赖 SelectionState 包裹
+  /// 结构恒定（album_screen 同款，见其 610 行注释）。
+  final SelectedFiles _selection = SelectedFiles();
   List<MsImageInfo> _photos = const [];
   bool _loading = true;
 
@@ -335,16 +342,25 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       );
     }
     final cols = ref.watch(configProvider).photoGridColumns;
-    return Gallery(
-      allFiles: filtered,
-      // tagPrefix 取 'search'：与相册页 cell 的 'photo_$id' 区分，跨路由
-      // 同 id 照片的 Hero tag 不冲突（搜索页叠在相册页之上，详见文件头）。
-      tagPrefix: 'search',
-      groupType: GroupType.none,
-      crossAxisCount: cols,
-      sortOrderAsc: false,
-      emptyState: null,
-      onFileTap: (info) => _openPhoto(filtered, info),
+    // Gallery 依赖外层 GalleryFilesState + GalleryBoundariesProvider
+    //（ente CollectionPage 同款包装；缺此包裹渲染异常 → 顶栏下灰屏，
+    // 文件类型结果页真机实证）。
+    return GalleryBoundariesProvider(
+      key: const ValueKey('search-results'),
+      child: GalleryFilesState(
+        child: Gallery(
+          allFiles: filtered,
+          // tagPrefix 取 'search'：与相册页 cell 的 'photo_$id' 区分，跨路由
+          // 同 id 照片的 Hero tag 不冲突（搜索页叠在相册页之上，详见文件头）。
+          tagPrefix: 'search',
+          groupType: GroupType.none,
+          selectedFiles: _selection,
+          crossAxisCount: cols,
+          sortOrderAsc: false,
+          emptyState: null,
+          onFileTap: (info) => _openPhoto(filtered, info),
+        ),
+      ),
     );
   }
 
@@ -548,6 +564,7 @@ class _MlProgressBanner extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final progress = state.total == 0 ? 0.0 : state.processed / state.total;
+    final pct = (progress * 100).round().clamp(0, 100);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: InkWell(
@@ -569,8 +586,7 @@ class _MlProgressBanner extends ConsumerWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      t(ref, 'settings_ml_indexed_of',
-                          [state.processed, state.total]),
+                      '${t(ref, 'settings_ml_running')} $pct%',
                       style: const TextStyle(
                         fontFamily: 'Space Mono',
                         fontFamilyFallback: AppFonts.cjkFallback,
@@ -619,6 +635,9 @@ class _CategoryResultPage extends ConsumerStatefulWidget {
 }
 
 class _CategoryResultPageState extends ConsumerState<_CategoryResultPage> {
+  /// 同搜索页：Gallery 多选包裹恒传（结构恒定防重建灰屏）。
+  final SelectedFiles _selection = SelectedFiles();
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -664,25 +683,31 @@ class _CategoryResultPageState extends ConsumerState<_CategoryResultPage> {
       ),
       body: SafeArea(
         bottom: false,
-        child: Gallery(
-          allFiles: widget.photos,
-          tagPrefix: 'search',
-          groupType: GroupType.none,
-          crossAxisCount: ref.watch(configProvider).photoGridColumns,
-          sortOrderAsc: false,
-          onFileTap: (info) {
-            final index = widget.photos.indexWhere((f) => f.id == info.id);
-            if (index < 0) return;
-            Navigator.of(context).push(enteFadeRoute(
-              builder: (_) => DetailPage(
-                files: widget.photos,
-                initialIndex: index,
-                gridCols: ref.read(configProvider).photoGridColumns,
-              ),
-              settings: const RouteSettings(name: AlbumRoutes.photoViewer),
-              fullscreenDialog: true,
-            ));
-          },
+        child: GalleryBoundariesProvider(
+          key: const ValueKey('search-category'),
+          child: GalleryFilesState(
+            child: Gallery(
+              allFiles: widget.photos,
+              tagPrefix: 'search',
+              groupType: GroupType.none,
+              selectedFiles: _selection,
+              crossAxisCount: ref.watch(configProvider).photoGridColumns,
+              sortOrderAsc: false,
+              onFileTap: (info) {
+                final index = widget.photos.indexWhere((f) => f.id == info.id);
+                if (index < 0) return;
+                Navigator.of(context).push(enteFadeRoute(
+                  builder: (_) => DetailPage(
+                    files: widget.photos,
+                    initialIndex: index,
+                    gridCols: ref.read(configProvider).photoGridColumns,
+                  ),
+                  settings: const RouteSettings(name: AlbumRoutes.photoViewer),
+                  fullscreenDialog: true,
+                ));
+              },
+            ),
+          ),
         ),
       ),
     );

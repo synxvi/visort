@@ -96,8 +96,10 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
         actions: [
           // 搜索（[ente 对齐] 选项按钮左侧）：进入分类搜索页
           //（人物/位置/文件类型），页内支持文件名过滤与结果网格。
+          // 自绘放大镜：与三线选项按钮/返回箭头同形制（28 画布、
+          // stroke 1.9 圆头），Material Icons.search 轮廓过细过小不搭。
           IconButton(
-            icon: const Icon(Icons.search, color: AppColors.text),
+            icon: const _SearchGlyphIcon(),
             tooltip: t(ref, 'search'),
             onPressed: () =>
                 Navigator.pushNamed(context, AlbumRoutes.search),
@@ -542,4 +544,44 @@ class _CoverThumb extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 自绘放大镜图标（搜索按钮用）。
+///
+/// 形制对齐 _FilterMorphPainter / _BackGlyphPainter：24 基准视口、
+/// stroke 1.9、圆头笔帽。几何：镜圆中心 (10.3, 10.3) 半径 5.7，
+/// 柄自圆 45° 切点 (14.33, 14.33) 至 (17.5, 17.5)，整体轮廓盒约
+/// (4.6~17.5)²，与三线按钮内容盒同量级。
+class _SearchGlyphIcon extends StatelessWidget {
+  const _SearchGlyphIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: const Size.square(28),
+      painter: _SearchGlyphPainter(),
+    );
+  }
+}
+
+class _SearchGlyphPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scale = size.width / 24;
+    final paint = Paint()
+      ..color = AppColors.text
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.9
+      ..strokeCap = StrokeCap.round;
+    final c = Offset(10.3, 10.3) * scale;
+    final r = 5.7 * scale;
+    canvas.drawCircle(c, r, paint);
+    // 柄：圆 45° 切点 → 右下角端点
+    final start = Offset(14.33, 14.33) * scale;
+    final end = Offset(17.5, 17.5) * scale;
+    canvas.drawLine(start, end, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _SearchGlyphPainter oldDelegate) => false;
 }

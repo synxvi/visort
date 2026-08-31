@@ -689,19 +689,24 @@ class _MlSectionState extends ConsumerState<_MlSection> {
     }
   }
 
-  /// 进度行文案：running → 「正在索引… 已索引 x / y 张」；done → 完成态。
-  String _progressLine(MlIndexState ml) {
-    final indexed = t(ref, 'settings_ml_indexed_of', [ml.processed, ml.total]);
-    if (ml.running) return '${t(ref, 'settings_ml_running')} $indexed';
-    if (ml.done) return '${t(ref, 'settings_ml_done')} · $indexed';
+  /// 进度百分比（0-100 整数）；total 未知时返回 null 显示「—」。
+  int? _percent(MlIndexState ml) =>
+      ml.total <= 0 ? null : (ml.processed * 100 / ml.total).round().clamp(0, 100);
+
+  /// 进度状态副行：索引中/已完成/未开启。
+  String _statusLine(MlIndexState ml) {
+    if (ml.running) return t(ref, 'settings_ml_running');
+    if (ml.done) return t(ref, 'settings_ml_done');
     return '—';
   }
 
-  Widget _switchRow(String labelKey, bool value, ValueChanged<bool> onChanged) {
+  /// 开关行：label 左对齐 + 右侧 Switch；底部距 2（注释紧跟其下成组）。
+  Widget _switchRow(String labelKey, bool value, ValueChanged<bool> onChanged,
+      {double top = 12}) {
     return InkWell(
       onTap: () => onChanged(!value),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        padding: EdgeInsets.fromLTRB(16, top, 16, 2),
         child: Row(
           children: [
             Text(t(ref, labelKey),
@@ -724,10 +729,10 @@ class _MlSectionState extends ConsumerState<_MlSection> {
     );
   }
 
-  /// 开关下注释：小号 muted 说明功能（用户要求「添加注释说明各开关功能」）。
+  /// 开关下注释：与 label 同左缘（16），组内间距 2，组尾 10 分隔下一组。
   Widget _note(String noteKey) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
       child: Text(
         t(ref, noteKey),
         style: const TextStyle(
@@ -745,17 +750,19 @@ class _MlSectionState extends ConsumerState<_MlSection> {
   Widget build(BuildContext context) {
     final config = ref.watch(configProvider);
     final ml = ref.watch(mlIndexServiceProvider);
+    final pct = _percent(ml);
     return _SettingsCard(
       children: [
         // 索引总开关 + 注释。
         _switchRow('settings_ml_index', config.mlIndexEnabled,
             (v) => _onIndexToggle(v)),
         _note('settings_ml_index_note'),
-        // 进度行：provider 状态驱动（批处理逐批更新），点按重新从 SP 恢复。
+        // 进度行：右侧百分比数字（x/y 长文案信息密度低，改单数字）；
+        // 副行状态（索引中/已完成）。点按重新从 SP 恢复。
         InkWell(
           onTap: () => ref.read(mlIndexServiceProvider.notifier).load(),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
             child: Row(
               children: [
                 Text(t(ref, 'settings_ml_progress'),
@@ -768,19 +775,31 @@ class _MlSectionState extends ConsumerState<_MlSection> {
                     )),
                 const Spacer(),
                 Text(
-                  _progressLine(ml),
+                  pct == null ? '—' : '$pct%',
                   style: const TextStyle(
                       fontFamily: 'Space Mono',
                       fontFamilyFallback: ['Noto Sans Mono CJK SC'],
                       color: AppColors.muted,
-                      fontSize: 12),
+                      fontSize: 13),
                 ),
               ],
             ),
           ),
         ),
-        // 分能力开关组（分隔线区分于索引主开关）。
-        const Divider(height: 1, thickness: 1, color: AppColors.border),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
+          child: Text(
+            _statusLine(ml),
+            style: const TextStyle(
+              fontFamily: 'Space Mono',
+              height: 1.3,
+              fontFamilyFallback: AppFonts.cjkFallback,
+              color: AppColors.muted,
+              fontSize: 11,
+            ),
+          ),
+        ),
+        // 分能力开关（组距分隔，不再用 Divider——线穿插注释视觉混乱）。
         _switchRow('settings_ml_place', config.mlPlaceEnabled,
             (v) => _update(mlPlaceEnabled: v)),
         _note('settings_ml_place_note'),

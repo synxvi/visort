@@ -351,9 +351,9 @@ const Map<String, String> stringsEn = {
   'settings_clear_cache_desc':
       'All full-image and thumbnail caches will be cleared and regenerated on next browse',
   'settings_cache_cleared': 'Freed',
-  // ── 机器学习（缓存下方新区块，[ente 对齐] 开关+进度+注释）──
-  'settings_section_ml': 'Machine Learning',
-  'settings_ml_index': 'ML Indexing',
+  // ── 智能识别（缓存下方新区块，[ente 对齐] 开关+进度+注释）──
+  'settings_section_ml': 'Smart Recognition',
+  'settings_ml_index': 'Smart Indexing',
   'settings_ml_index_note':
       'Scans all photos to extract location info for search categories.',
   'settings_ml_face': 'Face Recognition',
@@ -362,10 +362,9 @@ const Map<String, String> stringsEn = {
   'settings_ml_place': 'Place Recognition',
   'settings_ml_place_note': 'Groups photos by where they were taken.',
   'settings_ml_progress': 'Indexing Progress',
-  'settings_ml_indexed_of': 'Indexed {0} / {1}',
   'settings_ml_running': 'Indexing…',
   'settings_ml_done': 'Complete',
-  'settings_ml_off_title': 'Disable ML indexing?',
+  'settings_ml_off_title': 'Disable smart indexing?',
   'settings_ml_off_desc': 'Indexed location data will be cleared.',
   'settings_title': 'Settings',
   'layout_list': 'List',
