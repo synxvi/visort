@@ -700,47 +700,52 @@ class _MlSectionState extends ConsumerState<_MlSection> {
     return '—';
   }
 
-  /// 开关行：label 左对齐 + 右侧 Switch；底部距 2（注释紧跟其下成组）。
-  Widget _switchRow(String labelKey, bool value, ValueChanged<bool> onChanged,
-      {double top = 12}) {
+  static const _labelStyle = TextStyle(
+    color: AppColors.text,
+    fontFamily: 'Space Mono',
+    height: 1.2,
+    fontFamilyFallback: AppFonts.cjkFallback,
+    fontSize: 14,
+  );
+
+  static const _noteStyle = TextStyle(
+    fontFamily: 'Space Mono',
+    height: 1.3,
+    fontFamilyFallback: AppFonts.cjkFallback,
+    color: AppColors.muted,
+    fontSize: 11,
+  );
+
+  /// 开关逻辑组 = 一个 child（_SettingsCard 在 children 间自动插分隔线，
+  /// 注释必须并入组内——拍平成独立 child 会让线穿过开关与其注释之间，
+  /// 视觉混乱）。结构与 _CacheSection 的行组一致。
+  Widget _switchGroup({
+    required String labelKey,
+    required String noteKey,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
     return InkWell(
       onTap: () => onChanged(!value),
       child: Padding(
-        padding: EdgeInsets.fromLTRB(16, top, 16, 2),
-        child: Row(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(t(ref, labelKey),
-                style: const TextStyle(
-                  color: AppColors.text,
-                  fontFamily: 'Space Mono',
-                  height: 1.2,
-                  fontFamilyFallback: AppFonts.cjkFallback,
-                  fontSize: 14,
-                )),
-            const Spacer(),
-            Switch(
-              value: value,
-              activeColor: AppColors.accent,
-              onChanged: onChanged,
+            Row(
+              children: [
+                Text(t(ref, labelKey), style: _labelStyle),
+                const Spacer(),
+                Switch(
+                  value: value,
+                  activeColor: AppColors.accent,
+                  onChanged: onChanged,
+                ),
+              ],
             ),
+            const SizedBox(height: 2),
+            Text(t(ref, noteKey), style: _noteStyle),
           ],
-        ),
-      ),
-    );
-  }
-
-  /// 开关下注释：与 label 同左缘（16），组内间距 2，组尾 10 分隔下一组。
-  Widget _note(String noteKey) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
-      child: Text(
-        t(ref, noteKey),
-        style: const TextStyle(
-          fontFamily: 'Space Mono',
-          height: 1.3,
-          fontFamilyFallback: AppFonts.cjkFallback,
-          color: AppColors.muted,
-          fontSize: 11,
         ),
       ),
     );
@@ -753,59 +758,54 @@ class _MlSectionState extends ConsumerState<_MlSection> {
     final pct = _percent(ml);
     return _SettingsCard(
       children: [
-        // 索引总开关 + 注释。
-        _switchRow('settings_ml_index', config.mlIndexEnabled,
-            (v) => _onIndexToggle(v)),
-        _note('settings_ml_index_note'),
-        // 进度行：右侧百分比数字（x/y 长文案信息密度低，改单数字）；
-        // 副行状态（索引中/已完成）。点按重新从 SP 恢复。
+        // 索引总开关 + 注释（一组）。
+        _switchGroup(
+          labelKey: 'settings_ml_index',
+          noteKey: 'settings_ml_index_note',
+          value: config.mlIndexEnabled,
+          onChanged: (v) => _onIndexToggle(v),
+        ),
+        // 进度组：主行百分比数字，副行状态。点按重新从 SP 恢复。
         InkWell(
           onTap: () => ref.read(mlIndexServiceProvider.notifier).load(),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 2),
-            child: Row(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(t(ref, 'settings_ml_progress'),
-                    style: const TextStyle(
-                      color: AppColors.text,
-                      fontFamily: 'Space Mono',
-                      height: 1.2,
-                      fontFamilyFallback: AppFonts.cjkFallback,
-                      fontSize: 14,
-                    )),
-                const Spacer(),
-                Text(
-                  pct == null ? '—' : '$pct%',
-                  style: const TextStyle(
-                      fontFamily: 'Space Mono',
-                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                      color: AppColors.muted,
-                      fontSize: 13),
+                Row(
+                  children: [
+                    Text(t(ref, 'settings_ml_progress'), style: _labelStyle),
+                    const Spacer(),
+                    Text(
+                      pct == null ? '—' : '$pct%',
+                      style: const TextStyle(
+                          fontFamily: 'Space Mono',
+                          fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                          color: AppColors.muted,
+                          fontSize: 13),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 2),
+                Text(_statusLine(ml), style: _noteStyle),
               ],
             ),
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 2, 16, 10),
-          child: Text(
-            _statusLine(ml),
-            style: const TextStyle(
-              fontFamily: 'Space Mono',
-              height: 1.3,
-              fontFamilyFallback: AppFonts.cjkFallback,
-              color: AppColors.muted,
-              fontSize: 11,
-            ),
-          ),
+        // 分能力开关（各一组，自动线分隔）。
+        _switchGroup(
+          labelKey: 'settings_ml_place',
+          noteKey: 'settings_ml_place_note',
+          value: config.mlPlaceEnabled,
+          onChanged: (v) => _update(mlPlaceEnabled: v),
         ),
-        // 分能力开关（组距分隔，不再用 Divider——线穿插注释视觉混乱）。
-        _switchRow('settings_ml_place', config.mlPlaceEnabled,
-            (v) => _update(mlPlaceEnabled: v)),
-        _note('settings_ml_place_note'),
-        _switchRow('settings_ml_face', config.mlFaceEnabled,
-            (v) => _update(mlFaceEnabled: v)),
-        _note('settings_ml_face_note'),
+        _switchGroup(
+          labelKey: 'settings_ml_face',
+          noteKey: 'settings_ml_face_note',
+          value: config.mlFaceEnabled,
+          onChanged: (v) => _update(mlFaceEnabled: v),
+        ),
       ],
     );
   }

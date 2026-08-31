@@ -549,9 +549,8 @@ class _CoverThumb extends StatelessWidget {
 /// 自绘放大镜图标（搜索按钮用）。
 ///
 /// 形制对齐 _FilterMorphPainter / _BackGlyphPainter：24 基准视口、
-/// stroke 1.9、圆头笔帽。几何：镜圆中心 (10.3, 10.3) 半径 5.7，
-/// 柄自圆 45° 切点 (14.33, 14.33) 至 (17.5, 17.5)，整体轮廓盒约
-/// (4.6~17.5)²，与三线按钮内容盒同量级。
+/// stroke 1.9、圆头笔帽。包络刻意收窄到 ~10.4 方形（三线按钮内容盒
+/// 11.2×8.2 同宽），柄短促——大圆长柄版本视觉重量超三线按钮，实测偏笨。
 class _SearchGlyphIcon extends StatelessWidget {
   const _SearchGlyphIcon();
 
@@ -573,12 +572,13 @@ class _SearchGlyphPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.9
       ..strokeCap = StrokeCap.round;
-    final c = Offset(10.3, 10.3) * scale;
-    final r = 5.7 * scale;
+    // 镜圆：中心 (10.1, 10.3) 半径 4.3 → 圆盒 (5.8~14.4)×(6.0~14.6)
+    final c = Offset(10.1, 10.3) * scale;
+    final r = 4.3 * scale;
     canvas.drawCircle(c, r, paint);
-    // 柄：圆 45° 切点 → 右下角端点
-    final start = Offset(14.33, 14.33) * scale;
-    final end = Offset(17.5, 17.5) * scale;
+    // 柄：圆 45° 切点 → 短柄终点 (16.2, 16.2)，整包络 (5.8~16.2)²
+    final start = Offset(13.14, 13.34) * scale;
+    final end = Offset(16.2, 16.2) * scale;
     canvas.drawLine(start, end, paint);
   }
 
