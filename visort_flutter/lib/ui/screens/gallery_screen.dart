@@ -101,9 +101,11 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
           IconButton(
             icon: const _SearchGlyphIcon(),
             tooltip: t(ref, 'search'),
-            // 水平收紧点击盒（48→32）：向右侧选项按钮靠近，图标间隙
-            // 20dp→12dp（真机反馈两按钮距离偏远）。
-            visualDensity: const VisualDensity(horizontal: -2),
+            // 向右侧选项按钮靠近：点击盒显式收窄（48→32，visualDensity
+            // 单位是 offset 一半，-2 仅收 2dp 无感，真机实证）。图标
+            // 间隙 20dp→12dp；高度保 48 不牺牲纵向触达。
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 48),
             onPressed: () =>
                 Navigator.pushNamed(context, AlbumRoutes.search),
           ),

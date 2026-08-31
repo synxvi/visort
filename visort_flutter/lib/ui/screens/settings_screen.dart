@@ -179,10 +179,13 @@ class _SettingsCard extends StatelessWidget {
         children: [
           for (int i = 0; i < children.length; i++) ...[
             if (i > 0)
+              // 两端对称缩进（此前仅 indent 无 endIndent：线右端顶到
+              // 卡片边缘，观感异常——真机反馈）。
               const Divider(
                 height: 1,
                 thickness: 0.5,
                 indent: 16,
+                endIndent: 16,
                 color: AppColors.border,
               ),
             children[i],
