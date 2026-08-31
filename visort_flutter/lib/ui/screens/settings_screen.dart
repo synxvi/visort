@@ -638,8 +638,8 @@ class _CacheSectionState extends ConsumerState<_CacheSection> {
 /// 机器学习区（[ente 对齐] ENTE machine_learning_settings_page 精简版）。
 ///
 /// 索引总开关驱动后台全库 EXIF GPS 扫描（进度实时落 provider，无需轮询）；
-/// 位置/人物为分能力开关。每个开关下方注释说明功能（用户要求）。人物识别
-/// 依赖人脸检测模型（当前版本未内置）——开关预留，搜索页人物分类为空态。
+/// 位置为分能力开关，下方注释说明功能（用户要求）。
+/// 人物识别已移除（2026-08：本地人脸识别方案未采用）。
 class _MlSection extends ConsumerStatefulWidget {
   const _MlSection();
 
@@ -657,12 +657,10 @@ class _MlSectionState extends ConsumerState<_MlSection> {
 
   Future<void> _update({
     bool? mlIndexEnabled,
-    bool? mlFaceEnabled,
     bool? mlPlaceEnabled,
   }) async {
     final updated = ref.read(configProvider).copyWith(
           mlIndexEnabled: mlIndexEnabled,
-          mlFaceEnabled: mlFaceEnabled,
           mlPlaceEnabled: mlPlaceEnabled,
         );
     ref.read(configProvider.notifier).state = updated;
@@ -809,12 +807,6 @@ class _MlSectionState extends ConsumerState<_MlSection> {
           noteKey: 'settings_ml_place_note',
           value: config.mlPlaceEnabled,
           onChanged: (v) => _update(mlPlaceEnabled: v),
-        ),
-        _switchGroup(
-          labelKey: 'settings_ml_face',
-          noteKey: 'settings_ml_face_note',
-          value: config.mlFaceEnabled,
-          onChanged: (v) => _update(mlFaceEnabled: v),
         ),
       ],
     );

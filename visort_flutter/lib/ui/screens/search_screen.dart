@@ -2,10 +2,10 @@
 //
 // 结构模仿 ENTE search_tab.dart：
 //   - 顶部搜索输入框（本地过滤文件名，实时出结果网格）；
-//   - 无输入时垂直分类列表（人物 / 位置 / 文件类型），每类横向卡片行；
+//   - 无输入时垂直分类列表（位置 / 文件类型），每类横向卡片行；
 //   - 数据全部本地 MediaStore：文件类型按 mime 分组（即时可用）；
-//     位置按 EXIF GPS 网格分桶（ML 索引服务产物，设置页开关驱动）；
-//     人物为预留空态（人脸识别模型未内置，说明文案引导）。
+//     位置按 EXIF GPS 网格分桶（ML 索引服务产物，设置页开关驱动）。
+//     人物分类已移除（人脸识别未采用）。
 // 结果页/看图复用现有组件：Gallery 网格 + DetailPage（无 Hero 飞行——
 // tagPrefix 取 'search' 与相册页 'photo_$id' 区分，避免跨路由 tag 冲突）。
 
@@ -239,13 +239,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         // 设置为一级页，避免导航栈混淆；进度同时可见于设置页 ML 区）。
         if (ml.running)
           _MlProgressBanner(state: ml, onTap: null),
-        // 人物：预留空态（人脸识别模型未内置）。
-        _SectionHeader(t(ref, 'search_people')),
-        _SectionEmpty(
-          icon: Icons.face_outlined,
-          title: t(ref, 'search_people_empty'),
-          hint: t(ref, 'search_people_hint'),
-        ),
         // 位置：索引数据驱动；mlPlaceEnabled 或空数据时展示空态引导。
         _SectionHeader(t(ref, 'search_places')),
         if (config.mlPlaceEnabled && _placeGroups.isNotEmpty)

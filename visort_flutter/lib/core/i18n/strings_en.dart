@@ -153,10 +153,6 @@ const Map<String, String> stringsEn = {
   'search': 'Search',
   'search_hint': 'Search photo names',
   'search_no_result': 'No matching photos',
-  'search_people': 'People',
-  'search_people_empty': 'No people detected',
-  'search_people_hint':
-      'People grouping requires a face detection model (not yet built in).',
   'search_places': 'Places',
   'search_places_empty': 'No location data',
   'search_places_hint':
@@ -356,9 +352,6 @@ const Map<String, String> stringsEn = {
   'settings_ml_index': 'Smart Indexing',
   'settings_ml_index_note':
       'Scans all photos to extract location info for search categories.',
-  'settings_ml_face': 'Face Recognition',
-  'settings_ml_face_note':
-      'Groups photos by people. Requires a face detection model (not yet built in).',
   'settings_ml_place': 'Place Recognition',
   'settings_ml_place_note': 'Groups photos by where they were taken.',
   'settings_ml_progress': 'Indexing Progress',
