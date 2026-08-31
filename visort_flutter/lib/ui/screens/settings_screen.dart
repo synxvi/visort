@@ -18,7 +18,7 @@ import 'package:visort_flutter/core/fs/image_loader.dart'
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
-import 'package:visort_flutter/features/search/ml_index_service.dart';
+import 'package:visort_flutter/features/search/search_index_service.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
@@ -633,12 +633,14 @@ class _CacheSectionState extends ConsumerState<_CacheSection> {
   }
 }
 
-// ─────────────── 机器学习组：索引开关 + 进度 + 分能力开关 + 注释 ───────────────
+// ─────────────── 智能识别组：搜索索引开关 + 进度 + 分能力开关 + 注释 ───────────────
 
-/// 机器学习区（[ente 对齐] ENTE machine_learning_settings_page 精简版）。
+/// 智能识别区（搜索索引；[aves 对齐] Aves 搜索维度数据底座）。
 ///
-/// 索引总开关驱动后台全库 EXIF GPS 扫描（进度实时落 provider，无需轮询）；
-/// 位置为分能力开关，下方注释说明功能（用户要求）。
+/// 索引总开关驱动后台全库 EXIF 扫描（拍摄时间/GPS/相机一次 pass，
+/// 产物 SQLite search_index 表——与上方「缓存」区的图片解码缓存完全
+/// 分离，用户要求）；地点识别为分能力开关（坐标 → 国家/省/市名，
+/// 系统 Geocoder），开启时对已索引坐标补解析。
 /// 人物识别已移除（2026-08：本地人脸识别方案未采用）。
 class _MlSection extends ConsumerStatefulWidget {
   const _MlSection();
@@ -651,8 +653,8 @@ class _MlSectionState extends ConsumerState<_MlSection> {
   @override
   void initState() {
     super.initState();
-    // 恢复持久化索引（进度 + 位置数据），搜索页「位置」分类同源读取。
-    ref.read(mlIndexServiceProvider.notifier).load();
+    // 恢复持久化索引（进度 + SQLite 表），搜索页日期/地点/相机分类同源读取。
+    ref.read(searchIndexServiceProvider.notifier).load();
   }
 
   Future<void> _update({
@@ -670,7 +672,7 @@ class _MlSectionState extends ConsumerState<_MlSection> {
   /// 索引总开关：开→启动后台扫描；关→确认后清索引数据（[ente 对齐]
   /// ENTE 关 ML 清库语义）。
   Future<void> _onIndexToggle(bool enable) async {
-    final notifier = ref.read(mlIndexServiceProvider.notifier);
+    final notifier = ref.read(searchIndexServiceProvider.notifier);
     if (enable) {
       await _update(mlIndexEnabled: true);
       // 后台分批跑，不 await（设置页停留期间进度实时更新）。
@@ -690,14 +692,24 @@ class _MlSectionState extends ConsumerState<_MlSection> {
     }
   }
 
+  /// 地点识别分开关：开→索引已完成且有无名坐标时补一轮地名解析；
+  /// 关→仅停止地名展示（已解析数据保留，重开不重扫）。
+  Future<void> _onPlaceToggle(bool enable) async {
+    await _update(mlPlaceEnabled: enable);
+    if (enable) {
+      ref.read(searchIndexServiceProvider.notifier).geocodeAll();
+    }
+  }
+
   /// 进度百分比（0-100 整数）；total 未知时返回 null 显示「—」。
-  int? _percent(MlIndexState ml) =>
+  int? _percent(SearchIndexState ml) =>
       ml.total <= 0 ? null : (ml.processed * 100 / ml.total).round().clamp(0, 100);
 
-  /// 进度状态副行：索引中/已完成；其余（刚开启未起跑/中断）无文案
-  /// 返回 null 不渲染——避免与主行占位符叠出双「—」。
-  String? _statusLine(MlIndexState ml) {
+  /// 进度状态副行：索引中/地名解析中/已完成；其余（刚开启未起跑/中断）
+  /// 无文案返回 null 不渲染——避免与主行占位符叠出双「—」。
+  String? _statusLine(SearchIndexState ml) {
     if (ml.running) return t(ref, 'settings_ml_running');
+    if (ml.geocoding) return t(ref, 'settings_ml_geocoding');
     if (ml.done) return t(ref, 'settings_ml_done');
     return null;
   }
@@ -756,7 +768,7 @@ class _MlSectionState extends ConsumerState<_MlSection> {
   @override
   Widget build(BuildContext context) {
     final config = ref.watch(configProvider);
-    final ml = ref.watch(mlIndexServiceProvider);
+    final ml = ref.watch(searchIndexServiceProvider);
     final pct = _percent(ml);
     final status = _statusLine(ml);
     return _SettingsCard(
@@ -772,7 +784,7 @@ class _MlSectionState extends ConsumerState<_MlSection> {
         // 同款模式）。关闭时显示 = 主行副行各一个「—」占位，视觉噪音。
         if (config.mlIndexEnabled)
           InkWell(
-            onTap: () => ref.read(mlIndexServiceProvider.notifier).load(),
+            onTap: () => ref.read(searchIndexServiceProvider.notifier).load(),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
               child: Column(
@@ -801,12 +813,35 @@ class _MlSectionState extends ConsumerState<_MlSection> {
               ),
             ),
           ),
+        // 索引数据行（同缓存区统计行模式）：已索引条数，点击刷新。
+        if (config.mlIndexEnabled)
+          InkWell(
+            onTap: () => ref.read(searchIndexServiceProvider.notifier).load(),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+              child: Row(
+                children: [
+                  Text(t(ref, 'settings_ml_data'), style: _labelStyle),
+                  const Spacer(),
+                  Text(
+                    t(ref, 'settings_ml_data_value')
+                        .replaceFirst('{n}', '${ml.indexedCount}'),
+                    style: const TextStyle(
+                        fontFamily: 'Space Mono',
+                        fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                        color: AppColors.muted,
+                        fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+          ),
         // 分能力开关（各一组，自动线分隔）。
         _switchGroup(
           labelKey: 'settings_ml_place',
           noteKey: 'settings_ml_place_note',
           value: config.mlPlaceEnabled,
-          onChanged: (v) => _update(mlPlaceEnabled: v),
+          onChanged: _onPlaceToggle,
         ),
       ],
     );
