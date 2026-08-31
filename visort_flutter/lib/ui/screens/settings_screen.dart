@@ -18,6 +18,7 @@ import 'package:visort_flutter/core/fs/image_loader.dart'
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
+import 'package:visort_flutter/features/search/ml_index_service.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
@@ -115,6 +116,9 @@ class SettingsScreen extends ConsumerWidget {
           // ── 缓存 ──
           _SectionHeader(t(ref, 'settings_section_cache')),
           const _CacheSection(),
+          // ── 机器学习（[ente 对齐] ENTE ML 设置页精简：开关+进度+注释）──
+          _SectionHeader(t(ref, 'settings_section_ml')),
+          const _MlSection(),
         ],
       ),
     );
@@ -175,10 +179,13 @@ class _SettingsCard extends StatelessWidget {
         children: [
           for (int i = 0; i < children.length; i++) ...[
             if (i > 0)
+              // 两端对称缩进（此前仅 indent 无 endIndent：线右端顶到
+              // 卡片边缘，观感异常——真机反馈）。
               const Divider(
                 height: 1,
                 thickness: 0.5,
                 indent: 16,
+                endIndent: 16,
                 color: AppColors.border,
               ),
             children[i],
@@ -620,6 +627,194 @@ class _CacheSectionState extends ConsumerState<_CacheSection> {
               ],
             ),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─────────────── 机器学习组：索引开关 + 进度 + 分能力开关 + 注释 ───────────────
+
+/// 机器学习区（[ente 对齐] ENTE machine_learning_settings_page 精简版）。
+///
+/// 索引总开关驱动后台全库 EXIF GPS 扫描（进度实时落 provider，无需轮询）；
+/// 位置/人物为分能力开关。每个开关下方注释说明功能（用户要求）。人物识别
+/// 依赖人脸检测模型（当前版本未内置）——开关预留，搜索页人物分类为空态。
+class _MlSection extends ConsumerStatefulWidget {
+  const _MlSection();
+
+  @override
+  ConsumerState<_MlSection> createState() => _MlSectionState();
+}
+
+class _MlSectionState extends ConsumerState<_MlSection> {
+  @override
+  void initState() {
+    super.initState();
+    // 恢复持久化索引（进度 + 位置数据），搜索页「位置」分类同源读取。
+    ref.read(mlIndexServiceProvider.notifier).load();
+  }
+
+  Future<void> _update({
+    bool? mlIndexEnabled,
+    bool? mlFaceEnabled,
+    bool? mlPlaceEnabled,
+  }) async {
+    final updated = ref.read(configProvider).copyWith(
+          mlIndexEnabled: mlIndexEnabled,
+          mlFaceEnabled: mlFaceEnabled,
+          mlPlaceEnabled: mlPlaceEnabled,
+        );
+    ref.read(configProvider.notifier).state = updated;
+    await ref.read(profilesServiceProvider).save(updated);
+  }
+
+  /// 索引总开关：开→启动后台扫描；关→确认后清索引数据（[ente 对齐]
+  /// ENTE 关 ML 清库语义）。
+  Future<void> _onIndexToggle(bool enable) async {
+    final notifier = ref.read(mlIndexServiceProvider.notifier);
+    if (enable) {
+      await _update(mlIndexEnabled: true);
+      // 后台分批跑，不 await（设置页停留期间进度实时更新）。
+      notifier.start();
+    } else {
+      final confirmed = await showConfirmSheet(
+        context,
+        title: t(ref, 'settings_ml_off_title'),
+        desc: t(ref, 'settings_ml_off_desc'),
+        cancelText: t(ref, 'cancel'),
+        confirmText: t(ref, 'confirm'),
+      ).confirmed;
+      if (confirmed != true || !mounted) return;
+      notifier.cancel(); // 先停批循环，避免清完又被写回（同预缓存清库竞态）
+      await _update(mlIndexEnabled: false);
+      await notifier.clear();
+    }
+  }
+
+  /// 进度百分比（0-100 整数）；total 未知时返回 null 显示「—」。
+  int? _percent(MlIndexState ml) =>
+      ml.total <= 0 ? null : (ml.processed * 100 / ml.total).round().clamp(0, 100);
+
+  /// 进度状态副行：索引中/已完成；其余（刚开启未起跑/中断）无文案
+  /// 返回 null 不渲染——避免与主行占位符叠出双「—」。
+  String? _statusLine(MlIndexState ml) {
+    if (ml.running) return t(ref, 'settings_ml_running');
+    if (ml.done) return t(ref, 'settings_ml_done');
+    return null;
+  }
+
+  static const _labelStyle = TextStyle(
+    color: AppColors.text,
+    fontFamily: 'Space Mono',
+    height: 1.2,
+    fontFamilyFallback: AppFonts.cjkFallback,
+    fontSize: 14,
+  );
+
+  static const _noteStyle = TextStyle(
+    fontFamily: 'Space Mono',
+    height: 1.3,
+    fontFamilyFallback: AppFonts.cjkFallback,
+    color: AppColors.muted,
+    fontSize: 11,
+  );
+
+  /// 开关逻辑组 = 一个 child（_SettingsCard 在 children 间自动插分隔线，
+  /// 注释必须并入组内——拍平成独立 child 会让线穿过开关与其注释之间，
+  /// 视觉混乱）。结构与 _CacheSection 的行组一致。
+  Widget _switchGroup({
+    required String labelKey,
+    required String noteKey,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return InkWell(
+      onTap: () => onChanged(!value),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(t(ref, labelKey), style: _labelStyle),
+                const Spacer(),
+                Switch(
+                  value: value,
+                  activeColor: AppColors.accent,
+                  onChanged: onChanged,
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(t(ref, noteKey), style: _noteStyle),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final config = ref.watch(configProvider);
+    final ml = ref.watch(mlIndexServiceProvider);
+    final pct = _percent(ml);
+    final status = _statusLine(ml);
+    return _SettingsCard(
+      children: [
+        // 索引总开关 + 注释（一组）。
+        _switchGroup(
+          labelKey: 'settings_ml_index',
+          noteKey: 'settings_ml_index_note',
+          value: config.mlIndexEnabled,
+          onChanged: (v) => _onIndexToggle(v),
+        ),
+        // 进度组：主行百分比数字，副行状态；仅开启时显示（缓存区配额行
+        // 同款模式）。关闭时显示 = 主行副行各一个「—」占位，视觉噪音。
+        if (config.mlIndexEnabled)
+          InkWell(
+            onTap: () => ref.read(mlIndexServiceProvider.notifier).load(),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(t(ref, 'settings_ml_progress'), style: _labelStyle),
+                      const Spacer(),
+                      Text(
+                        // pct null = 刚开启 total 未就绪，'…' 单占位
+                        pct == null ? '…' : '$pct%',
+                        style: const TextStyle(
+                            fontFamily: 'Space Mono',
+                            fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                            color: AppColors.muted,
+                            fontSize: 13),
+                      ),
+                    ],
+                  ),
+                  if (status != null) ...[
+                    const SizedBox(height: 2),
+                    Text(status, style: _noteStyle),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        // 分能力开关（各一组，自动线分隔）。
+        _switchGroup(
+          labelKey: 'settings_ml_place',
+          noteKey: 'settings_ml_place_note',
+          value: config.mlPlaceEnabled,
+          onChanged: (v) => _update(mlPlaceEnabled: v),
+        ),
+        _switchGroup(
+          labelKey: 'settings_ml_face',
+          noteKey: 'settings_ml_face_note',
+          value: config.mlFaceEnabled,
+          onChanged: (v) => _update(mlFaceEnabled: v),
         ),
       ],
     );

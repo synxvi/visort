@@ -449,6 +449,36 @@ class MediaStoreRepository(private val context: Context) {
         throw MsError.QueryFailed("无法读取图片元信息: $id")
     }
 
+    // ──────────── ML 位置索引（批量 EXIF GPS，搜索页「位置」分类）────────────
+
+    /// 批量提取 EXIF GPS（Dart 侧分批传入、累计进度；设置页 ML 区展示）。
+    /// 逐张 openInputStream + androidx ExifInterface.latLong——只读文件头
+    /// EXIF 区，单张约几 ms；PNG/WebP 等无 EXIF 格式返回 null 跳过。
+    /// 返回三个并行数组（只含成功读到 GPS 的项）：ids / lats / lngs。
+    fun indexLocations(ids: List<String>): Triple<List<String>, List<Double>, List<Double>> {
+        val outIds = mutableListOf<String>()
+        val outLats = mutableListOf<Double>()
+        val outLngs = mutableListOf<Double>()
+        for (id in ids) {
+            try {
+                val uri = ContentUris.withAppendedId(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id.toLongOrNull() ?: -1L
+                )
+                val latLng = contentResolver.openInputStream(uri)?.use { input ->
+                    androidx.exifinterface.media.ExifInterface(input).latLong
+                }
+                if (latLng != null) {
+                    outIds.add(id)
+                    outLats.add(latLng[0])
+                    outLngs.add(latLng[1])
+                }
+            } catch (e: Exception) {
+                // 单张失败跳过（损坏/权限），不打断整批索引
+            }
+        }
+        return Triple(outIds, outLats, outLngs)
+    }
+
     // ──────────── 完整元数据 EXIF/GPS（P0）────────────
 
     /// 提取单图的完整元数据（EXIF/GPS/相机参数）。

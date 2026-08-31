@@ -94,6 +94,24 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
           ),
         ),
         actions: [
+          // 搜索（[ente 对齐] 选项按钮左侧）：进入分类搜索页
+          //（人物/位置/文件类型），页内支持文件名过滤与结果网格。
+          // 自绘放大镜：与三线选项按钮/返回箭头同形制（28 画布、
+          // stroke 1.9 圆头），Material Icons.search 轮廓过细过小不搭。
+          // 贴近选项按钮：真机像素实测两图形间隙 34.2dp（图标盒间隙
+          // 是假象——图形包络仅 ~11dp，盒内留白全算进视觉间隙）。
+          // Transform 右移 15 → 图形间隙 19.2dp（34.2 原始→11.2 偏紧→
+          // 16.2 略紧，真机两轮反馈逐步回调）。
+          // 选项按钮不动（保其与内容区右缘 16dp 对齐的既有调校）。
+          Transform.translate(
+            offset: const Offset(15, 0),
+            child: IconButton(
+              icon: const _SearchGlyphIcon(),
+              tooltip: t(ref, 'search'),
+              onPressed: () =>
+                  Navigator.pushNamed(context, AlbumRoutes.search),
+            ),
+          ),
           ViewOptionsToggle(
             layout: config.galleryLayout,
             onLayoutChanged: _setLayout,
@@ -534,4 +552,44 @@ class _CoverThumb extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 自绘放大镜图标（搜索按钮用）。
+///
+/// 形制对齐 _FilterMorphPainter / _BackGlyphPainter：24 基准视口、
+/// stroke 1.9、圆头笔帽。包络刻意收窄到 ~10.4 方形（三线按钮内容盒
+/// 11.2×8.2 同宽），柄短促——大圆长柄版本视觉重量超三线按钮，实测偏笨。
+class _SearchGlyphIcon extends StatelessWidget {
+  const _SearchGlyphIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: const Size.square(28),
+      painter: _SearchGlyphPainter(),
+    );
+  }
+}
+
+class _SearchGlyphPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scale = size.width / 24;
+    final paint = Paint()
+      ..color = AppColors.text
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.9
+      ..strokeCap = StrokeCap.round;
+    // 镜圆：中心 (10.1, 10.3) 半径 4.3 → 圆盒 (5.8~14.4)×(6.0~14.6)
+    final c = Offset(10.1, 10.3) * scale;
+    final r = 4.3 * scale;
+    canvas.drawCircle(c, r, paint);
+    // 柄：圆 45° 切点 → 短柄终点 (16.2, 16.2)，整包络 (5.8~16.2)²
+    final start = Offset(13.14, 13.34) * scale;
+    final end = Offset(16.2, 16.2) * scale;
+    canvas.drawLine(start, end, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _SearchGlyphPainter oldDelegate) => false;
 }

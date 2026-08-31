@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 
 import 'route_transitions.dart';
 import 'screens/album_screen.dart';
+import 'screens/search_screen.dart';
 
 /// 安卓相册浏览链的路由名。
 ///
@@ -20,6 +21,9 @@ class AlbumRoutes {
 
   /// 单个相册（bucket 内图片瀑布流）。
   static const album = '/album';
+
+  /// 搜索页（人物/位置/文件类型分类，[ente 对齐] 相册页右上角搜索按钮）。
+  static const search = '/search';
 
   /// 大图浏览器（album 内 push 的全屏看图页）。
   /// 仅作为 [RouteSettings.name] 使用（供 [RouteNameObserver] 识别），
@@ -47,6 +51,11 @@ const albumNoiseDisabledRoutes = {
 /// 不会进入本函数。转场统一 ente 式 200ms 淡入（enteFadeRoute）。
 Route<dynamic>? onGenerateAlbumRoute(RouteSettings settings) {
   switch (settings.name) {
+    case AlbumRoutes.search:
+      return enteFadeRoute(
+        builder: (_) => const SearchScreen(),
+        settings: settings,
+      );
     case AlbumRoutes.album:
       // 参数通过 settings.arguments（Map）传入 bucketId / bucketName / bucketCount。
       final args = settings.arguments;

@@ -427,6 +427,30 @@ class MediaStoreChannel {
     }
   }
 
+  /// 批量提取 EXIF GPS（ML 位置索引，搜索页「位置」分类数据源）。
+  /// 返回三个并行数组（仅含成功读到 GPS 的项）；Dart 侧分批调用累计进度。
+  Future<({List<String> ids, List<double> lats, List<double> lngs})>
+      indexLocations(List<String> ids) async {
+    try {
+      final raw = await _channel.invokeMethod<Map>('indexLocations', {'ids': ids});
+      if (raw == null) {
+        return (ids: <String>[], lats: <double>[], lngs: <double>[]);
+      }
+      final outIds = (raw['ids'] as List<dynamic>? ?? const [])
+          .map<String>((e) => e.toString())
+          .toList();
+      final lats = (raw['lats'] as List<dynamic>? ?? const [])
+          .map<double>((e) => (e as num).toDouble())
+          .toList();
+      final lngs = (raw['lngs'] as List<dynamic>? ?? const [])
+          .map<double>((e) => (e as num).toDouble())
+          .toList();
+      return (ids: outIds, lats: lats, lngs: lngs);
+    } on PlatformException catch (e) {
+      throw _convertError(e);
+    }
+  }
+
   /// 读取单图完整元数据（EXIF/GPS/相机参数），分组返回。
   /// 失败或无元数据返回空 Map（不抛错，调用方据此决定是否渲染 EXIF 区）。
   Future<Map<String, Map<String, String>>> getMetadata(String id) async {

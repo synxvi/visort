@@ -149,6 +149,20 @@ const Map<String, String> stringsEn = {
   // 首页（概念上的返回终点；文案仍称「相册」——bucket 网格浏览入口）
   'gallery_title': 'Albums',
   'view_options': 'View Options',
+  // ── 搜索（相册页右上角，[ente 对齐] 分类页结构）──
+  'search': 'Search',
+  'search_hint': 'Search photo names',
+  'search_no_result': 'No matching photos',
+  'search_people': 'People',
+  'search_people_empty': 'No people detected',
+  'search_people_hint':
+      'People grouping requires a face detection model (not yet built in).',
+  'search_places': 'Places',
+  'search_places_empty': 'No location data',
+  'search_places_hint':
+      'Enable Machine Learning Indexing in Settings to group photos by location.',
+  'search_types': 'File Types',
+  'search_clear': 'Clear',
   'view_immersive': 'Immersive view',
   'view_date': 'Date view',
   'sort_by_name': 'By Name',
@@ -337,6 +351,21 @@ const Map<String, String> stringsEn = {
   'settings_clear_cache_desc':
       'All full-image and thumbnail caches will be cleared and regenerated on next browse',
   'settings_cache_cleared': 'Freed',
+  // ── 智能识别（缓存下方新区块，[ente 对齐] 开关+进度+注释）──
+  'settings_section_ml': 'Smart Recognition',
+  'settings_ml_index': 'Smart Indexing',
+  'settings_ml_index_note':
+      'Scans all photos to extract location info for search categories.',
+  'settings_ml_face': 'Face Recognition',
+  'settings_ml_face_note':
+      'Groups photos by people. Requires a face detection model (not yet built in).',
+  'settings_ml_place': 'Place Recognition',
+  'settings_ml_place_note': 'Groups photos by where they were taken.',
+  'settings_ml_progress': 'Indexing Progress',
+  'settings_ml_running': 'Indexing…',
+  'settings_ml_done': 'Complete',
+  'settings_ml_off_title': 'Disable smart indexing?',
+  'settings_ml_off_desc': 'Indexed location data will be cleared.',
   'settings_title': 'Settings',
   'layout_list': 'List',
   'layout_grid': 'Grid',

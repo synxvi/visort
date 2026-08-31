@@ -360,6 +360,8 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             "detectHdrs" -> handleDetectHdrs(call, result)
             "readMeta" -> handleReadMeta(call, result)
             "getMetadata" -> handleGetMetadata(call, result)
+            // ML 位置索引：批量读 EXIF GPS（搜索页「位置」分类数据源）。
+            "indexLocations" -> handleIndexLocations(call, result)
             "readBytes" -> handleReadBytes(call, result)
             "readThumbnail" -> handleReadThumbnail(call, result)
             "readSampledImage" -> handleReadSampledImage(call, result)
@@ -763,6 +765,41 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             } catch (e: Exception) {
                 mainHandler.post {
                     result.error(MsError.QueryFailed("readMeta 异常: ${e.message}").code, e.message, null)
+                }
+            }
+        }
+    }
+
+    /// 批量 EXIF GPS 提取（ML 位置索引）。入参 ids 分批传入，返回三个并行
+    /// 数组（仅含读到 GPS 的项）。进度累计在 Dart 侧（设置页 ML 区展示）。
+    private fun handleIndexLocations(call: MethodCall, result: Result) {
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        val ids = call.argument<List<String>>("ids")
+        if (ids.isNullOrEmpty()) {
+            result.error(MsError.InvalidArg("ids 缺失").code, null, null); return
+        }
+        ioExecutor.execute {
+            try {
+                val (outIds, lats, lngs) = repo.indexLocations(ids)
+                mainHandler.post {
+                    result.success(
+                        mapOf(
+                            "ids" to outIds,
+                            "lats" to lats,
+                            "lngs" to lngs,
+                        )
+                    )
+                }
+            } catch (e: MsError) {
+                mainHandler.post { result.error(e.code, e.message, null) }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(
+                        MsError.QueryFailed("indexLocations 异常: ${e.message}").code,
+                        e.message, null
+                    )
                 }
             }
         }
