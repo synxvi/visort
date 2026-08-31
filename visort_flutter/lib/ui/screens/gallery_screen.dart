@@ -99,11 +99,12 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
           // 自绘放大镜：与三线选项按钮/返回箭头同形制（28 画布、
           // stroke 1.9 圆头），Material Icons.search 轮廓过细过小不搭。
           // 贴近选项按钮：真机像素实测两图形间隙 34.2dp（图标盒间隙
-          // 是假象——图形包络仅 ~11dp，盒内留白全算进视觉间隙），
-          // Transform 右移 23 → 图形间隙 ~11dp（抽屉按钮与标题同密度）。
+          // 是假象——图形包络仅 ~11dp，盒内留白全算进视觉间隙）。
+          // Transform 右移 18 → 图形间隙 16.2dp（23 版实测 11.2dp 偏紧，
+          // 真机反馈回调；原始间距 34.2dp）。
           // 选项按钮不动（保其与内容区右缘 16dp 对齐的既有调校）。
           Transform.translate(
-            offset: const Offset(23, 0),
+            offset: const Offset(18, 0),
             child: IconButton(
               icon: const _SearchGlyphIcon(),
               tooltip: t(ref, 'search'),
