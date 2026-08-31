@@ -214,6 +214,47 @@ class MsImageInfo {
       );
 }
 
+/// 搜索索引元数据（智能识别索引产物，存 SQLite `search_index` 表）。
+/// 全字段可空：EXIF 缺什么就空什么（PNG 无 GPS/相机、截图无拍摄时间）。
+class MsSearchMeta {
+  const MsSearchMeta({
+    required this.id,
+    this.dateTakenMs,
+    this.lat,
+    this.lng,
+    this.camera,
+    this.country,
+    this.adminArea,
+    this.locality,
+  });
+
+  final String id;
+
+  /// EXIF 拍摄时间（DateTimeOriginal；null = 无 EXIF 时间，展示时
+  /// 由调用方兜底 MsImageInfo.dateAddedMs）。
+  final int? dateTakenMs;
+
+  /// GPS 坐标（null = 无定位）。
+  final double? lat;
+  final double? lng;
+
+  /// 相机 "Make Model"（null = 无相机信息，如截图）。
+  final String? camera;
+
+  /// 反地理编码地名（country 国家 / adminArea 省 / locality 市；
+  /// null = Geocoder 不可用或未解析）。
+  final String? country;
+  final String? adminArea;
+  final String? locality;
+
+  /// 市级标签（地点卡片标题）：市 → 省 → 国家 兜底链。
+  String get placeLabel => locality ?? adminArea ?? country ?? '';
+
+  /// 是否有任何可用维度数据。
+  bool get isEmpty =>
+      dateTakenMs == null && lat == null && camera == null && placeLabel.isEmpty;
+}
+
 /// 单图元信息
 class MsMetaInfo {
   const MsMetaInfo({
@@ -427,25 +468,53 @@ class MediaStoreChannel {
     }
   }
 
-  /// 批量提取 EXIF GPS（ML 位置索引，搜索页「位置」分类数据源）。
-  /// 返回三个并行数组（仅含成功读到 GPS 的项）；Dart 侧分批调用累计进度。
-  Future<({List<String> ids, List<double> lats, List<double> lngs})>
-      indexLocations(List<String> ids) async {
+  /// 批量提取搜索索引元数据（拍摄时间/GPS/相机，单次 EXIF pass）。
+  /// 返回 id → 元数据（仅含有数据的项）；Dart 侧分批调用累计进度。
+  /// 地名（country/adminArea/locality）由 [geocodePlaces] 二次填充。
+  Future<Map<String, MsSearchMeta>> indexSearchMeta(List<String> ids) async {
     try {
-      final raw = await _channel.invokeMethod<Map>('indexLocations', {'ids': ids});
-      if (raw == null) {
-        return (ids: <String>[], lats: <double>[], lngs: <double>[]);
-      }
-      final outIds = (raw['ids'] as List<dynamic>? ?? const [])
-          .map<String>((e) => e.toString())
-          .toList();
-      final lats = (raw['lats'] as List<dynamic>? ?? const [])
-          .map<double>((e) => (e as num).toDouble())
-          .toList();
-      final lngs = (raw['lngs'] as List<dynamic>? ?? const [])
-          .map<double>((e) => (e as num).toDouble())
-          .toList();
-      return (ids: outIds, lats: lats, lngs: lngs);
+      final raw =
+          await _channel.invokeMethod<Map>('indexSearchMeta', {'ids': ids});
+      if (raw == null) return const {};
+      return raw.map((id, v) {
+        final m = (v as Map).cast<String, dynamic>();
+        double? d(String k) => m[k] == null ? null : (m[k] as num).toDouble();
+        int? i(String k) => m[k] == null ? null : (m[k] as num).toInt();
+        String? s(String k) => m[k]?.toString();
+        return MapEntry(
+          id.toString(),
+          MsSearchMeta(
+            id: id.toString(),
+            dateTakenMs: i('dateTakenMs'),
+            lat: d('lat'),
+            lng: d('lng'),
+            camera: s('camera'),
+          ),
+        );
+      });
+    } on PlatformException catch (e) {
+      throw _convertError(e);
+    }
+  }
+
+  /// 批量反地理编码：[lat, lng] 列表 → { country / adminArea / locality }。
+  /// Geocoder 不可用/无结果时对应字段为 null（搜索页降级坐标分组）。
+  /// Kotlin 侧 0.02° 网格去重 + 缓存，重复坐标不重复发起网络请求。
+  Future<List<({String? country, String? adminArea, String? locality})>>
+      geocodePlaces(List<List<double>> coords) async {
+    try {
+      final raw = await _channel
+          .invokeMethod<List>('geocodePlaces', {'coords': coords});
+      if (raw == null) return const [];
+      return raw.map((e) {
+        final m = (e as Map?)?.cast<String, dynamic>() ?? const {};
+        String? s(String k) => m[k]?.toString();
+        return (
+          country: s('country'),
+          adminArea: s('adminArea'),
+          locality: s('locality'),
+        );
+      }).toList();
     } on PlatformException catch (e) {
       throw _convertError(e);
     }

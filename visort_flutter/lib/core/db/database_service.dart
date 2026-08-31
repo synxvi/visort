@@ -25,7 +25,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 /// 数据库版本。无存量用户策略(见文件头):schema 变更时直接升此号并
 /// 改 createAll 全量 DDL,不写迁移——高版本老库降级由 sqflite 默认
 /// onDowngrade(删库重建)处理。
-const int kDbVersion = 1;
+const int kDbVersion = 2;
 
 final databaseServiceProvider =
     Provider<DatabaseService>((ref) => DatabaseService());
@@ -56,6 +56,10 @@ class DatabaseService {
         options: sqflite.OpenDatabaseOptions(
           version: kDbVersion,
           onCreate: _onCreate,
+          // 增量升级(仅加表不动旧数据):「无迁移、删库重建」策略对已装
+          // 真机会连 sort_session 等一并清掉;此处只补建缺失表,与
+          // createAll 共用每版 DDL(v1→v2 起适用)。
+          onUpgrade: _onUpgrade,
         ),
       );
     } catch (_) {
@@ -73,6 +77,15 @@ class DatabaseService {
   static Future<void> _onCreate(sqflite.Database db, int version) async {
     // 全新安装:直接建到最新版全量表。
     await createAll(db);
+  }
+
+  /// 逐版补建(onUpgrade):每版只建自己新增的表/索引,IF NOT EXISTS
+  /// 幂等——与 createAll 中该版 DDL 保持同一份语句。
+  static Future<void> _onUpgrade(
+      sqflite.Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await createSearchIndexTable(db);
+    }
   }
 
 
@@ -122,6 +135,33 @@ class DatabaseService {
     await _createSortTables(db);
     // ── v4 (P3): Run 历史 ──
     await _createRunLogTable(db);
+    // ── v5 (搜索 v2): 搜索索引（智能识别索引产物）──
+    await createSearchIndexTable(db);
+  }
+
+  /// v2 新增:搜索索引表(全量建表与 onUpgrade 补建共用)。
+  ///
+  /// 每行一张图的 EXIF 派生数据（拍摄时间/GPS/相机/地名）。MediaStore
+  /// 无 DATE_TAKEN 与 GPS 列，此表是搜索页日期/地点/相机维度的唯一数据源。
+  /// 地名列冗余存（同坐标照片重复同值），换查询免 join；id 对齐
+  /// MediaStore _ID，照片本体仍以 MediaStore 为准——本表只是富化缓存。
+  static Future<void> createSearchIndexTable(sqflite.Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS search_index (
+        id            TEXT PRIMARY KEY,
+        date_taken_ms INTEGER,
+        lat           REAL,
+        lng           REAL,
+        camera        TEXT,
+        country       TEXT,
+        admin_area    TEXT,
+        locality      TEXT
+      ) WITHOUT ROWID
+    ''');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_search_place ON search_index (country, admin_area, locality)');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_search_camera ON search_index (camera)');
   }
 
   /// v3 会话三表(createAll 全量建表用,保证 schema 一致)。

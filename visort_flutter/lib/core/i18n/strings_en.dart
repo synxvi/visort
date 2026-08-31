@@ -151,13 +151,23 @@ const Map<String, String> stringsEn = {
   'view_options': 'View Options',
   // ── 搜索（相册页右上角，[ente 对齐] 分类页结构）──
   'search': 'Search',
-  'search_hint': 'Search photo names',
+  'search_hint': 'Search names, places, cameras, albums',
   'search_no_result': 'No matching photos',
+  // ── Search dimensions (Aves-style aggregation browse) ──
+  'search_dates': 'Dates',
+  'search_year_fmt': '{y}',
+  'search_month_fmt': '{y}/{m}',
+  'search_all': 'All',
   'search_places': 'Places',
   'search_places_empty': 'No location data',
-  'search_places_hint':
-      'Enable Machine Learning Indexing in Settings to group photos by location.',
+  'search_places_hint': 'Photos have no GPS data, or indexing is in progress.',
+  'search_places_hint_index':
+      'Enable Smart Indexing in Settings to group photos by city.',
+  'search_places_hint_place':
+      'Enable Place Recognition in Settings to group photos by city.',
+  'search_albums': 'Albums',
   'search_types': 'File Types',
+  'search_cameras': 'Cameras',
   'search_clear': 'Clear',
   'view_immersive': 'Immersive view',
   'view_date': 'Date view',
@@ -351,14 +361,18 @@ const Map<String, String> stringsEn = {
   'settings_section_ml': 'Smart Recognition',
   'settings_ml_index': 'Smart Indexing',
   'settings_ml_index_note':
-      'Scans all photos to extract location info for search categories.',
+      'Scans photos for date, location and camera info to power search by date/place/camera. Independent from the thumbnail Cache above.',
   'settings_ml_place': 'Place Recognition',
-  'settings_ml_place_note': 'Groups photos by where they were taken.',
+  'settings_ml_place_note':
+      'Resolves city names (country/state/city) from photo coordinates. Requires system location service.',
   'settings_ml_progress': 'Indexing Progress',
   'settings_ml_running': 'Indexing…',
+  'settings_ml_geocoding': 'Resolving place names…',
   'settings_ml_done': 'Complete',
+  'settings_ml_data': 'Index Data',
+  'settings_ml_data_value': '{n} photos indexed',
   'settings_ml_off_title': 'Disable smart indexing?',
-  'settings_ml_off_desc': 'Indexed location data will be cleared.',
+  'settings_ml_off_desc': 'Indexed search category data will be cleared.',
   'settings_title': 'Settings',
   'layout_list': 'List',
   'layout_grid': 'Grid',

@@ -449,34 +449,115 @@ class MediaStoreRepository(private val context: Context) {
         throw MsError.QueryFailed("无法读取图片元信息: $id")
     }
 
-    // ──────────── ML 位置索引（批量 EXIF GPS，搜索页「位置」分类）────────────
+    // ──────────── 搜索索引（批量 EXIF：拍摄时间 + GPS + 相机，供搜索页分类）────────────
 
-    /// 批量提取 EXIF GPS（Dart 侧分批传入、累计进度；设置页 ML 区展示）。
-    /// 逐张 openInputStream + androidx ExifInterface.latLong——只读文件头
-    /// EXIF 区，单张约几 ms；PNG/WebP 等无 EXIF 格式返回 null 跳过。
-    /// 返回三个并行数组（只含成功读到 GPS 的项）：ids / lats / lngs。
-    fun indexLocations(ids: List<String>): Triple<List<String>, List<Double>, List<Double>> {
-        val outIds = mutableListOf<String>()
-        val outLats = mutableListOf<Double>()
-        val outLngs = mutableListOf<Double>()
+    /// EXIF DateTimeOriginal 格式（"yyyy:MM:dd HH:mm:ss"，本地时间无时区）。
+    private val exifDateFormat = java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US)
+
+    /// 批量提取搜索索引所需元数据（Dart 侧分批传入、累计进度；设置页
+    /// 「智能识别」区展示）。逐张单次 openInputStream + androidx
+    /// ExifInterface——只读文件头 EXIF 区，单张约几 ms，一次 pass 同时
+    /// 取拍摄时间（DateTimeOriginal→DateTime 兜底）、GPS、相机制造商/
+    /// 型号（拼 "Make Model"）；PNG/WebP 等无 EXIF 格式各字段为 null。
+    /// 返回 id → { dateTakenMs / lat / lng / camera }（至少一字段非空的项）。
+    fun indexSearchMeta(ids: List<String>): Map<String, Map<String, Any?>> {
+        val out = mutableMapOf<String, Map<String, Any?>>()
         for (id in ids) {
             try {
                 val uri = ContentUris.withAppendedId(
                     MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id.toLongOrNull() ?: -1L
                 )
-                val latLng = contentResolver.openInputStream(uri)?.use { input ->
-                    androidx.exifinterface.media.ExifInterface(input).latLong
-                }
-                if (latLng != null) {
-                    outIds.add(id)
-                    outLats.add(latLng[0])
-                    outLngs.add(latLng[1])
+                contentResolver.openInputStream(uri)?.use { input ->
+                    val exif = androidx.exifinterface.media.ExifInterface(input)
+                    var dateTakenMs: Long? = null
+                    for (tag in listOf(
+                        androidx.exifinterface.media.ExifInterface.TAG_DATETIME_ORIGINAL,
+                        androidx.exifinterface.media.ExifInterface.TAG_DATETIME,
+                    )) {
+                        val raw = exif.getAttribute(tag)
+                        if (raw.isNullOrEmpty()) continue
+                        // SimpleDateFormat 非线程安全，ioExecutor 多线程调用须同步
+                        dateTakenMs = try {
+                            synchronized(exifDateFormat) { exifDateFormat.parse(raw)?.time }
+                        } catch (e: Exception) {
+                            null
+                        }
+                        if (dateTakenMs != null) break
+                    }
+                    val latLng = exif.latLong
+                    val make = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MAKE)?.trim()
+                    val model = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_MODEL)?.trim()
+                    val camera = listOfNotNull(
+                        if (model != null && make != null && !model.contains(make)) make else null,
+                        model ?: make,
+                    ).joinToString(" ").ifEmpty { null }
+                    if (dateTakenMs != null || latLng != null || camera != null) {
+                        out[id] = mapOf(
+                            "dateTakenMs" to dateTakenMs,
+                            "lat" to latLng?.get(0),
+                            "lng" to latLng?.get(1),
+                            "camera" to camera,
+                        )
+                    }
                 }
             } catch (e: Exception) {
                 // 单张失败跳过（损坏/权限），不打断整批索引
             }
         }
-        return Triple(outIds, outLats, outLngs)
+        return out
+    }
+
+    // ──────────── 反地理编码（经纬度 → 国家/省/市，搜索页「地点」分类）────────────
+
+    /// 坐标去重网格（度）：0.02° ≈ 2km，同城照片合并为一次 Geocoder 调用。
+    private val geocodeGrid = 0.02
+
+    /// 地理编码坐标缓存（网格 key → 地名三元组），跨批存活减少重复调用。
+    private val geocodeCache = mutableMapOf<String, Triple<String?, String?, String?>>()
+
+    /// 批量反地理编码：入参 [lat, lng] 列表，出参同长度数组，每项
+    /// { country / adminArea(省) / locality(市) }——Geocoder 不可用或
+    /// 无结果时各字段为 null（Dart 侧降级回坐标网格分组）。
+    ///
+    /// 实现（对标 Aves GeocodingHandler）：android.location.Geocoder 走
+    /// 系统定位服务（国行 ROM 多为厂商自带实现，可返回中文地名）；
+    /// 0.02° 网格去重后串行调用（Geocoder 是网络请求，避免并发限流）。
+    fun geocodePlaces(coords: List<List<Double>>): List<Map<String, String?>> {
+        val geocoderAvailable = android.location.Geocoder.isPresent()
+        val out = mutableListOf<Map<String, String?>>()
+        for (pair in coords) {
+            if (pair.size < 2) {
+                out.add(emptyMap()); continue
+            }
+            val lat = pair[0]; val lng = pair[1]
+            val key = "${(lat / geocodeGrid).roundToInt()}:${(lng / geocodeGrid).roundToInt()}"
+            val hit = geocodeCache[key]
+            if (hit != null || !geocoderAvailable) {
+                out.add(hit?.let { mapOf("country" to it.first, "adminArea" to it.second, "locality" to it.third) } ?: emptyMap())
+                continue
+            }
+            var resolved: Triple<String?, String?, String?>? = null
+            try {
+                val geocoder = android.location.Geocoder(context, java.util.Locale.CHINA)
+                // maxResults=2：部分 ROM maxResults=1 时偶发返回空（Aves 同款规避）
+                val addresses = geocoder.getFromLocation(lat, lng, 2)
+                if (!addresses.isNullOrEmpty()) {
+                    val a = addresses.first()
+                    resolved = Triple(
+                        a.countryName?.takeIf { it.isNotEmpty() },
+                        a.adminArea?.takeIf { it.isNotEmpty() },
+                        // 市级兜底链：locality → subLocality（Aves 同款 locality 优先）
+                        (a.locality?.takeIf { it.isNotEmpty() })
+                            ?: a.subLocality?.takeIf { it.isNotEmpty() },
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "geocodePlaces 异常: ${e.message}")
+            }
+            geocodeCache[key] = resolved ?: Triple(null, null, null)
+            out.add(mapOf("country" to resolved?.first, "adminArea" to resolved?.second, "locality" to resolved?.third))
+        }
+        return out
     }
 
     // ──────────── 完整元数据 EXIF/GPS（P0）────────────

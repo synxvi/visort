@@ -360,8 +360,10 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             "detectHdrs" -> handleDetectHdrs(call, result)
             "readMeta" -> handleReadMeta(call, result)
             "getMetadata" -> handleGetMetadata(call, result)
-            // ML 位置索引：批量读 EXIF GPS（搜索页「位置」分类数据源）。
-            "indexLocations" -> handleIndexLocations(call, result)
+            // 搜索索引：批量读 EXIF（拍摄时间/GPS/相机，搜索页分类数据源）。
+            "indexSearchMeta" -> handleIndexSearchMeta(call, result)
+            // 反地理编码：坐标 → 国家/省/市（搜索页「地点」分类）。
+            "geocodePlaces" -> handleGeocodePlaces(call, result)
             "readBytes" -> handleReadBytes(call, result)
             "readThumbnail" -> handleReadThumbnail(call, result)
             "readSampledImage" -> handleReadSampledImage(call, result)
@@ -770,9 +772,10 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         }
     }
 
-    /// 批量 EXIF GPS 提取（ML 位置索引）。入参 ids 分批传入，返回三个并行
-    /// 数组（仅含读到 GPS 的项）。进度累计在 Dart 侧（设置页 ML 区展示）。
-    private fun handleIndexLocations(call: MethodCall, result: Result) {
+    /// 批量 EXIF 索引（搜索页分类数据源）。入参 ids 分批传入，返回
+    /// id → { dateTakenMs / lat / lng / camera }。进度累计在 Dart 侧
+    /// （设置页「智能识别」区展示）。
+    private fun handleIndexSearchMeta(call: MethodCall, result: Result) {
         val repo = requireRepo() ?: run {
             result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
         }
@@ -782,22 +785,42 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         }
         ioExecutor.execute {
             try {
-                val (outIds, lats, lngs) = repo.indexLocations(ids)
-                mainHandler.post {
-                    result.success(
-                        mapOf(
-                            "ids" to outIds,
-                            "lats" to lats,
-                            "lngs" to lngs,
-                        )
-                    )
-                }
+                val metas = repo.indexSearchMeta(ids)
+                mainHandler.post { result.success(metas) }
             } catch (e: MsError) {
                 mainHandler.post { result.error(e.code, e.message, null) }
             } catch (e: Exception) {
                 mainHandler.post {
                     result.error(
-                        MsError.QueryFailed("indexLocations 异常: ${e.message}").code,
+                        MsError.QueryFailed("indexSearchMeta 异常: ${e.message}").code,
+                        e.message, null
+                    )
+                }
+            }
+        }
+    }
+
+    /// 批量反地理编码（搜索页「地点」分类）。入参 [lat, lng] 列表，
+    /// 出参同长度数组，每项 { country / adminArea / locality }。
+    /// Geocoder 慢（网络请求），走 ioExecutor；跨批网格缓存见 repo。
+    private fun handleGeocodePlaces(call: MethodCall, result: Result) {
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        val coords = call.argument<List<List<Double>>>("coords")
+        if (coords == null) {
+            result.error(MsError.InvalidArg("coords 缺失").code, null, null); return
+        }
+        ioExecutor.execute {
+            try {
+                val places = repo.geocodePlaces(coords)
+                mainHandler.post { result.success(places) }
+            } catch (e: MsError) {
+                mainHandler.post { result.error(e.code, e.message, null) }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(
+                        MsError.QueryFailed("geocodePlaces 异常: ${e.message}").code,
                         e.message, null
                     )
                 }
