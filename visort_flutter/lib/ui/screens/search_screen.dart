@@ -1,21 +1,24 @@
 // 搜索页 —— 相册页右上角搜索按钮进入
 //
-// v2 多维度版（[aves 对齐] Aves 无输入态按维度聚合浏览 + 内存谓词过滤，
-// 见 lib/model/filters/ Aves 源码调研）：
-//   - 无输入态五维度分类（横向卡片行）：日期（年 → 月钻取）/ 地点
-//     （城市名，Geocoder 不可用降级坐标网格）/ 相册 / 文件类型 / 相机；
-//   - 日期维度恒可用（EXIF 拍摄时间缺失兜底 dateAdded）；地点/相机
-//     依赖「智能识别索引」（设置页开关驱动，search_index SQLite 表）；
-//   - 文本搜索：文件名 + 地名 + 相机 + 相册名 匹配（内存过滤，实时）。
-// 结果页/看图复用现有组件：Gallery 网格 + DetailPage（无 Hero 飞行——
-// tagPrefix 取 'search' 与相册页 'photo_$id' 区分，避免跨路由 tag 冲突）。
+// v2.2 chip 组合过滤版（[aves 对齐] CollectionSearchDelegate 交互 +
+// visort UI；v2 大卡片版已废弃）：
+//   - 首行快捷（无标题，Aves typeFilters 位）：日期选择器（showDatePicker
+//     动态生成某日 chip）/ 最近添加 / 收藏 / HDR；
+//   - 各维度可折叠区（Aves ExpandableFilterRow）：标题右侧展开/收起；
+//     折叠态日期只露近几月（近→远排序）、其余露前 8；
+//   - 点 chip 即过滤：同维度多选 OR、跨维度 AND，已选行可逐个移除，
+//     结果同页实时出网格（Aves 跳 CollectionPage，我们少一跳）；
+//   - 输入实时过滤各维度 chips（label contains，Aves containQuery 同款）；
+//   - 文本 ∩ chips 组合；文本匹配 文件名+地名+相机+相册名。
+// 日期恒可用（EXIF 拍摄时间缺失兜底 dateAdded）；地点/相机依赖
+// 「智能识别索引」（设置页开关驱动，search_index SQLite 表）。
+// 看图复用 Gallery 网格 + DetailPage（tagPrefix 'search' 防跨路由 tag 冲突）。
 //
-// 历史：v1 仅文件名搜索 + 位置坐标网格/文件类型两组分类（ml_index_service
-// 纯 GPS 索引）；人物分类已移除（人脸识别未采用）。
+// 历史：v1 文件名搜索 + 坐标网格/文件类型两组；v2 大卡片五维度（用户
+// 反馈未按 Aves 交互设计，废弃）；人物分类已移除（人脸识别未采用）。
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
@@ -28,13 +31,11 @@ import 'package:visort_flutter/ui/ente_viewer/gallery_files_inherited_widget.dar
 import 'package:visort_flutter/ui/ente_viewer/group_type.dart';
 import 'package:visort_flutter/ui/ente_viewer/selected_files.dart';
 import 'package:visort_flutter/ui/router_android.dart';
+import 'package:visort_flutter/ui/screens/search_filter_chip.dart';
 import 'package:visort_flutter/ui/route_transitions.dart';
 
 /// 坐标兜底网格精度（度）：0.01° ≈ 1.1km，Geocoder 无地名时同一格算一个「地点」。
 const double _kPlaceGrid = 0.01;
-
-/// 分类封面卡边长（[ente 对齐] 108 系缩略卡，visort 统一 96）。
-const double _kCardSize = 96;
 
 /// 一条已聚合的分类项（维度值 → 照片组），五维度共用的中间结构。
 /// key 为稳定去重键（坐标/年月等），label 为展示名。
@@ -66,20 +67,34 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   /// bucketId → 相册名（文本搜索「按相册名」匹配 + 相册维度卡片标签）。
   Map<String, String> _bucketNames = const {};
 
-  // ── 五维度分组（_photos 与索引数据齐了才在 _rebuildGroups 算）──
-  List<(int, _Group)> _yearGroups = const [];
-  Map<int, List<_Group>> _monthGroupsByYear = const {};
-  List<_Group> _placeGroups = const [];
-  List<_Group> _albumGroups = const [];
-  List<_Group> _typeGroups = const [];
-  List<_Group> _cameraGroups = const [];
+  // ── chip 注册表与已选集合（[aves 对齐] 建议 chip + 组合过滤）──
+  /// 全量可选 chips（key → 定义）；_rebuildGroups 从五维度分组派生。
+  Map<String, SearchFilterData> _filters = const {};
+
+  /// 已选 chip keys（同维度 OR / 跨维度 AND）；非空时切结果网格。
+  final Set<String> _selected = {};
+
+  /// 处于展开态的维度（category）；折叠/展开由各 section 标题右侧按钮切换。
+  final Set<String> _expanded = {};
 
   @override
   void initState() {
     super.initState();
     // 恢复智能识别索引（日期/地点/相机维度数据）；完成回调会更新分组。
     ref.read(searchIndexServiceProvider.notifier).load().then((_) {
-      if (mounted) _rebuildGroups();
+      if (!mounted) return;
+      _rebuildGroups();
+      // 自愈：开关已开但索引未完成（开启时用户离开设置页/中断）→
+      // 进搜索页自动续跑，不再依赖用户回设置页重开（真机 '…'/0 张
+      // 排查结论：start 未跑完时 UI 停在 total 未就绪暂态）。
+      final notifier = ref.read(searchIndexServiceProvider.notifier);
+      final enabled = ref.read(configProvider).mlIndexEnabled;
+      final st = ref.read(searchIndexServiceProvider);
+      if (enabled && !st.running && !st.done) {
+        notifier.start().then((_) {
+          if (mounted) _rebuildGroups();
+        });
+      }
     });
     _loadPhotos();
   }
@@ -114,44 +129,42 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     final photos = _photos;
     final metas = ref.read(searchIndexServiceProvider.notifier).metas;
 
-    // 日期：年 + 年内月（两张索引，月页钻取用）。
+    // 日期（[aves 对齐] 相对时间优先，不写死年月）：绝对月份分组
+    // （ym:2025-06 键）+ 年分组；展示层按「离当前最近」排序，折叠态
+    // 只露近几个月（见 _dateOrder）。
+    final byAbsMonth = <String, List<MsImageInfo>>{};
     final years = <int, List<MsImageInfo>>{};
-    final months = <(int, int), List<MsImageInfo>>{};
+    final recentIds = <String>{};
+    final now = DateTime.now();
+    final weekAgo = now.subtract(const Duration(days: 7));
     for (final p in photos) {
       final taken = metas[p.id]?.dateTakenMs ?? p.dateAddedMs;
       if (taken <= 0) continue;
       final dt = DateTime.fromMillisecondsSinceEpoch(taken);
+      byAbsMonth
+          .putIfAbsent('${dt.year}-${dt.month.toString().padLeft(2, '0')}', () => [])
+          .add(p);
       years.putIfAbsent(dt.year, () => []).add(p);
-      months.putIfAbsent((dt.year, dt.month), () => []).add(p);
+      if (dt.isAfter(weekAgo)) recentIds.add(p.id);
     }
     final yearFmt = t(ref, 'search_year_fmt');
-    final monthFmt = t(ref, 'search_month_fmt');
-    final yearList = years.entries
-        .map((e) => (
-              e.key,
-              _Group(
-                '${e.key}',
-                yearFmt.replaceFirst('{y}', '${e.key}'),
-                e.value,
-              )
+    final monthFmt = t(ref, 'search_month_only');
+    final yearGroups = years.entries
+        .map((e) => _Group(
+              '${e.key}',
+              yearFmt.replaceFirst('{y}', '${e.key}'),
+              e.value,
             ))
         .toList()
-      ..sort((a, b) => b.$1.compareTo(a.$1));
-    final monthMap = <int, List<_Group>>{};
-    months.forEach((k, v) {
-      monthMap.putIfAbsent(k.$1, () => []).add(
-            _Group(
-              '${k.$1}-${k.$2}',
-              monthFmt
-                  .replaceFirst('{y}', '${k.$1}')
-                  .replaceFirst('{m}', '${k.$2}'),
-              v,
-            ),
-          );
-    });
-    for (final list in monthMap.values) {
-      list.sort((a, b) => b.key.compareTo(a.key)); // '2024-12' 字符串序=月份序
-    }
+      ..sort((a, b) => b.key.compareTo(a.key)); // 年份降序
+    // 绝对月份 → Group；排序交给展示层（_absMonthRank 按离当前近远）。
+    final monthGroups = byAbsMonth.entries
+        .map((e) {
+          final parts = e.key.split('-');
+          final m = int.parse(parts[1]);
+          return _Group(e.key, monthFmt.replaceFirst('{m}', '$m'), e.value);
+        })
+        .toList();
 
     // 地点：城市名分组（country+省+市 三元组为键防同城名撞车）；
     // 无名有坐标 → 坐标网格兜底（v1 行为）。
@@ -218,13 +231,55 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       ..sort((a, b) => b.photos.length.compareTo(a.photos.length));
 
     if (!mounted) return;
+
+    // chip 注册表：各维度分组 → SearchFilterData（id 集合谓词）。
+    SearchFilterData f(_Group g, String cat, IconData icon) => SearchFilterData(
+          key: '$cat:${g.key}',
+          label: g.label,
+          category: cat,
+          icon: icon,
+          ids: g.photos.map((p) => p.id).toSet(),
+        );
+    final list = <SearchFilterData>[
+      // 快捷行（[aves 对齐] Aves 首行无标题的 typeFilters 位）：最近添加 /
+      // 收藏 / HDR（纯本地字段）。
+      if (recentIds.isNotEmpty)
+        SearchFilterData(
+          key: 'quick:recent',
+          label: t(ref, 'search_recent'),
+          category: 'quick',
+          icon: Icons.schedule,
+          ids: recentIds,
+        ),
+      if (photos.any((p) => p.isFavorite))
+        SearchFilterData(
+          key: 'quick:fav',
+          label: t(ref, 'search_favorites'),
+          category: 'quick',
+          icon: Icons.favorite_outline,
+          ids: photos.where((p) => p.isFavorite).map((p) => p.id).toSet(),
+        ),
+      if (photos.any((p) => p.isHdr))
+        SearchFilterData(
+          key: 'quick:hdr',
+          label: 'HDR',
+          category: 'quick',
+          icon: Icons.brightness_high_outlined,
+          ids: photos.where((p) => p.isHdr).map((p) => p.id).toSet(),
+        ),
+      // 日期：绝对月份（ym:2025-06，展示层按近远排序）+ 年。
+      for (final g in monthGroups) f(g, 'date', Icons.calendar_month_outlined),
+      for (final g in yearGroups) f(g, 'date', Icons.calendar_today_outlined),
+      for (final g in placeList) f(g, 'place', Icons.location_on_outlined),
+      for (final g in albumList) f(g, 'album', Icons.photo_library_outlined),
+      for (final g in typeList) f(g, 'mime', Icons.image_outlined),
+      for (final g in cameraList) f(g, 'camera', Icons.photo_camera_outlined),
+    ];
+
     setState(() {
-      _yearGroups = yearList;
-      _monthGroupsByYear = monthMap;
-      _placeGroups = placeList;
-      _albumGroups = albumList;
-      _typeGroups = typeList;
-      _cameraGroups = cameraList;
+      _filters = {for (final x in list) x.key: x};
+      // 索引重建后 key 可能失效，清掉幽灵选中项。
+      _selected.removeWhere((k) => !_filters.containsKey(k));
     });
   }
 
@@ -270,13 +325,23 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       ),
       body: SafeArea(
         bottom: false,
-        child: Column(
-          children: [
-            _buildSearchField(),
-            Expanded(
-              child: query.isEmpty ? _buildCategories() : _buildResults(query),
-            ),
-          ],
+        child: Builder(
+          builder: (context) {
+            // 组合结果 = 文本过滤 ∩ 已选 chips（任一存在即出网格）。
+            final results = _applyQueryAndFilters(query);
+            final showResults = query.isNotEmpty || _selected.isNotEmpty;
+            return Column(
+              children: [
+                _buildSearchField(),
+                if (showResults) _buildSelectedRow(results),
+                Expanded(
+                  child: showResults
+                      ? _buildResults(results)
+                      : _buildSuggestions(query),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -322,15 +387,113 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
   }
 
-  // ──────────── 维度分类列表（无输入时）────────────
+  // ──────────── 维度 chip 建议（[aves 对齐] 建议 chip 行 + 组合过滤）────────────
 
-  Widget _buildCategories() {
+  /// 组合谓词：同维度（category）多 chip 取并（OR），跨维度取交（AND）。
+  bool _matchSelected(String id) {
+    if (_selected.isEmpty) return true;
+    final byCat = <String, List<SearchFilterData>>{};
+    for (final k in _selected) {
+      final f = _filters[k];
+      if (f == null) continue;
+      byCat.putIfAbsent(f.category, () => []).add(f);
+    }
+    return byCat.values.every((fs) => fs.any((f) => f.contains(id)));
+  }
+
+  /// 点 chip：toggle 选中集合（同页实时过滤，不跳页）。
+  void _toggleFilter(String key) {
+    setState(() {
+      if (!_selected.remove(key)) _selected.add(key);
+    });
+  }
+
+  /// 输入过滤后的某维度 chips（label contains，大小写不敏感；
+  /// [aves 对齐] Aves containQuery 同款语义）。
+  List<SearchFilterData> _sectionChips(String category, String q) {
+    final chips = _filters.values
+        .where((f) => f.category == category)
+        .toList(growable: false)
+      ..sort((a, b) => b.ids.length.compareTo(a.ids.length));
+    if (q.isEmpty) return chips;
+    final lq = q.toLowerCase();
+    return chips.where((f) => f.label.toLowerCase().contains(lq)).toList();
+  }
+
+  /// 已选过滤 chip 行（可逐个移除）+ 结果数与清空入口。
+  Widget _buildSelectedRow(List<MsImageInfo> results) {
+    if (_selected.isEmpty) return const SizedBox.shrink();
+    final chips = [
+      for (final k in _selected)
+        if (_filters.containsKey(k)) _filters[k]!,
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 2),
+          child: Row(
+            children: [
+              for (var i = 0; i < chips.length; i++)
+                Padding(
+                  padding: EdgeInsets.only(right: i == chips.length - 1 ? 0 : 8),
+                  child: FilterChipWidget(
+                    filter: chips[i],
+                    selected: true,
+                    onTap: () => _toggleFilter(chips[i].key),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+          child: Row(
+            children: [
+              Text(
+                t(ref, 'search_match_count').replaceFirst(
+                    '{n}', '${results.length}'),
+                style: const TextStyle(
+                  fontFamily: 'Space Mono',
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  color: AppColors.muted,
+                  fontSize: 11,
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => setState(() => _selected.clear()),
+                child: Text(
+                  t(ref, 'search_clear_filters'),
+                  style: const TextStyle(
+                    fontFamily: 'Space Mono',
+                    fontFamilyFallback: AppFonts.cjkFallback,
+                    color: AppColors.accent,
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 维度建议列表。有输入时各维度 chips 按词过滤（跨维度联动检索）。
+  /// 每栏标题右侧折叠/展开（[aves 对齐] ExpandableFilterRow）：
+  /// 折叠态只露常用项（日期=近几月，其余=前 8），展开看全量。
+  Widget _buildSuggestions(String query) {
     final index = ref.watch(searchIndexServiceProvider);
     final config = ref.watch(configProvider);
+    final hasPlace = config.mlIndexEnabled &&
+        config.mlPlaceEnabled &&
+        _filters.values.any((f) => f.category == 'place');
     return ListView(
-      padding: const EdgeInsets.only(top: 8, bottom: 24),
+      padding: const EdgeInsets.only(top: 4, bottom: 24),
       children: [
-        // 全量扫描加载中：顶部轻量指示（各维度分类依赖全量列表）。
+        // 全量扫描加载中：顶部轻量指示（chips 依赖全量列表）。
         if (_loading)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 20),
@@ -345,148 +508,232 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         // 索引进度 banner（设置页「智能识别」区同源）。
         if (index.running || index.geocoding)
           _MlProgressBanner(state: index, onTap: null),
-        // 日期：恒可用（拍摄时间缺失兜底 dateAdded）。年卡片 → 月钻取。
-        _SectionHeader(t(ref, 'search_dates')),
-        _buildCardRow([
-          for (final (year, g) in _yearGroups)
-            _CategoryCard(
-              title: g.label,
-              count: g.photos.length,
-              coverId: g.photos.first.id,
-              onTap: () => _openMonths(year, g),
-            ),
-        ]),
-        // 地点：索引数据驱动（城市名，Geocoder 不可用降级坐标网格）。
-        // 空态文案按配置分流：索引未开 / 地点识别未开 / 已开但无数据。
-        _SectionHeader(t(ref, 'search_places')),
-        if (config.mlIndexEnabled &&
-            config.mlPlaceEnabled &&
-            _placeGroups.isNotEmpty)
-          _buildCardRow([
-            for (final g in _placeGroups)
-              _CategoryCard(
-                title: g.label,
-                count: g.photos.length,
-                coverId: g.photos.first.id,
-                onTap: () => _openCategory(
-                    g.label, g.photos, Icons.location_on_outlined),
-              ),
-          ])
-        else if (config.mlIndexEnabled && config.mlPlaceEnabled)
-          _SectionEmpty(
-            icon: Icons.location_on_outlined,
-            title: t(ref, 'search_places_empty'),
-            hint: t(ref, 'search_places_hint'),
+        // 快捷行（无标题，[aves 对齐] Aves 首行 typeFilters 位）：
+        // 日期选择器 + 最近添加 + 收藏 + HDR。
+        _buildQuickRow(query),
+        // 日期：近月优先；展开看全部年/月。
+        _buildSection(
+          title: t(ref, 'search_dates'),
+          category: 'date',
+          query: query,
+          collapsedCount: 5,
+          sort: _byAbsMonthDesc,
+        ),
+        // 地点：索引驱动；空态按配置分流引导。
+        if (hasPlace)
+          _buildSection(
+            title: t(ref, 'search_places'),
+            category: 'place',
+            query: query,
           )
-        else if (!config.mlIndexEnabled)
+        else if (query.isEmpty) ...[
+          _SectionHeader(t(ref, 'search_places')),
           _SectionEmpty(
             icon: Icons.location_on_outlined,
             title: t(ref, 'search_places_empty'),
-            hint: t(ref, 'search_places_hint_index'),
-          )
-        else
-          _SectionEmpty(
-            icon: Icons.location_on_outlined,
-            title: t(ref, 'search_places_empty'),
-            hint: t(ref, 'search_places_hint_place'),
+            hint: !config.mlIndexEnabled
+                ? t(ref, 'search_places_hint_index')
+                : (!config.mlPlaceEnabled
+                    ? t(ref, 'search_places_hint_place')
+                    : t(ref, 'search_places_hint')),
           ),
-        // 相册：bucket 分组，纯本地即时可用。
-        _SectionHeader(t(ref, 'search_albums')),
-        _buildCardRow([
-          for (final g in _albumGroups)
-            _CategoryCard(
-              title: g.label,
-              count: g.photos.length,
-              coverId: g.photos.first.id,
-              onTap: () =>
-                  _openCategory(g.label, g.photos, Icons.photo_library_outlined),
-            ),
-        ]),
-        // 文件类型：纯本地即时可用（v1 行为）。
-        _SectionHeader(t(ref, 'search_types')),
-        _buildCardRow([
-          _CategoryCard(
-            title: t(ref, 'gallery_title'),
-            count: _photos.length,
-            coverId: _photos.isEmpty ? null : _photos.first.id,
-            onTap: _photos.isEmpty
-                ? null
-                : () => _openCategory(
-                    t(ref, 'gallery_title'), _photos, Icons.photo_library_outlined),
-          ),
-          for (final g in _typeGroups)
-            _CategoryCard(
-              title: g.label,
-              count: g.photos.length,
-              coverId: g.photos.first.id,
-              onTap: () =>
-                  _openCategory(g.label, g.photos, Icons.image_outlined),
-            ),
-        ]),
-        // 相机：索引数据驱动；无数据整节隐藏（避免空态噪音）。
-        if (_cameraGroups.isNotEmpty) ...[
-          _SectionHeader(t(ref, 'search_cameras')),
-          _buildCardRow([
-            for (final g in _cameraGroups)
-              _CategoryCard(
-                title: g.label,
-                count: g.photos.length,
-                coverId: g.photos.first.id,
-                onTap: () => _openCategory(
-                    g.label, g.photos, Icons.photo_camera_outlined),
-              ),
-          ]),
         ],
+        // 相册 / 格式 / 相机。
+        _buildSection(
+            title: t(ref, 'search_albums'), category: 'album', query: query),
+        _buildSection(
+            title: t(ref, 'search_types'), category: 'mime', query: query),
+        _buildSection(
+            title: t(ref, 'search_cameras'), category: 'camera', query: query),
       ],
     );
   }
 
-  Widget _buildCardRow(List<Widget> cards) {
+  /// 绝对月份键（'2025-06'）距当前月数——日期维度排序键（近→远）。
+  int _absMonthRank(String key) {
+    final parts = key.split('-');
+    final y = int.parse(parts[0]);
+    final m = int.parse(parts[1]);
+    final now = DateTime.now();
+    return (now.year - y) * 12 + (now.month - m);
+  }
+
+  /// 日期维度排序：月份按距当前近远，年份排月份之后（展开态用）。
+  int _byAbsMonthDesc(SearchFilterData a, SearchFilterData b) {
+    int rank(SearchFilterData f) {
+      final k = f.key.replaceFirst('date:', '');
+      return k.contains('-') ? _absMonthRank(k) : 9999 + _absMonthRank(k);
+    }
+
+    return rank(a).compareTo(rank(b));
+  }
+
+  /// 快捷行：日期选择器（特殊入口 chip）+ quick 维度 chips。无标题。
+  Widget _buildQuickRow(String query) {
+    final chips = _sectionChips('quick', query);
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: Row(
-        children: [for (final c in cards) Padding(
-          padding: const EdgeInsets.only(right: 10),
-          child: c,
-        )],
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: FilterChipWidget(
+              filter: SearchFilterData(
+                key: 'date:picker',
+                label: t(ref, 'search_date_picker'),
+                category: 'date',
+                icon: Icons.edit_calendar_outlined,
+                ids: const {},
+              ),
+              selected: false,
+              onTap: _pickDate,
+            ),
+          ),
+          for (var i = 0; i < chips.length; i++)
+            Padding(
+              padding: EdgeInsets.only(right: i == chips.length - 1 ? 0 : 8),
+              child: FilterChipWidget(
+                filter: chips[i],
+                selected: _selected.contains(chips[i].key),
+                onTap: () => _toggleFilter(chips[i].key),
+              ),
+            ),
+        ],
       ),
     );
   }
 
-  /// 年 → 月钻取页（该年月份卡片 + 全部），月卡片再进结果网格。
-  void _openMonths(int year, _Group yearGroup) {
-    final months = _monthGroupsByYear[year] ?? const <_Group>[];
-    Navigator.of(context).push(enteFadeRoute(
-      builder: (_) => _SubCategoriesPage(
-        title: yearGroup.label,
-        icon: Icons.calendar_today_outlined,
-        groups: [
-          // 「全部」置顶：该年全部照片。
-          _Group('all', t(ref, 'search_all'), yearGroup.photos),
-          ...months,
-        ],
-      ),
-    ));
+  /// 日期选择器：选日后生成「2025年6月15日」过滤 chip 并选中。
+  Future<void> _pickDate() async {
+    final d = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(1990),
+      lastDate: DateTime.now(),
+      helpText: t(ref, 'search_date_picker'),
+    );
+    if (d == null || !mounted) return;
+    final ids = <String>{};
+    final metas = ref.read(searchIndexServiceProvider.notifier).metas;
+    for (final p in _photos) {
+      final taken = metas[p.id]?.dateTakenMs ?? p.dateAddedMs;
+      if (taken <= 0) continue;
+      final dt = DateTime.fromMillisecondsSinceEpoch(taken);
+      if (dt.year == d.year && dt.month == d.month && dt.day == d.day) {
+        ids.add(p.id);
+      }
+    }
+    final fmt = t(ref, 'search_picked_fmt')
+        .replaceFirst('{y}', '${d.year}')
+        .replaceFirst('{m}', '${d.month}')
+        .replaceFirst('{d}', '${d.day}');
+    setState(() {
+      _filters['date:picked-${d.toIso8601String()}'] = SearchFilterData(
+        key: 'date:picked-${d.toIso8601String()}',
+        label: fmt,
+        category: 'date',
+        icon: Icons.today,
+        ids: ids,
+      );
+      _selected.add('date:picked-${d.toIso8601String()}');
+    });
   }
 
-  void _openCategory(String title, List<MsImageInfo> photos, IconData icon) {
-    Navigator.of(context).push(enteFadeRoute(
-      builder: (_) => _CategoryResultPage(
-        title: title,
-        icon: icon,
-        photos: photos,
-      ),
-    ));
+  /// 一个可折叠维度区（[aves 对齐] TitledExpandableFilterRow）：
+  /// 标题 + 右侧展开/收起按钮；折叠只露前 [collapsedCount] 个（日期按
+  /// 近远、其余按数量），展开全量；输入过滤跨折叠态生效。
+  Widget _buildSection({
+    required String title,
+    required String category,
+    required String query,
+    int collapsedCount = 8,
+    int Function(SearchFilterData, SearchFilterData)? sort,
+  }) {
+    var chips = _sectionChips(category, query);
+    if (chips.isEmpty) return const SizedBox.shrink();
+    if (sort != null) chips = chips.toList()..sort(sort);
+    final expanded = _expanded.contains(category);
+    final visible = expanded || chips.length <= collapsedCount
+        ? chips
+        : chips.take(collapsedCount).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 8, 4),
+          child: Row(
+            children: [
+              Expanded(child: _SectionHeader(title)),
+              if (chips.length > collapsedCount)
+                GestureDetector(
+                  onTap: () => setState(() {
+                    expanded ? _expanded.remove(category) : _expanded.add(category);
+                  }),
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    child: Row(
+                      children: [
+                        Text(
+                          expanded
+                              ? t(ref, 'search_collapse')
+                              : t(ref, 'search_expand'),
+                          style: const TextStyle(
+                            fontFamily: 'Space Mono',
+                            fontFamilyFallback: AppFonts.cjkFallback,
+                            color: AppColors.accent,
+                            fontSize: 11,
+                          ),
+                        ),
+                        Icon(
+                          expanded
+                              ? Icons.keyboard_arrow_up
+                              : Icons.keyboard_arrow_down,
+                          size: 14,
+                          color: AppColors.accent,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              const SizedBox(width: 8),
+            ],
+          ),
+        ),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              for (var i = 0; i < visible.length; i++)
+                Padding(
+                  padding:
+                      EdgeInsets.only(right: i == visible.length - 1 ? 0 : 8),
+                  child: FilterChipWidget(
+                    filter: visible[i],
+                    selected: _selected.contains(visible[i].key),
+                    onTap: () => _toggleFilter(visible[i].key),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
-  // ──────────── 搜索结果网格（有输入时）────────────
+  // ──────────── 搜索结果网格（文本/chips 触发时）────────────
 
-  /// 文本匹配：文件名 + 地名 + 相机 + 相册名（全小写 contains）。
-  Widget _buildResults(String query) {
+  /// 组合过滤：文本匹配（文件名+地名+相机+相册名 contains）∩ 已选 chips
+  /// （同维度 OR / 跨维度 AND）。文本为空时仅 chips 生效。
+  List<MsImageInfo> _applyQueryAndFilters(String query) {
     final q = query.toLowerCase();
     final metas = ref.read(searchIndexServiceProvider.notifier).metas;
-    final filtered = _photos.where((p) {
+    return _photos.where((p) {
+      if (!_matchSelected(p.id)) return false;
+      if (q.isEmpty) return true;
       if (p.name.toLowerCase().contains(q)) return true;
       if ((_bucketNames[p.bucketId] ?? '').toLowerCase().contains(q)) {
         return true;
@@ -496,6 +743,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       return m.placeLabel.toLowerCase().contains(q) ||
           (m.camera?.toLowerCase().contains(q) ?? false);
     }).toList();
+  }
+
+  Widget _buildResults(List<MsImageInfo> filtered) {
     if (filtered.isEmpty) {
       return Center(
         child: Column(
@@ -642,92 +892,6 @@ class _SectionEmpty extends StatelessWidget {
   }
 }
 
-/// 分类封面卡：96 封面（缩略图 + 圆角） + 名称 + 数量。
-class _CategoryCard extends StatelessWidget {
-  const _CategoryCard({
-    required this.title,
-    required this.count,
-    this.coverId,
-    this.onTap,
-  });
-
-  final String title;
-  final int count;
-
-  /// 封面照片 id；null 时灰底占位图标。
-  final String? coverId;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: SizedBox(
-        width: _kCardSize,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: SizedBox(
-                width: _kCardSize,
-                height: _kCardSize,
-                child: _buildCover(context),
-              ),
-            ),
-            const SizedBox(height: 5),
-            Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontFamily: 'Space Mono',
-                height: 1.2,
-                fontFamilyFallback: AppFonts.cjkFallback,
-                fontWeight: FontWeight.w700,
-                fontSize: 11,
-                color: AppColors.text,
-              ),
-            ),
-            Text(
-              '$count',
-              style: const TextStyle(
-                fontFamily: 'Space Mono',
-                color: AppColors.muted,
-                fontSize: 10,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCover(BuildContext context) {
-    final coverId = this.coverId;
-    if (coverId == null || coverId.isEmpty) {
-      return Container(
-        color: AppColors.surface,
-        child: const Icon(Icons.image_outlined, color: AppColors.muted, size: 26),
-      );
-    }
-    final ref = imageRefFromMediaStoreId(coverId);
-    final thumbSize = (_kCardSize * MediaQuery.devicePixelRatioOf(context))
-        .round()
-        .clamp(96, 512);
-    return Image(
-      image: buildThumbnailProvider(ref, size: thumbSize, squareCrop: true),
-      width: double.infinity,
-      height: double.infinity,
-      fit: BoxFit.cover,
-      gaplessPlayback: true,
-      errorBuilder: (_, _, _) =>
-          Container(color: AppColors.surface),
-    );
-  }
-}
-
 /// [ente 对齐] 索引进度 banner（搜索页分类列表顶部）：LinearProgressIndicator
 /// + 已索引 x/y；索引完成/关闭后自动消失。
 class _MlProgressBanner extends ConsumerWidget {
@@ -784,191 +948,6 @@ class _MlProgressBanner extends ConsumerWidget {
                 ),
               ),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// 二级维度钻取页（年 → 月）：标题 + 分类卡片行，点卡片进结果网格。
-/// 与 [_CategoryResultPage] 分层：本页只陈列子维度值，不出网格。
-class _SubCategoriesPage extends ConsumerWidget {
-  const _SubCategoriesPage({
-    required this.title,
-    required this.icon,
-    required this.groups,
-  });
-
-  final String title;
-  final IconData icon;
-  final List<_Group> groups;
-
-  void _openGroup(BuildContext context, WidgetRef ref, _Group g) {
-    Navigator.of(context).push(enteFadeRoute(
-      builder: (_) => _CategoryResultPage(
-        title: g.label,
-        icon: icon,
-        photos: g.photos,
-      ),
-    ));
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Scaffold(
-      backgroundColor: AppColors.bg,
-      appBar: AppBar(
-        backgroundColor: AppColors.surface,
-        foregroundColor: AppColors.text,
-        leading: BackGlyphButton(
-          tooltip: t(ref, 'back'),
-          hideWhenCannotPop: true,
-          onPressed: () => Navigator.maybePop(context),
-        ),
-        titleSpacing: 0,
-        title: Row(
-          children: [
-            Icon(icon, color: AppColors.muted, size: 16),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontFamily: 'Space Mono',
-                  height: 1.2,
-                  fontFamilyFallback: AppFonts.cjkFallback,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-      body: SafeArea(
-        bottom: false,
-        child: ListView(
-          padding: const EdgeInsets.only(top: 8, bottom: 24),
-          children: [
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  for (final g in groups)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 10),
-                      child: _CategoryCard(
-                        title: g.label,
-                        count: g.photos.length,
-                        coverId: g.photos.first.id,
-                        onTap: () => _openGroup(context, ref, g),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 分类结果页：标题 + Gallery 网格（复用相册网格组件）+ 大图浏览。
-class _CategoryResultPage extends ConsumerStatefulWidget {
-  const _CategoryResultPage({
-    required this.title,
-    required this.icon,
-    required this.photos,
-  });
-
-  final String title;
-  final IconData icon;
-
-  /// 分类下的全部照片（已按日期降序）。
-  final List<MsImageInfo> photos;
-
-  @override
-  ConsumerState<_CategoryResultPage> createState() => _CategoryResultPageState();
-}
-
-class _CategoryResultPageState extends ConsumerState<_CategoryResultPage> {
-  /// 同搜索页：Gallery 多选包裹恒传（结构恒定防重建灰屏）。
-  final SelectedFiles _selection = SelectedFiles();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.bg,
-      appBar: AppBar(
-        backgroundColor: AppColors.surface,
-        foregroundColor: AppColors.text,
-        leading: BackGlyphButton(
-          tooltip: t(ref, 'back'),
-          hideWhenCannotPop: true,
-          onPressed: () => Navigator.maybePop(context),
-        ),
-        titleSpacing: 0,
-        title: Row(
-          children: [
-            Icon(widget.icon, color: AppColors.muted, size: 16),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                widget.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontFamily: 'Space Mono',
-                  height: 1.2,
-                  fontFamilyFallback: AppFonts.cjkFallback,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              '${widget.photos.length}',
-              style: const TextStyle(
-                fontFamily: 'Space Mono',
-                color: AppColors.muted,
-                fontSize: 12,
-              ),
-            ),
-          ],
-        ),
-      ),
-      body: SafeArea(
-        bottom: false,
-        child: GalleryBoundariesProvider(
-          key: const ValueKey('search-category'),
-          child: GalleryFilesState(
-            child: Gallery(
-              allFiles: widget.photos,
-              tagPrefix: 'search',
-              groupType: GroupType.none,
-              selectedFiles: _selection,
-              crossAxisCount: ref.watch(configProvider).photoGridColumns,
-              sortOrderAsc: false,
-              onFileTap: (info) {
-                final index = widget.photos.indexWhere((f) => f.id == info.id);
-                if (index < 0) return;
-                Navigator.of(context).push(enteFadeRoute(
-                  builder: (_) => DetailPage(
-                    files: widget.photos,
-                    initialIndex: index,
-                    gridCols: ref.read(configProvider).photoGridColumns,
-                  ),
-                  settings: const RouteSettings(name: AlbumRoutes.photoViewer),
-                  fullscreenDialog: true,
-                ));
-              },
-            ),
           ),
         ),
       ),

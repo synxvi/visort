@@ -20,6 +20,7 @@
 // 搜索页位置分类只能按坐标网格分组;v2 扩展为多维度并迁 SQLite,
 // 旧 SP 键在 [load] 时清理。
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:visort_flutter/core/db/database_service.dart';
@@ -110,6 +111,8 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       await prefs.remove(k);
     }
     _metas = await _store.loadAll();
+    // ignore: avoid_print
+    print('[SIDX] load: metas=${_metas.length}');
     final prog = prefs.getString(_kProgressKey);
     if (prog != null) {
       final parts = prog.split('/');
@@ -133,13 +136,27 @@ class SearchIndexService extends Notifier<SearchIndexState> {
   /// 开启索引：全量扫描提取 EXIF（+地点识别开启时地名解析）。
   /// 已完整跑过一轮且表非空时直接复用（增量重建留待后续版本）。
   Future<void> start() async {
+    // ignore: avoid_print
+    print('[SIDX] start enter: running=${state.running} '
+        'done=${state.done} metas=${_metas.length} cancel=$_cancel');
     if (state.running) return;
     if (state.done && _metas.isNotEmpty) return;
     state = SearchIndexState(running: true);
     _cancel = false;
     final placeEnabled = ref.read(configProvider).mlPlaceEnabled;
     try {
+      // ACCESS_MEDIA_LOCATION（Android 10+ 未授权时系统剥离 MediaStore
+      // 流的 EXIF GPS——真机实证：pm clear 撤销后索引 0 坐标）。开跑前
+      // 请求；拒绝则照常索引（地点维度无数据，不阻塞其余维度）。
+      if (placeEnabled) {
+        try {
+          await _channel.requestAccessMediaLocation();
+        } catch (_) {
+          // 无 Activity/失败不阻塞索引
+        }
+      }
       final photos = await scanAllImages(_channel);
+      debugPrint('[SIDX] scanned ${photos.length} photos');
       final total = photos.length;
       final metas = <String, MsSearchMeta>{};
       var done = 0;
@@ -148,6 +165,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         final batch =
             photos.skip(i).take(_kBatchSize).map((p) => p.id).toList();
         final r = await _channel.indexSearchMeta(batch);
+        debugPrint('[SIDX] batch $i: meta=${r.length}');
         if (_cancel) return; // 清库竞态：关开关后不再写
         var batchOut = r.values.toList();
         if (placeEnabled) {
@@ -167,6 +185,10 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         await _saveProgress(done, total);
       }
       _metas = metas;
+      debugPrint('[SIDX] finished: rows=${metas.length}');
+    } catch (e, s) {
+      debugPrint('[SIDX] FAILED: $e\n$s');
+      rethrow;
     } finally {
       if (!_cancel) {
         state = SearchIndexState(
@@ -175,6 +197,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
           indexedCount: state.indexedCount,
         );
       }
+      debugPrint('[SIDX] finally: $_cancel state=${state.processed}/${state.total}');
     }
   }
 
