@@ -558,11 +558,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     return (now.year - y) * 12 + (now.month - m);
   }
 
-  /// 日期维度排序：月份按距当前近远，年份排月份之后（展开态用）。
+  /// 日期维度排序：月份按距当前近远在前，年份按新旧排其后（展开态用）。
+  /// 年份 key（'2026'）无 '-'，不能走 [_absMonthRank] 的 parts[1]——
+  /// 真机红屏 RangeError 实证。
   int _byAbsMonthDesc(SearchFilterData a, SearchFilterData b) {
     int rank(SearchFilterData f) {
       final k = f.key.replaceFirst('date:', '');
-      return k.contains('-') ? _absMonthRank(k) : 9999 + _absMonthRank(k);
+      if (!k.contains('-')) return 100000 - (int.tryParse(k) ?? 0);
+      return _absMonthRank(k);
     }
 
     return rank(a).compareTo(rank(b));
