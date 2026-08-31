@@ -98,16 +98,18 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
           //（人物/位置/文件类型），页内支持文件名过滤与结果网格。
           // 自绘放大镜：与三线选项按钮/返回箭头同形制（28 画布、
           // stroke 1.9 圆头），Material Icons.search 轮廓过细过小不搭。
-          IconButton(
-            icon: const _SearchGlyphIcon(),
-            tooltip: t(ref, 'search'),
-            // 向右侧选项按钮靠近：点击盒显式收窄（48→32，visualDensity
-            // 单位是 offset 一半，-2 仅收 2dp 无感，真机实证）。图标
-            // 间隙 20dp→12dp；高度保 48 不牺牲纵向触达。
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 48),
-            onPressed: () =>
-                Navigator.pushNamed(context, AlbumRoutes.search),
+          // 贴近选项按钮：真机像素实测两图形间隙 34.2dp（图标盒间隙
+          // 是假象——图形包络仅 ~11dp，盒内留白全算进视觉间隙），
+          // Transform 右移 23 → 图形间隙 ~11dp（抽屉按钮与标题同密度）。
+          // 选项按钮不动（保其与内容区右缘 16dp 对齐的既有调校）。
+          Transform.translate(
+            offset: const Offset(23, 0),
+            child: IconButton(
+              icon: const _SearchGlyphIcon(),
+              tooltip: t(ref, 'search'),
+              onPressed: () =>
+                  Navigator.pushNamed(context, AlbumRoutes.search),
+            ),
           ),
           ViewOptionsToggle(
             layout: config.galleryLayout,
