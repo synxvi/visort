@@ -23,6 +23,7 @@ import 'package:window_manager/window_manager.dart';
 import 'core/fs/image_loader.dart' show initMaxDecodePixels;
 import 'app.dart';
 import 'core/db/database_service.dart';
+import 'features/search/search_data_store.dart';
 import 'core/i18n/i18n.dart';
 import 'core/window/window_state.dart';
 
@@ -80,6 +81,12 @@ Future<void> main() async {
   // 常驻低频扫描循环）。桌面端无 MediaStore 通道，跳过。
   if (Platform.isAndroid) {
     container.read(idlePrecacheProvider);
+    // 搜索数据预热：全量照片 + 分组产物常驻 store（[用户定稿] 提前
+    // 渲染好，进搜索页零加载——根治入场帧布局跳动）。首屏稳了再跑
+    //（2s），快照缓存下 ~50ms 无感；幂等，进页 warmUp 只是兜底。
+    unawaited(Future.delayed(const Duration(seconds: 2), () async {
+      await container.read(searchDataProvider.notifier).warmUp();
+    }));
   }
 
   // 手动注册 SpaceMono 字体:FontManifest 注册在本机 release 下不生效(字体 asset

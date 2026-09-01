@@ -29,10 +29,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:visort_flutter/core/config/models.dart' show SortBy;
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
+import 'package:visort_flutter/features/search/search_data_store.dart';
 import 'package:visort_flutter/features/search/search_index_service.dart';
 import 'package:visort_flutter/ui/ente_viewer/detail_page.dart';
 import 'package:visort_flutter/ui/ente_viewer/gallery.dart';
@@ -45,32 +45,9 @@ import 'package:visort_flutter/ui/router_android.dart';
 import 'package:visort_flutter/ui/screens/search_filter_chip.dart';
 import 'package:visort_flutter/ui/route_transitions.dart';
 
-/// 坐标兜底网格精度（度）：0.01° ≈ 1.1km，Geocoder 无地名时同一格算一个「地点」。
-const double _kPlaceGrid = 0.01;
-
-/// RAW 私有 mime 尾段标记（quick 行与格式区共用）。
-const List<String> _kRawMarkers = [
-  'dng', 'cr2', 'nef', 'arw', 'rw2', 'orf', 'raw',
-];
-
 /// 展开态全铺时的截断数（[aves 对齐] ExpandableFilterRow.topFilterCount），
 /// 超出截断并给「更多」按钮。
 const int _kTopFilterCount = 50;
-
-bool _isRawMime(String mime) {
-  final last = mime.split('/').last.toLowerCase();
-  return _kRawMarkers.any(last.contains);
-}
-
-/// 一条已聚合的分类项（维度值 → 照片组），五维度共用的中间结构。
-/// key 为稳定去重键（坐标/年月等），label 为展示名。
-class _Group {
-  const _Group(this.key, this.label, this.photos);
-
-  final String key;
-  final String label;
-  final List<MsImageInfo> photos;
-}
 
 class SearchScreen extends ConsumerStatefulWidget {
   const SearchScreen({super.key});
@@ -80,10 +57,13 @@ class SearchScreen extends ConsumerStatefulWidget {
 }
 
 class _SearchScreenState extends ConsumerState<SearchScreen>
-    with TickerProviderStateMixin {
+    with WidgetsBindingObserver, TickerProviderStateMixin {
   final TextEditingController _queryCtrl = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
-  final MediaStoreChannel _channel = const MediaStoreChannel();
+
+  // [KBD] 闪烁排查打点（临时）：键盘弹出窗口内 window metrics / ListView
+  // 滚动与视口 的时序，logcat 采集。
+  final ScrollController _scrollCtrl = ScrollController();
 
   /// leading morph：进页时抽屉三线过渡为返回箭头（[aves 对齐]
   /// AnimatedIcons.menu_arrow；用户定稿「原抽屉按钮位置过渡为返回」）。
@@ -114,17 +94,20 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   /// 多选状态恒传（非选择模式恒空）：Gallery 依赖 SelectionState 包裹
   /// 结构恒定（album_screen 同款，见其 610 行注释）。
   final SelectedFiles _selection = SelectedFiles();
-  List<MsImageInfo> _photos = const [];
 
-  /// bucketId → 相册名（文本搜索「按相册名」匹配 + 相册维度卡片标签）。
-  Map<String, String> _bucketNames = const {};
+  // ── 数据源（[用户定稿] 提前渲染好，进页零加载）──
+  /// 全量照片/buckets/分组产物/HDR 全在常驻 [searchDataProvider]
+  /// （app 启动 idle 预热 + 进页对账，见 search_data_store.dart）；
+  /// 页面只持 UI 态与「日期选择器」的动态 chips。
+  SearchDataState get _data => ref.read(searchDataProvider);
 
-  /// 相册 bucket 元数据（相册区排序键：创建/修改时间，跟相册页偏好）。
-  List<MsBucket> _buckets = const [];
+  /// store filters + 页面 picked（date picker 产物）合并视图。
+  Map<String, SearchFilterData> get _allFilters =>
+      {..._data.filters, ..._picked};
 
-  // ── chip 注册表与已选集合（[aves 对齐] 建议 chip + 组合过滤）──
-  /// 全量可选 chips（key → 定义）；_rebuildGroups 从五维度分组派生。
-  Map<String, SearchFilterData> _filters = const {};
+  /// 日期选择器生成的「具体日期」chips（页面态；ids 随照片列表更新
+  /// 重算，见 initState 的 store listen 回调）。
+  final Map<String, SearchFilterData> _picked = {};
 
   /// 已选 chip keys（同维度 OR / 跨维度 AND）；非空时切结果网格。
   final Set<String> _selected = {};
@@ -140,50 +123,61 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _scrollCtrl.addListener(() {
+      debugPrint('[KBD] scroll: offset=${_scrollCtrl.position.pixels} '
+          'viewport=${_scrollCtrl.position.viewportDimension}');
+    });
+    _searchFocus.addListener(() {
+      debugPrint('[KBD] focus: ${_searchFocus.hasFocus}');
+    });
     // leading morph 进页播放：抽屉三线 → 返回箭头（下一帧启动，等首帧
     // 布局就绪，避免与路由转场同帧竞争）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _menuBackCtrl.forward();
     });
-    // 搜索框自动聚焦呼出键盘（[aves 对齐]；Google Photos 同款行为）：
-    // **首扫数据落地后**触发（_loadPhotos 里调 [_maybeAutoFocus]），不猜
-    // 固定延迟——0ms/350ms 两种延迟版本真机均闪：首扫 230ms 启动、扫描
-    // 耗时浮动（快照命中 ~50ms、冷启动数百 ms），固定延迟总能与数据
-    // setState 撞车，键盘 inset 动画帧上叠加整页 chips 从空到满，表现
-    // 为「除第一行外内容上移瞬移+残影」；手动点击唤出无闪正是因为数据
-    // 早已稳定（真机对比实证）。数据先渲染、键盘后弹出 = 恒等于手动
-    // 场景的稳定前提。
-    // 从看图/其他页返回本页：静默重扫（删除/收藏变更后结果网格与 chips
-    // 计数需刷新——否则已删照片的缩略图/计数残留，用户实测）。
+    // 从看图/其他页返回本页：对账刷新（删除/收藏变更后结果网格与 chips
+    // 计数刷新——store 层 id 集比对，无差异零 setState）。
     currentRouteName.addListener(_onRouteChanged);
-    // 恢复智能识别索引（日期/地点/相机维度数据）；完成回调会更新分组。
-    ref.read(searchIndexServiceProvider.notifier).load().then((_) {
-      if (!mounted) return;
-      _rebuildGroups();
-      // 自愈：开关已开但索引未完成（开启时用户离开设置页/中断）→
-      // 进搜索页自动续跑，不再依赖用户回设置页重开（真机 '…'/0 张
-      // 排查结论：start 未跑完时 UI 停在 total 未就绪暂态）。
-      final notifier = ref.read(searchIndexServiceProvider.notifier);
-      final enabled = ref.read(configProvider).mlIndexEnabled;
-      final st = ref.read(searchIndexServiceProvider);
-      if (enabled && !st.running && !st.done) {
-        notifier.start().then((_) {
-          if (mounted) _rebuildGroups();
-        });
+    // store 数据变化（首载/对账/索引完成/HDR）：picked chips 重算 ids +
+    // 幽灵选中清理。数据本体渲染由 watch 驱动，页面不 setState 数据。
+    ref.listenManual(searchDataProvider, (prev, next) {
+      if (!mounted || !next.ready) return;
+      if (identical(prev?.photos, next.photos) &&
+          identical(prev?.filters, next.filters)) {
+        return;
       }
+      setState(() {
+        _refreshPickedIds(next.photos);
+        _selected.removeWhere((k) => !_allFilters.containsKey(k));
+      });
+      _maybeAutoFocus();
     });
-    // 首扫延迟到路由转场（200ms 淡入）之后：数据 setState 落在半透明
-    // 转场中会让内容跳一下（进页「整体闪烁」的来源之一，真机实测）。
-    // 空窗 ~230ms 内容静默出现（快照缓存下扫描本身仅几十 ms，无感；
-    // 无 spinner——首行加载圈在延迟窗口里先露出来是噪音，用户反馈）。
-    // route 返回刷新（_onRouteChanged）不延迟。
-    Future.delayed(const Duration(milliseconds: 230), () {
-      if (mounted) _loadPhotos();
+    // 数据对账（预热过则幂等秒回；照片集无变化零 setState）。
+    unawaited(ref.read(searchDataProvider.notifier).warmUp());
+    // 预热已就绪时页面首帧即完整内容——转场中聚焦，键盘伴随升起
+    // （Google Photos 同款；此前所有「聚焦时机」问题的根源是页面自带
+    // 入场数据帧，数据常驻后该帧不复存在）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (ref.read(searchDataProvider).ready) _maybeAutoFocus();
     });
   }
 
   @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    final view = View.of(context);
+    debugPrint('[KBD] metrics: '
+        'size=${view.physicalSize.width ~/ view.devicePixelRatio}x'
+        '${view.physicalSize.height ~/ view.devicePixelRatio}dp '
+        'insets=${view.viewInsets.bottom ~/ view.devicePixelRatio}dp '
+        'padding=${view.padding.bottom ~/ view.devicePixelRatio}dp');
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _scrollCtrl.dispose();
     currentRouteName.removeListener(_onRouteChanged);
     for (final f in _flies) {
       f.entry.remove();
@@ -196,10 +190,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     super.dispose();
   }
 
-  /// 回到本页时静默重扫：看图中删除/收藏变更会改变 _photos 与分组，
-  /// 不刷新则已删照片的缩略图/ids 残留（用户实测）。
+  /// 回到本页时对账刷新：看图中删除/收藏变更会改变照片集与分组
+  /// （store 层 id 集比对，无差异零 setState）。
   void _onRouteChanged() {
-    if (currentRouteName.value == AlbumRoutes.search) _loadPhotos();
+    if (currentRouteName.value == AlbumRoutes.search) {
+      unawaited(ref.read(searchDataProvider.notifier).warmUp());
+    }
   }
 
   /// 自动聚焦只做一次（route 返回刷新/索引回调不再弹键盘）；用户已
@@ -213,438 +209,34 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     if (_queryCtrl.text.isNotEmpty || _selected.isNotEmpty) return;
     _searchFocus.requestFocus();
   }
-
-  /// 全库扫描在飞守卫：initState 的 _loadPhotos 与 route 回调
-  /// （RouteNameObserver postFrame 触发 _onRouteChanged）并发时会双倍
-  /// 扫描全库（子代理审查 P3）。
-  bool _scanInFlight = false;
-
-  Future<void> _loadPhotos() async {
-    if (_scanInFlight) return;
-    _scanInFlight = true;
-    try {
-      var photos = await scanAllImages(_channel);
-      final buckets = await _channel.listBuckets();
-      if (!mounted) return;
-      setState(() {
-        _photos = photos;
-        _buckets = buckets;
-        _bucketNames = {for (final b in buckets) b.id: b.name};
-      });
-      _rebuildGroups();
-      // 首扫数据落地（含 chips 重建）后再自动聚焦：键盘弹出时页面内容
-      // 已渲染稳定（见 initState 注释——固定延迟聚焦与数据到达撞车是
-      // 「瞬移+残影」根因）。
-      _maybeAutoFocus();
-      // 前台增量对账 + 惰性补解析（[precache 对齐] 缩略图缓存「前台
-      // 增量」模式）：开关开启时，MediaStore 实时列表与索引表的 id 差集
-      // 补录新照片（根治新增不入索引）；再对「有坐标无名」的行补一轮
-      // geocode。完成后刷新分组。均后台跑不阻塞 UI。
-      if (ref.read(configProvider).mlIndexEnabled) {
-        final notifier = ref.read(searchIndexServiceProvider.notifier);
-        unawaited(notifier
-            .syncNewPhotos(photos)
-            .then((_) => notifier.resolvePendingPlaces())
-            .then((_) {
-          if (mounted) _rebuildGroups();
-        }));
-      }
-      // HDR 检测：scanImages 不带 isHdr（Kotlin 只在 detectHdrs 通道读
-      // 文件头，key 含 mtime 缓存——重复进页零成本），quick 行 HDR chip
-      // 依赖它（此前恒 false 死功能，子代理审查 P2）。后台跑完二次刷新。
-      final jpegs = photos.where((p) => p.mime == 'image/jpeg').toList();
-      if (jpegs.isNotEmpty) {
-        try {
-          final hdrs = await _channel.detectHdrs(
-            jpegs.map((p) => p.id).toList(),
-            jpegs.map((p) => p.dateModifiedMs).toList(),
-            jpegs.map((p) => p.mime).toList(),
-          );
-          if (!mounted) return;
-          final hdrIds = <String>{};
-          for (var i = 0; i < jpegs.length && i < hdrs.length; i++) {
-            if (hdrs[i]) hdrIds.add(jpegs[i].id);
-          }
-          if (hdrIds.isNotEmpty) {
-            photos = [
-              for (final p in photos)
-                if (hdrIds.contains(p.id)) p.copyWith(isHdr: true) else p,
-            ];
-            setState(() => _photos = photos);
-            _rebuildGroups();
-          }
-        } catch (_) {
-          // HDR 检测失败不阻塞搜索（chip 缺席可接受）
-        }
-      }
-    } catch (_) {
-      // 扫描失败静默（页面保持空态，下次进页重扫）；键盘照常聚焦。
-      _maybeAutoFocus();
-    } finally {
-      _scanInFlight = false;
-    }
-  }
-
-  /// 五维度分组。日期用 EXIF 拍摄时间（缺失兜底 dateAdded）；
-  /// 地点优先城市名（索引 geocode 产物），无地名有坐标时坐标网格兜底；
-  /// 相机取索引 camera 字段；相册/类型纯本地。
-  void _rebuildGroups() {
-    final photos = _photos;
+  /// picked chips 按最新照片列表重算 ids（新增同日照片也要进该日期
+  /// 的结果；ids 是挑选时刻快照会漏——原 _rebuildGroups 平移逻辑）。
+  void _refreshPickedIds(List<MsImageInfo> photos) {
+    if (_picked.isEmpty) return;
     final metas = ref.read(searchIndexServiceProvider.notifier).metas;
-
-    // 日期（[aves 对齐] DateFilter 跨年聚合：月份 1~12 每月一个 chip、
-    // 星期一~日各一个，不绑定年份——绝对年月会让同月份逐年重复，用户
-    // 无法分辨）。展示顺序（注册序）：日期选择器 → 最近添加 → 月份 →
-    // 星期几（Aves 同序：onThisDay/RecentlyAdded/月份/星期）。
-    final byMonth = <int, List<MsImageInfo>>{};
-    final byWeekday = <int, List<MsImageInfo>>{};
-    final recentIds = <String>{};
-    final now = DateTime.now();
-    final weekAgo = now.subtract(const Duration(days: 7));
-    for (final p in photos) {
-      // 「最近添加」按入库时间判（EXIF 拍摄时间是老照片导入场景的语义
-      // 干扰——今天导入的 2020 年照片也应出现，子代理审查 P2）。
-      if (p.dateAddedMs > 0 &&
-          DateTime.fromMillisecondsSinceEpoch(p.dateAddedMs)
-              .isAfter(weekAgo)) {
-        recentIds.add(p.id);
-      }
-      final taken = metas[p.id]?.dateTakenMs ?? p.dateAddedMs;
-      if (taken <= 0) continue;
-      final dt = DateTime.fromMillisecondsSinceEpoch(taken);
-      byMonth.putIfAbsent(dt.month, () => []).add(p);
-      byWeekday.putIfAbsent(dt.weekday, () => []).add(p);
-    }
-    final monthFmt = t(ref, 'search_month_only');
-    final weekdayNames = t(ref, 'search_weekday_names').split(',');
-    final monthGroups = [
-      for (var m = 1; m <= 12; m++)
-        if (byMonth.containsKey(m))
-          _Group('$m', monthFmt.replaceFirst('{m}', '$m'), byMonth[m]!),
-    ];
-    final weekdayGroups = [
-      for (var d = 1; d <= 7; d++)
-        if (byWeekday.containsKey(d))
-          _Group('$d', weekdayNames[d - 1], byWeekday[d]!),
-    ];
-
-    // 地点：城市名分组（country+省+市 三元组为键防同城名撞车）；
-    // 无名有坐标 → 坐标网格兜底（v1 行为）。
-    final places = <String, _Group>{};
-    final coordBuckets = <String, List<MsImageInfo>>{};
-    for (final p in photos) {
-      final m = metas[p.id];
-      if (m == null) continue;
-      final label = m.placeLabel;
-      if (label.isNotEmpty) {
-        final key = '${m.country}|${m.adminArea}|${m.locality}';
-        places.putIfAbsent(key, () => _Group(key, label, [])).photos.add(p);
-      } else if (m.lat != null && m.lng != null) {
-        final lat =
-            (m.lat! / _kPlaceGrid).roundToDouble() * _kPlaceGrid;
-        final lng =
-            (m.lng! / _kPlaceGrid).roundToDouble() * _kPlaceGrid;
-        coordBuckets.putIfAbsent('$lat,$lng', () => []).add(p);
-      }
-    }
-    final placeList = places.values.toList()
-      ..sort((a, b) => b.photos.length.compareTo(a.photos.length));
-    for (final e in coordBuckets.entries) {
-      final parts = e.key.split(',');
-      placeList.add(_Group(
-        e.key,
-        '${_fmtCoord(parts[0])}, ${_fmtCoord(parts[1])}',
-        e.value,
-      ));
-    }
-    placeList.sort((a, b) => b.photos.length.compareTo(a.photos.length));
-
-    // 相册：bucketId 分组；排序跟随相册页偏好（albumSortBy/Asc——用户
-    // 反馈「排序规则跟随相册页」）。空名 bucket 显示「根目录」（同
-    // home 相册列表 root_dir 兜底，用户反馈「没有名字的相册」）。
-    final albums = <String, List<MsImageInfo>>{};
-    for (final p in photos) {
-      albums.putIfAbsent(p.bucketId, () => []).add(p);
-    }
-    final cfg = ref.read(configProvider);
-    // bucket 元数据（名称/创建/修改时间）按 id 索引——排序键用。
-    final bucketById = {for (final b in _buckets) b.id: b};
-    String albumLabel(String id) =>
-        (_bucketNames[id]?.isNotEmpty ?? false) ? _bucketNames[id]! : t(ref, 'root_dir');
-    int albumCmp(_Group a, _Group b) {
-      final ba = bucketById[a.key];
-      final bb = bucketById[b.key];
-      int cmp;
-      switch (cfg.albumSortBy) {
-        case SortBy.name:
-          cmp = albumLabel(a.key)
-              .toLowerCase()
-              .compareTo(albumLabel(b.key).toLowerCase());
-          break;
-        case SortBy.dateCreated:
-        case SortBy.dateTrashed: // bucket 无删除时间，回退创建（同 home）
-          cmp = (ba?.dateCreatedMs ?? 0).compareTo(bb?.dateCreatedMs ?? 0);
-          break;
-        case SortBy.dateModified:
-          cmp = (ba?.dateModifiedMs ?? 0).compareTo(bb?.dateModifiedMs ?? 0);
-          break;
-      }
-      return cfg.albumSortAsc ? cmp : -cmp;
-    }
-    final albumList = albums.entries
-        .map((e) => _Group(e.key, albumLabel(e.key), e.value))
-        .toList()
-      ..sort(albumCmp);
-
-    // 文件类型：mime 分组（v1 行为）。
-    final types = <String, List<MsImageInfo>>{};
-    for (final p in photos) {
-      types.putIfAbsent(p.mime, () => []).add(p);
-    }
-    final typeList = types.entries
-        .map((e) => _Group(e.key, _mimeLabel(e.key), e.value))
-        .toList()
-      ..sort((a, b) => b.photos.length.compareTo(a.photos.length));
-
-    // 拍摄设备（索引 camera 字段分组；Make+Model 字符串）。
-    final cameras = <String, List<MsImageInfo>>{};
-    for (final p in photos) {
-      final cam = metas[p.id]?.camera;
-      if (cam != null && cam.isNotEmpty) {
-        cameras.putIfAbsent(cam, () => []).add(p);
-      }
-    }
-    final cameraList = cameras.entries
-        .map((e) => _Group(e.key, e.key, e.value))
-        .toList()
-      ..sort((a, b) => b.photos.length.compareTo(a.photos.length));
-
-    // 省份：地点上一级（[aves 对齐] 国家/省/市三行拆分；全库单一国家
-    // 的行无过滤价值，只做省/市两级）。
-    final provinces = <String, _Group>{};
-    for (final p in photos) {
-      final m = metas[p.id];
-      if (m == null) continue;
-      final area = m.adminArea;
-      if (area == null || area.isEmpty) continue;
-      final key = '${m.country}|$area';
-      provinces.putIfAbsent(key, () => _Group(key, area, [])).photos.add(p);
-    }
-    final provinceList = provinces.values.toList()
-      ..sort((a, b) => b.photos.length.compareTo(a.photos.length));
-
-    // 元数据（[aves 对齐] 负向过滤区：缺日期/未定位/无相机）。「未注明
-    // 日期」= 无 EXIF 拍摄时间（兜底 dateAdded 后原判定恒真，chip 永不
-    // 出现，子代理审查 P2）。仅当库内存在对应正向数据时才露出——否则
-    // 全库皆「缺」，chip 无过滤价值。
-    int takenMs(MsImageInfo p) => metas[p.id]?.dateTakenMs ?? 0;
-    bool hasLoc(MsImageInfo p) =>
-        metas[p.id]?.lat != null && metas[p.id]?.lng != null;
-    final hasAnyDate = photos.any((p) => takenMs(p) > 0);
-    final hasAnyLoc = photos.any(hasLoc);
-    final hasAnyCamera =
-        photos.any((p) => (metas[p.id]?.camera ?? '').isNotEmpty);
-    final missingDateIds = hasAnyDate
-        ? photos.where((p) => takenMs(p) <= 0).map((p) => p.id).toSet()
-        : <String>{};
-    final unlocatedIds = hasAnyLoc
-        ? photos.where((p) => !hasLoc(p)).map((p) => p.id).toSet()
-        : <String>{};
-    final noCameraIds = hasAnyCamera
-        ? photos
-            .where((p) => (metas[p.id]?.camera ?? '').isEmpty)
-            .map((p) => p.id)
-            .toSet()
-        : <String>{};
-
-    if (!mounted) return;
-
-    // chip 注册表：各维度分组 → SearchFilterData（id 集合谓词）。
-    SearchFilterData f(_Group g, String cat, IconData icon) => SearchFilterData(
-          key: '$cat:${g.key}',
-          label: g.label,
-          category: cat,
-          icon: icon,
-          ids: g.photos.map((p) => p.id).toSet(),
-        );
-    final list = <SearchFilterData>[
-      // 日期区（[aves 对齐] 顺序：日期选择器 → 最近添加 → 月份 → 星期几；
-      // picker 是特殊入口 chip，toggle 特判弹日期面板）。
-      SearchFilterData(
-        key: 'date:picker',
-        label: t(ref, 'search_date_picker'),
-        category: 'date',
-        icon: Icons.edit_calendar_outlined,
-        ids: const {},
-      ),
-      if (recentIds.isNotEmpty)
-        SearchFilterData(
-          key: 'date:recent',
-          label: t(ref, 'search_recent'),
-          category: 'date',
-          icon: Icons.schedule,
-          ids: recentIds,
-        ),
-      for (final g in monthGroups)
-        f(g, 'date', Icons.calendar_month_outlined),
-      for (final g in weekdayGroups)
-        f(g, 'date', Icons.date_range_outlined),
-      // 快捷行（[aves 对齐] Aves 首行无标题 typeFilters 位）类型集
-      //（顺序同 Aves：收藏/动图/竖屏/横屏/HDR/RAW；图片/视频/全景等
-      // visort 无数据源不做）。
-      if (photos.any((p) => p.isFavorite))
-        SearchFilterData(
-          key: 'quick:fav',
-          label: t(ref, 'search_favorites'),
-          category: 'quick',
-          icon: Icons.favorite_outline,
-          ids: photos.where((p) => p.isFavorite).map((p) => p.id).toSet(),
-        ),
-      if (photos.any((p) => p.mime == 'image/gif'))
-        SearchFilterData(
-          key: 'quick:animated',
-          label: t(ref, 'search_animated'),
-          category: 'quick',
-          icon: Icons.animation_outlined,
-          ids: photos
-              .where((p) => p.mime == 'image/gif')
-              .map((p) => p.id)
-              .toSet(),
-        ),
-      if (photos.any(_isPortrait))
-        SearchFilterData(
-          key: 'quick:portrait',
-          label: t(ref, 'search_portrait'),
-          category: 'quick',
-          icon: Icons.portrait_outlined,
-          ids: photos.where(_isPortrait).map((p) => p.id).toSet(),
-        ),
-      if (photos.any(_isLandscape))
-        SearchFilterData(
-          key: 'quick:landscape',
-          label: t(ref, 'search_landscape'),
-          category: 'quick',
-          icon: Icons.crop_16_9_outlined,
-          ids: photos.where(_isLandscape).map((p) => p.id).toSet(),
-        ),
-      if (photos.any((p) => p.isHdr))
-        SearchFilterData(
-          key: 'quick:hdr',
-          label: 'HDR',
-          category: 'quick',
-          icon: Icons.brightness_high_outlined,
-          ids: photos.where((p) => p.isHdr).map((p) => p.id).toSet(),
-        ),
-      if (photos.any((p) => _isRawMime(p.mime)))
-        SearchFilterData(
-          key: 'quick:raw',
-          label: 'RAW',
-          category: 'quick',
-          icon: Icons.camera_roll_outlined,
-          ids: photos.where((p) => _isRawMime(p.mime)).map((p) => p.id).toSet(),
-        ),
-      // 省份 + 地点两级（[aves 对齐] 国家/省/市拆行；全库单一国家行无
-      // 过滤价值，省行取 adminArea）。
-      for (final g in provinceList) f(g, 'province', Icons.map_outlined),
-      for (final g in placeList) f(g, 'place', Icons.location_on_outlined),
-      for (final g in albumList) f(g, 'album', Icons.photo_library_outlined),
-      for (final g in typeList) f(g, 'mime', Icons.image_outlined),
-      for (final g in cameraList) f(g, 'camera', Icons.photo_camera_outlined),
-      // 元数据（[aves 对齐] 负向过滤：缺日期/未定位/无相机）。
-      if (missingDateIds.isNotEmpty)
-        SearchFilterData(
-          key: 'meta:nodate',
-          label: t(ref, 'search_missing_date'),
-          category: 'meta',
-          icon: Icons.event_busy_outlined,
-          ids: missingDateIds,
-        ),
-      if (unlocatedIds.isNotEmpty)
-        SearchFilterData(
-          key: 'meta:noloc',
-          label: t(ref, 'search_unlocated'),
-          category: 'meta',
-          icon: Icons.location_off_outlined,
-          ids: unlocatedIds,
-        ),
-      if (noCameraIds.isNotEmpty)
-        SearchFilterData(
-          key: 'meta:nocam',
-          label: t(ref, 'search_no_camera'),
-          category: 'meta',
-          icon: Icons.no_photography_outlined,
-          ids: noCameraIds,
-        ),
-    ];
-    // 保留动态「具体日期」chips 并按最新 _photos 重算 ids（新增同日照片
-    // 也要进该日期的结果；ids 是挑选时刻快照会漏，子代理审查 P3）：
-    // picked 项不在静态分组里，重建注册表会丢（索引完成回调/route 返回
-    // 刷新都触发重建），丢了连 _selected 里的选中项也会被幽灵清理误删。
-    for (final picked in _filters.values
-        .where((x) => x.key.startsWith('date:picked-'))) {
-      final d = DateTime.tryParse(picked.key.replaceFirst('date:picked-', ''));
+    for (final e in _picked.entries.toList()) {
+      final d = DateTime.tryParse(e.key.replaceFirst('date:picked-', ''));
       if (d == null) continue;
-      final ids = <String>{
-        for (final p in photos)
-          if (_sameDay(p, d, metas)) p.id,
-      };
-      list.add(SearchFilterData(
-        key: picked.key,
-        label: picked.label,
+      _picked[e.key] = SearchFilterData(
+        key: e.key,
+        label: e.value.label,
         category: 'date',
-        icon: picked.icon,
-        ids: ids,
-      ));
+        icon: e.value.icon,
+        ids: {for (final p in photos) if (_sameDay(p, d, metas)) p.id},
+      );
     }
-
-    setState(() {
-      _filters = {for (final x in list) x.key: x};
-      // 索引重建后 key 可能失效，清掉幽灵选中项。
-      _selected.removeWhere((k) => !_filters.containsKey(k));
-    });
   }
 
-  /// 坐标兜底标签数值（'31.0' → '31'，去尾零）。
-  String _fmtCoord(String s) {
-    final d = double.tryParse(s);
-    if (d == null) return s;
-    return d.toStringAsFixed(2).replaceFirst(RegExp(r'\.?0+$'), '');
-  }
-
-  /// mime → 显示名（常见格式友好名映射；未收录的回退尾段大写——
-  /// `image/x-ms-bmp` 这类私有串不会裸露）。
-  static const _mimeNames = {
-    'jpeg': 'JPEG',
-    'jpg': 'JPEG',
-    'png': 'PNG',
-    'gif': 'GIF',
-    'webp': 'WebP',
-    'heic': 'HEIC',
-    'heif': 'HEIF',
-    'avif': 'AVIF',
-    'bmp': 'BMP',
-    'tiff': 'TIFF',
-    'tif': 'TIFF',
-    'svg+xml': 'SVG',
-    'mp4': 'MP4',
-    'mpeg': 'MPEG',
-    'quicktime': 'MOV',
-    '3gpp': '3GP',
-  };
-
-  String _mimeLabel(String mime) {
-    if (_isRawMime(mime)) return 'RAW';
-    final last = mime.split('/').last.toLowerCase();
-    return _mimeNames[last] ?? last.toUpperCase();
-  }
-
-  /// 竖屏/横屏（MediaStore WIDTH/HEIGHT；0=未知不参与，正方形两边都不算）。
-  bool _isPortrait(MsImageInfo p) => p.width > 0 && p.height > p.width;
-  bool _isLandscape(MsImageInfo p) => p.height > 0 && p.width > p.height;
 
   @override
   Widget build(BuildContext context) {
     final query = _queryCtrl.text.trim();
+    // store 数据 watch（建议/结果两态共用）：数据常驻层变化（首载/对账/
+    // 索引完成/HDR）驱动整页重建；picked（date picker 产物）合并进视图。
+    final filters = {
+      ...ref.watch(searchDataProvider.select((s) => s.filters)),
+      ..._picked,
+    };
     // 返回键分层（用户定稿，Aves/系统搜索同款语义）：有文字先清文字
     // 停留在本页；再有选中 chips 清筛选回建议页；都空才真正退出到
     // 相册页——结果态不会一键被弹回相册页。
@@ -718,7 +310,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 child: Row(
                   children: [
                     for (final k in _selected.toList())
-                      if (_filters.containsKey(k))
+                      if (_allFilters.containsKey(k))
                         Padding(
                           padding: const EdgeInsets.only(right: 6),
                           child: Opacity(
@@ -726,7 +318,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                             child: FilterChipWidget(
                               key: _barChipKeys.putIfAbsent(
                                   k, () => GlobalKey()),
-                              filter: _filters[k]!,
+                              filter: _allFilters[k]!,
                               selected: true,
                               onTap: () => _toggleFilter(k,
                                   source: _barChipKeys[k]?.currentContext),
@@ -763,7 +355,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
               // 匹配数与清除筛选文字删除；清除走返回键分层/点胶囊移除）。
               final results = _applyQueryAndFilters(query);
               final showResults = query.isNotEmpty || _selected.isNotEmpty;
-              if (!showResults) return _buildSuggestions(query);
+              if (!showResults) return _buildSuggestions(query, filters);
               return _buildResults(results);
             },
           ),
@@ -833,7 +425,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           if (mounted) setState(() => _flying.remove(k));
         }
 
-        final filter = _filters[k];
+        final filter = _allFilters[k];
         if (filter == null) {
           clean(); // 幽灵 key（理论上重建时已清）：只清占位
           continue;
@@ -910,7 +502,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final to = _rectOf(_barChipKeys[key]?.currentContext);
-      final filter = _filters[key];
+      final filter = _allFilters[key];
       if (to == null || filter == null) {
         setState(() => _flying.remove(key));
         return;
@@ -927,7 +519,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   void _flyChipFromBar(String key, Rect? from) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final filter = _filters[key];
+      final filter = _allFilters[key];
       if (filter == null) {
         setState(() => _recentlyRemoved.remove(key));
         return;
@@ -993,8 +585,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   /// 添加/月份/星期在前）。
   /// [categories] 支持多维度合并（地点栏 = 省份在前 + 地点在后；category
   /// 仍各自独立，跨维度 AND 语义不受显示合并影响）。
-  List<SearchFilterData> _sectionChips(List<String> categories, String q) {
-    final chips = _filters.values
+  List<SearchFilterData> _sectionChips(
+      List<String> categories, String q, Map<String, SearchFilterData> filters) {
+    final chips = filters.values
         .where((f) => categories.contains(f.category))
         .toList(growable: false);
     if (q.isEmpty) return chips;
@@ -1006,12 +599,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   /// 维度建议列表。有输入时各维度 chips 按词过滤（跨维度联动检索）。
   /// 每栏标题右侧折叠/展开（[aves 对齐] ExpandableFilterRow）：
   /// 折叠态只露常用项（日期=近几月，其余=前 8），展开看全量。
-  Widget _buildSuggestions(String query) {
+  Widget _buildSuggestions(String query, Map<String, SearchFilterData> filters) {
     final index = ref.watch(searchIndexServiceProvider);
     final config = ref.watch(configProvider);
     final hasPlace = config.mlIndexEnabled &&
-        _filters.values.any((f) => f.category == 'place');
+        filters.values.any((f) => f.category == 'place');
     return ListView(
+      controller: _scrollCtrl,
       // 滚动即收键盘（用户反馈：滚动页面应自动收起输入法）。
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       // top 12：quick 首行距顶栏（用户定稿 12dp，与相册页新顶距一致）。
@@ -1023,24 +617,32 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         // 快捷行（无标题，[aves 对齐] Aves 首行 typeFilters 位）：恒展开
         // 无折叠箭头（[用户定稿]「第一行保持展开状态，把折叠按钮去掉」）。
         _buildSection(
-            categories: const ['quick'], query: query, alwaysExpanded: true),
+          categories: const ['quick'],
+          query: query,
+          alwaysExpanded: true,
+          filters: filters,
+        ),
         // [用户定稿] 栏目顺序：文件类型 → 日期 → 相册 → 地点（省份+地点
         // 合并一栏，省份在前地点在后；category 各自独立保 AND 语义）→
         // 拍摄设备 → 元数据。
         _buildSection(
-            title: t(ref, 'search_types'),
-            categories: const ['mime'],
-            query: query),
+          title: t(ref, 'search_types'),
+          categories: const ['mime'],
+          query: query,
+          filters: filters,
+        ),
         // 日期（[aves 对齐]：选择日期/最近添加/月份/星期，注册序即显示序）。
         _buildSection(
           title: t(ref, 'search_dates'),
           categories: const ['date'],
           query: query,
+          filters: filters,
         ),
         _buildSection(
             title: t(ref, 'search_albums'),
             categories: const ['album'],
-            query: query),
+            query: query,
+            filters: filters),
         // 地点：省份 chips 在前、市/地点在后（注册序），索引驱动，空态
         // 按配置分流引导。
         if (hasPlace)
@@ -1048,6 +650,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
             title: t(ref, 'search_places'),
             categories: const ['province', 'place'],
             query: query,
+            filters: filters,
           )
         else if (query.isEmpty) ...[
           _SectionHeader(t(ref, 'search_places')),
@@ -1063,12 +666,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         _buildSection(
             title: t(ref, 'search_cameras'),
             categories: const ['camera'],
-            query: query),
+            query: query,
+            filters: filters),
         // 元数据（[aves 对齐] 负向过滤区：缺日期/未定位/无相机）。
         _buildSection(
             title: t(ref, 'search_metadata'),
             categories: const ['meta'],
-            query: query),
+            query: query,
+            filters: filters),
       ],
     );
   }
@@ -1084,7 +689,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
 
   /// 日期选择器：选日后生成「2025年6月15日」过滤 chip 并选中。
   Future<void> _pickDate() async {
-    if (_photos.isEmpty) return; // 全量扫描未完，无据可滤
+    if (_data.photos.isEmpty) return; // 数据未就绪，无据可滤
     _searchFocus.unfocus(); // 弹日期面板前收键盘
     final d = await showDatePicker(
       context: context,
@@ -1095,7 +700,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     );
     if (d == null || !mounted) return;
     final ids = <String>{
-      for (final p in _photos)
+      for (final p in _data.photos)
         if (_sameDay(p, d, ref.read(searchIndexServiceProvider.notifier).metas))
           p.id,
     };
@@ -1104,7 +709,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         .replaceFirst('{m}', '${d.month}')
         .replaceFirst('{d}', '${d.day}');
     setState(() {
-      _filters['date:picked-${d.toIso8601String()}'] = SearchFilterData(
+      _picked['date:picked-${d.toIso8601String()}'] = SearchFilterData(
         key: 'date:picked-${d.toIso8601String()}',
         label: fmt,
         category: 'date',
@@ -1130,9 +735,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     required List<String> categories,
     required String query,
     bool alwaysExpanded = false,
+    required Map<String, SearchFilterData> filters,
   }) {
     final sectionKey = categories.join('+');
-    final chips = _sectionChips(categories, query);
+    final chips = _sectionChips(categories, query, filters);
     if (chips.isEmpty) return const SizedBox.shrink();
     // 恒展开区（quick 类型行）：无折叠箭头、不参与手风琴（[用户定稿]
     // 「第一行保持展开状态，把折叠按钮去掉」）。
@@ -1316,17 +922,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     final metas = ref.read(searchIndexServiceProvider.notifier).metas;
     final byCat = <String, List<SearchFilterData>>{};
     for (final k in _selected) {
-      final f = _filters[k];
+      final f = _allFilters[k];
       if (f == null) continue;
       byCat.putIfAbsent(f.category, () => []).add(f);
     }
     bool matchSelected(String id) =>
         byCat.isEmpty || byCat.values.every((fs) => fs.any((f) => f.contains(id)));
-    return _photos.where((p) {
+    return _data.photos.where((p) {
       if (!matchSelected(p.id)) return false;
       if (q.isEmpty) return true;
       if (p.name.toLowerCase().contains(q)) return true;
-      if ((_bucketNames[p.bucketId] ?? '').toLowerCase().contains(q)) {
+      if ((_data.bucketNames[p.bucketId] ?? '').toLowerCase().contains(q)) {
         return true;
       }
       final m = metas[p.id];
