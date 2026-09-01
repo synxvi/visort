@@ -197,14 +197,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         if (!silent) _loading = false;
       });
       _rebuildGroups();
-      // 惰性补解析（子代理审查 P2）：首索引时无网/Geocoder 异常的行
-      // （有坐标无名）补一轮 geocode，完成后刷新分组。
-      unawaited(ref
-          .read(searchIndexServiceProvider.notifier)
-          .resolvePendingPlaces()
-          .then((_) {
-        if (mounted) _rebuildGroups();
-      }));
+      // 前台增量对账 + 惰性补解析（[precache 对齐] 缩略图缓存「前台
+      // 增量」模式）：开关开启时，MediaStore 实时列表与索引表的 id 差集
+      // 补录新照片（根治新增不入索引）；再对「有坐标无名」的行补一轮
+      // geocode。完成后刷新分组。均后台跑不阻塞 UI。
+      if (ref.read(configProvider).mlIndexEnabled) {
+        final notifier = ref.read(searchIndexServiceProvider.notifier);
+        unawaited(notifier
+            .syncNewPhotos(photos)
+            .then((_) => notifier.resolvePendingPlaces())
+            .then((_) {
+          if (mounted) _rebuildGroups();
+        }));
+      }
       // HDR 检测：scanImages 不带 isHdr（Kotlin 只在 detectHdrs 通道读
       // 文件头，key 含 mtime 缓存——重复进页零成本），quick 行 HDR chip
       // 依赖它（此前恒 false 死功能，子代理审查 P2）。后台跑完二次刷新。

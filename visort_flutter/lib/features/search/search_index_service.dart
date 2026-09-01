@@ -16,7 +16,8 @@
 //     进度(done/total)持久化 SharedPreferences,设置页轮询展示;
 //   - 关闭总开关清空表([ente 对齐] ENTE 关 ML 清库语义)。
 // 索引表只是 id → EXIF 富化缓存:照片本体增删以 MediaStore 为准,
-// 残留行按 id 查不到自然失效;增量重建留待后续版本。
+// 残留行按 id 查不到自然失效;新增照片由 [syncNewPhotos] 前台增量
+// 对账补录([precache 对齐] 缩略图缓存「前台增量」模式,2026-09)。
 //
 // 历史:v1(已移除)只索引 GPS 存 SharedPreferences('ml_locations'),
 // 搜索页位置分类只能按坐标网格分组;v2 扩展为多维度并迁 SQLite,
@@ -195,6 +196,43 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       }
       debugPrint('[SIDX] finally: $_cancel state=${state.processed}/${state.total}');
     }
+  }
+
+  /// 前台增量对账（[precache 对齐] 缩略图缓存「前台增量」同款模式）：
+  /// MediaStore 实时列表与索引表的 id 差集 → 新照片补一轮 EXIF+地名
+  /// 解析 → 落库合并。搜索页每次数据就绪后调用（开关开启时）；空差集
+  /// 一趟 Set 扫描零成本，有新增则分批秒级补录——根治「新增照片不入
+  /// 索引」（此前 start() 首轮 done 后永久早退，唯一出路开关重开）。
+  ///
+  /// 设计边界：首轮全量仍由开关驱动（done/SP 进度语义不动，只表达
+  /// 首轮）；首轮跑批中跳过（循环自身覆盖全库，跑批中新导入的照片由
+  /// 下次进页补）；删除方向不清表——残留行按 id 查不到自然失效（表
+  /// 量级小，惰性失效已足够）。
+  Future<void> syncNewPhotos(List<MsImageInfo> photos) async {
+    if (state.running) return;
+    final known = _metas.keys.toSet();
+    final fresh =
+        photos.where((p) => !known.contains(p.id)).map((p) => p.id).toList();
+    if (fresh.isEmpty) return;
+    debugPrint('[SIDX] syncNewPhotos: ${fresh.length} new');
+    _cancel = false;
+    final out = <MsSearchMeta>[];
+    for (var i = 0; i < fresh.length; i += _kBatchSize) {
+      if (_cancel) return;
+      final batch = fresh.skip(i).take(_kBatchSize).toList();
+      final r = await _channel.indexSearchMeta(batch);
+      if (_cancel) return;
+      var batchOut = r.values.toList();
+      batchOut = await _resolvePlaces(batchOut);
+      if (_cancel) return;
+      await _store.putAll(batchOut);
+      if (_cancel) return;
+      out.addAll(batchOut);
+    }
+    for (final m in out) {
+      _metas[m.id] = m;
+    }
+    debugPrint('[SIDX] syncNewPhotos done: +${out.length}');
   }
 
   /// 惰性补解析：首索引时无网/Geocoder 异常的行（有坐标但地名三元组
