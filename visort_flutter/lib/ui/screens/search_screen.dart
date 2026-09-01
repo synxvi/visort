@@ -923,7 +923,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                     ),
                   ),
                 // 折叠/展开箭头（每行恒显；语义同 Aves collapse/expand
-                // icon）。按钮内 padding 10 + header 右 6 → 图形右缘 16。
+                // icon）。基础态朝右，展开旋 90° 朝下（用户定稿）；旋转
+                // 过渡 200ms easeOutCubic（同 home 折叠箭头形制）。
+                // 按钮内 padding 10 + header 右 6 → 图形右缘 16。
                 GestureDetector(
                   onTap: () => setState(() {
                     if (expanded) {
@@ -939,78 +941,88 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                   child: Padding(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    child: Icon(
-                      expanded
-                          ? Icons.keyboard_arrow_up
-                          : Icons.keyboard_arrow_down,
-                      size: 18,
-                      color: AppColors.muted,
+                    child: AnimatedRotation(
+                      turns: expanded ? 0.25 : 0.0,
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeOutCubic,
+                      child: const Icon(
+                        Icons.keyboard_arrow_right,
+                        size: 18,
+                        color: AppColors.muted,
+                      ),
                     ),
                   ),
                 ),
               ],
             ),
           ),
-        if (expanded)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final c in visible)
-                  FilterChipWidget(
-                    filter: c,
-                    selected: _selected.contains(c.key),
-                    onTap: () => _toggleFilter(c.key),
-                  ),
-                if (hiddenCount > 0)
-                  GestureDetector(
-                    onTap: () =>
-                        setState(() => _showAllSections.add(sectionKey)),
-                    behavior: HitTestBehavior.opaque,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 7),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: AppColors.border),
-                      ),
-                      child: Text(
-                        '${t(ref, 'search_more')}($hiddenCount)',
-                        style: const TextStyle(
-                          fontFamily: 'Space Mono',
-                          fontFamilyFallback: AppFonts.cjkFallback,
-                          color: AppColors.accent,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
+        // 折叠(单行横滑) ↔ 展开(Wrap 全铺) 的布局过渡：AnimatedSize 监测
+        // 子树尺寸变化平滑动画（240ms easeOutCubic，同 home 折叠区形制），
+        // 下方 section 随高度变化连续推移，不再跳变。
+        AnimatedSize(
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: expanded
+              ? Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final c in visible)
+                        FilterChipWidget(
+                          filter: c,
+                          selected: _selected.contains(c.key),
+                          onTap: () => _toggleFilter(c.key),
                         ),
-                      ),
-                    ),
+                      if (hiddenCount > 0)
+                        GestureDetector(
+                          onTap: () =>
+                              setState(() => _showAllSections.add(sectionKey)),
+                          behavior: HitTestBehavior.opaque,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 7),
+                            decoration: BoxDecoration(
+                              color: AppColors.surface,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: AppColors.border),
+                            ),
+                            child: Text(
+                              '${t(ref, 'search_more')}($hiddenCount)',
+                              style: const TextStyle(
+                                fontFamily: 'Space Mono',
+                                fontFamilyFallback: AppFonts.cjkFallback,
+                                color: AppColors.accent,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
-              ],
-            ),
-          )
-        else
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                for (var i = 0; i < visible.length; i++)
-                  Padding(
-                    padding: EdgeInsets.only(
-                        right: i == visible.length - 1 ? 0 : 8),
-                    child: FilterChipWidget(
-                      filter: visible[i],
-                      selected: _selected.contains(visible[i].key),
-                      onTap: () => _toggleFilter(visible[i].key),
-                    ),
+                )
+              : SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      for (var i = 0; i < visible.length; i++)
+                        Padding(
+                          padding: EdgeInsets.only(
+                              right: i == visible.length - 1 ? 0 : 8),
+                          child: FilterChipWidget(
+                            filter: visible[i],
+                            selected: _selected.contains(visible[i].key),
+                            onTap: () => _toggleFilter(visible[i].key),
+                          ),
+                        ),
+                    ],
                   ),
-              ],
-            ),
-          ),
+                ),
+        ),
       ],
     );
   }
