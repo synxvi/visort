@@ -917,16 +917,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 // 过渡 200ms easeOutCubic（同 home 折叠箭头形制）。
                 // 按钮内 padding 10 + header 右 6 → 图形右缘 16。
                 GestureDetector(
-                  onTap: () => setState(() {
-                    if (expanded) {
-                      _expandedSection = null;
-                    } else {
-                      // 单值：开新区旧区自动收起（[aves 对齐] 手风琴）；
-                      // 「更多」态随区收起重置。
-                      _expandedSection = sectionKey;
-                      _showAllSections.remove(sectionKey);
-                    }
-                  }),
+                  onTap: () {
+                    _searchFocus.unfocus(); // 展开/收起也收起输入法（用户定稿）
+                    setState(() {
+                      if (expanded) {
+                        _expandedSection = null;
+                      } else {
+                        // 单值：开新区旧区自动收起（[aves 对齐] 手风琴）；
+                        // 「更多」态随区收起重置。
+                        _expandedSection = sectionKey;
+                        _showAllSections.remove(sectionKey);
+                      }
+                    });
+                  },
                   behavior: HitTestBehavior.opaque,
                   child: Padding(
                     padding:
