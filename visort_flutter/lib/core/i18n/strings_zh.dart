@@ -178,7 +178,7 @@ const Map<String, String> stringsZh = {
   'search_places_hint_place': '在设置中开启「地点识别」，按拍摄城市分组。',
   'search_albums': '相册',
   'search_types': '文件类型',
-  'search_cameras': '相机',
+  'search_cameras': '拍摄设备',
   'search_clear': '清除',
   'view_immersive': '沉浸视图',
   'view_date': '日期视图',

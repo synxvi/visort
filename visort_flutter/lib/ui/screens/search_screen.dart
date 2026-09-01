@@ -309,6 +309,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         .toList()
       ..sort((a, b) => b.photos.length.compareTo(a.photos.length));
 
+    // 拍摄设备（索引 camera 字段分组；Make+Model 字符串）。
+    final cameras = <String, List<MsImageInfo>>{};
+    for (final p in photos) {
+      final cam = metas[p.id]?.camera;
+      if (cam != null && cam.isNotEmpty) {
+        cameras.putIfAbsent(cam, () => []).add(p);
+      }
+    }
+    final cameraList = cameras.entries
+        .map((e) => _Group(e.key, e.key, e.value))
+        .toList()
+      ..sort((a, b) => b.photos.length.compareTo(a.photos.length));
+
     // 省份：地点上一级（[aves 对齐] 国家/省/市三行拆分；全库单一国家
     // 的行无过滤价值，只做省/市两级）。
     final provinces = <String, _Group>{};
@@ -438,6 +451,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       for (final g in placeList) f(g, 'place', Icons.location_on_outlined),
       for (final g in albumList) f(g, 'album', Icons.photo_library_outlined),
       for (final g in typeList) f(g, 'mime', Icons.image_outlined),
+      for (final g in cameraList) f(g, 'camera', Icons.photo_camera_outlined),
       // 元数据（[aves 对齐] 负向过滤：缺日期/未定位/无相机）。
       if (missingDateIds.isNotEmpty)
         SearchFilterData(
@@ -518,7 +532,21 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   @override
   Widget build(BuildContext context) {
     final query = _queryCtrl.text.trim();
-    return Scaffold(
+    // 返回键分层（用户定稿，Aves/系统搜索同款语义）：有文字先清文字
+    // 停留在本页；再有选中 chips 清筛选回建议页；都空才真正退出到
+    // 相册页——结果态不会一键被弹回相册页。
+    return PopScope(
+      canPop: query.isEmpty && _selected.isEmpty,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (query.isNotEmpty) {
+          _queryCtrl.clear();
+          setState(() {});
+        } else {
+          setState(() => _selected.clear());
+        }
+      },
+      child: Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
@@ -602,6 +630,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           ),
         ),
       ),
+      ),
     );
   }
 
@@ -633,12 +662,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     });
   }
 
-  /// 输入过滤后的某维度 chips（label contains，大小写不敏感；
+  /// 输入过滤后的维度 chips（label contains，大小写不敏感；
   /// [aves 对齐] Aves containQuery 同款语义）。顺序保持注册序——
   /// 各维度列表构建时已按数量排好；quick 行须保序（日期选择器恒最前）。
-  List<SearchFilterData> _sectionChips(String category, String q) {
+  /// [categories] 支持多维度合并（地点栏 = 省份在前 + 地点在后；category
+  /// 仍各自独立，跨维度 AND 语义不受显示合并影响）。
+  List<SearchFilterData> _sectionChips(List<String> categories, String q) {
     final chips = _filters.values
-        .where((f) => f.category == category)
+        .where((f) => categories.contains(f.category))
         .toList(growable: false);
     if (q.isEmpty) return chips;
     final lq = q.toLowerCase();
@@ -655,9 +686,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // 已选药丸行：距顶栏 12、距下方计数行 4（用户反馈三段太紧，
+        // 拉开节奏：顶栏→药丸→计数→网格）。
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.fromLTRB(16, 6, 16, 2),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
           child: Row(
             children: [
               for (var i = 0; i < chips.length; i++)
@@ -673,7 +706,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
           child: Row(
             children: [
               Text(
@@ -718,7 +751,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     return ListView(
       // 滚动即收键盘（用户反馈：滚动页面应自动收起输入法）。
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-      padding: const EdgeInsets.only(top: 4, bottom: 24),
+      // top 8 对齐相册首页首行距顶栏间距（gallery 网格/列表同值）。
+      padding: const EdgeInsets.only(top: 8, bottom: 24),
       children: [
         // 全量扫描加载中：顶部轻量指示（chips 依赖全量列表）。
         if (_loading)
@@ -738,26 +772,33 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         // 快捷行（无标题，[aves 对齐] Aves 首行 typeFilters 位）：恒展开
         // 无折叠箭头（[用户定稿]「第一行保持展开状态，把折叠按钮去掉」）。
         _buildSection(
-            category: 'quick', query: query, alwaysExpanded: true),
+            categories: const ['quick'], query: query, alwaysExpanded: true),
+        // [用户定稿] 栏目顺序：文件类型 → 日期 → 相册 → 地点（省份+地点
+        // 合并一栏，省份在前地点在后；category 各自独立保 AND 语义）→
+        // 拍摄设备 → 元数据。
+        _buildSection(
+            title: t(ref, 'search_types'),
+            categories: const ['mime'],
+            query: query),
         // 日期（[aves 对齐]：选择日期/最近添加/月份/星期，注册序即显示序）。
         _buildSection(
           title: t(ref, 'search_dates'),
-          category: 'date',
+          categories: const ['date'],
           query: query,
         ),
-        // 省份 + 地点两级（[aves 对齐] 国家/省/市拆行，国库无国家行）；
-        // 索引驱动，空态按配置分流引导。
-        if (hasPlace) ...[
-          _buildSection(
-              title: t(ref, 'search_states'),
-              category: 'province',
-              query: query),
+        _buildSection(
+            title: t(ref, 'search_albums'),
+            categories: const ['album'],
+            query: query),
+        // 地点：省份 chips 在前、市/地点在后（注册序），索引驱动，空态
+        // 按配置分流引导。
+        if (hasPlace)
           _buildSection(
             title: t(ref, 'search_places'),
-            category: 'place',
+            categories: const ['province', 'place'],
             query: query,
-          ),
-        ] else if (query.isEmpty) ...[
+          )
+        else if (query.isEmpty) ...[
           _SectionHeader(t(ref, 'search_places')),
           _SectionEmpty(
             icon: Icons.location_on_outlined,
@@ -769,14 +810,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                     : t(ref, 'search_places_hint')),
           ),
         ],
-        // 格式 → 相册（[aves 对齐] 区顺序：类型/日期/格式/相册/地点/元数据）。
+        // 拍摄设备（索引 camera 字段，元数据上面）。
         _buildSection(
-            title: t(ref, 'search_types'), category: 'mime', query: query),
-        _buildSection(
-            title: t(ref, 'search_albums'), category: 'album', query: query),
+            title: t(ref, 'search_cameras'),
+            categories: const ['camera'],
+            query: query),
         // 元数据（[aves 对齐] 负向过滤区：缺日期/未定位/无相机）。
         _buildSection(
-            title: t(ref, 'search_metadata'), category: 'meta', query: query),
+            title: t(ref, 'search_metadata'),
+            categories: const ['meta'],
+            query: query),
       ],
     );
   }
@@ -829,24 +872,25 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   /// 输入过滤跨折叠态生效。
   Widget _buildSection({
     String? title,
-    required String category,
+    required List<String> categories,
     required String query,
     int collapsedCount = 8,
     int Function(SearchFilterData, SearchFilterData)? sort,
     bool alwaysExpanded = false,
   }) {
-    var chips = _sectionChips(category, query);
+    final sectionKey = categories.join('+');
+    var chips = _sectionChips(categories, query);
     if (chips.isEmpty) return const SizedBox.shrink();
     if (sort != null) chips = chips.toList()..sort(sort);
     // 恒展开区（quick 类型行）：无折叠箭头、不参与手风琴（[用户定稿]
     // 「第一行保持展开状态，把折叠按钮去掉」）。
-    final expanded = alwaysExpanded || _expandedSection == category;
+    final expanded = alwaysExpanded || _expandedSection == sectionKey;
     List<SearchFilterData> visible;
     var hiddenCount = 0;
     if (!expanded) {
       visible = chips.take(collapsedCount).toList();
     } else if (chips.length > _kTopFilterCount &&
-        !_showAllSections.contains(category)) {
+        !_showAllSections.contains(sectionKey)) {
       visible = chips.take(_kTopFilterCount).toList();
       hiddenCount = chips.length - _kTopFilterCount;
     } else {
@@ -870,8 +914,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                     } else {
                       // 单值：开新区旧区自动收起（[aves 对齐] 手风琴）；
                       // 「更多」态随区收起重置。
-                      _expandedSection = category;
-                      _showAllSections.remove(category);
+                      _expandedSection = sectionKey;
+                      _showAllSections.remove(sectionKey);
                     }
                   }),
                   behavior: HitTestBehavior.opaque,
@@ -907,7 +951,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 if (hiddenCount > 0)
                   GestureDetector(
                     onTap: () =>
-                        setState(() => _showAllSections.add(category)),
+                        setState(() => _showAllSections.add(sectionKey)),
                     behavior: HitTestBehavior.opaque,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
