@@ -956,78 +956,82 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
               ],
             ),
           ),
-        // 折叠(单行横滑) ↔ 展开(Wrap 全铺) 的布局过渡：AnimatedSize 只
-        // 动画高度——展开态 SizedBox 锁满宽（Wrap 在 start 对齐下自适应
-        // 内容宽，宽度被一并插值会造成内容左右抽搐，真机实测）；ClipRect
-        // 让高度动画期间超出部分按卷帘裁剪，不溢出乱画。
-        AnimatedSize(
+        // 折叠(单行横滑) ↔ 展开(Wrap 全铺) 的切换：AnimatedCrossFade——
+        // 两 child 恒定在树、布局不重建，切换只做高度插值(sizeCurve)+
+        // 交叉淡入，无 AnimatedSize 的两个坑（真机实测）：
+        //   1) 首帧从 Size.zero 起测，section 数据异步到达时触发 0→满宽
+        //      高的入场动画（「从左向右插入」观感）；
+        //   2) 动画中 child 重排（Wrap 换行/文本度量变化）会重启尺寸
+        //      插值 → 布局波动、内容被顶抬。
+        // 展开态 SizedBox 锁满宽：两 child 宽度一致，高度是唯一变量。
+        AnimatedCrossFade(
           duration: const Duration(milliseconds: 240),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.topCenter,
-          child: ClipRect(
-            child: expanded
-                ? SizedBox(
-                    width: double.infinity,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          for (final c in visible)
-                            FilterChipWidget(
-                              filter: c,
-                              selected: _selected.contains(c.key),
-                              onTap: () => _toggleFilter(c.key),
-                            ),
-                          if (hiddenCount > 0)
-                            GestureDetector(
-                              onTap: () => setState(
-                                  () => _showAllSections.add(sectionKey)),
-                              behavior: HitTestBehavior.opaque,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 12, vertical: 7),
-                                decoration: BoxDecoration(
-                                  color: AppColors.surface,
-                                  borderRadius: BorderRadius.circular(18),
-                                  border:
-                                      Border.all(color: AppColors.border),
-                                ),
-                                child: Text(
-                                  '${t(ref, 'search_more')}($hiddenCount)',
-                                  style: const TextStyle(
-                                    fontFamily: 'Space Mono',
-                                    fontFamilyFallback: AppFonts.cjkFallback,
-                                    color: AppColors.accent,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  )
-                : SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      children: [
-                        for (var i = 0; i < visible.length; i++)
-                          Padding(
-                            padding: EdgeInsets.only(
-                                right: i == visible.length - 1 ? 0 : 8),
-                            child: FilterChipWidget(
-                              filter: visible[i],
-                              selected: _selected.contains(visible[i].key),
-                              onTap: () => _toggleFilter(visible[i].key),
-                            ),
-                          ),
-                      ],
+          sizeCurve: Curves.easeOutCubic,
+          firstCurve: Curves.easeOutCubic,
+          secondCurve: Curves.easeOutCubic,
+          crossFadeState: expanded
+              ? CrossFadeState.showSecond
+              : CrossFadeState.showFirst,
+          firstChild: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                for (var i = 0; i < visible.length; i++)
+                  Padding(
+                    padding:
+                        EdgeInsets.only(right: i == visible.length - 1 ? 0 : 8),
+                    child: FilterChipWidget(
+                      filter: visible[i],
+                      selected: _selected.contains(visible[i].key),
+                      onTap: () => _toggleFilter(visible[i].key),
                     ),
                   ),
+              ],
+            ),
+          ),
+          secondChild: SizedBox(
+            width: double.infinity,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final c in visible)
+                    FilterChipWidget(
+                      filter: c,
+                      selected: _selected.contains(c.key),
+                      onTap: () => _toggleFilter(c.key),
+                    ),
+                  if (hiddenCount > 0)
+                    GestureDetector(
+                      onTap: () =>
+                          setState(() => _showAllSections.add(sectionKey)),
+                      behavior: HitTestBehavior.opaque,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: AppColors.surface,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: AppColors.border),
+                        ),
+                        child: Text(
+                          '${t(ref, 'search_more')}($hiddenCount)',
+                          style: const TextStyle(
+                            fontFamily: 'Space Mono',
+                            fontFamilyFallback: AppFonts.cjkFallback,
+                            color: AppColors.accent,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ],
