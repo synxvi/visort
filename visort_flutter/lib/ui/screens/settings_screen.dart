@@ -19,6 +19,7 @@ import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/search/search_index_service.dart';
+import 'package:visort_flutter/shared/widgets/app_bar_title.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
@@ -46,12 +47,14 @@ class SettingsScreen extends ConsumerWidget {
                 tooltip: t(ref, 'settings_title'),
               )
             : null,
-        title: Text(t(ref, 'settings_title'),
-            style: const TextStyle(
-              fontFamily: 'Space Mono', height: 1.2,
-              fontFamilyFallback: AppFonts.cjkFallback,
-              fontSize: 16,
-            )),
+        // titleSpacing 0 + 共用标题组件：与其他一级页同款几何（标题盒从
+        // leading 槽右缘起、CJK 重心 −1.4dp 上移贴中线，见
+        // app_bar_title.dart）；字重保持本页历史 w400。
+        titleSpacing: 0,
+        title: AppBarTitleText(
+          t(ref, 'settings_title'),
+          fontWeight: FontWeight.w400,
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.only(top: 8, bottom: 24),

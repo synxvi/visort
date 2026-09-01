@@ -705,8 +705,11 @@ class DrawerSwipeWrapper extends StatelessWidget {
 /// 按钮 ViewOptionsToggle 的三线筛选图标分属不同形状族，避免 ☰ 的
 /// 同形冲突（2026-08 用户反馈）。
 ///
-/// 视觉下移 1.5dp 补偿：字形光学重心在 24px 框内偏上，与
-/// 16px Space Mono 标题（height 1.2）水平居中对齐时观感偏高（真机实测）；
+/// y 补偿已归零（2026-09 真机像素复测）：原 +1.5 是旧 menu/close 图形
+/// 时代下压贴「文字线」的产物——而 CJK 标题字形重心天然低于 AppBar
+/// 几何中线 ~1.4dp，等于整组被拉低，与右侧放大镜/选项按钮断档
+/// 2.6dp/1.5dp。现四元素统一对齐几何中线（见 gallery_screen 首页
+/// 顶栏同批调校）；侧栏框图形自身几何正中，无需 y 补偿。
 /// Transform.translate 不动布局盒，点击区不受影响。
 class DrawerMenuButton extends StatelessWidget {
   const DrawerMenuButton({super.key, this.handle, this.tooltip});
@@ -724,8 +727,9 @@ class DrawerMenuButton extends StatelessWidget {
         // 光学补偿（不动布局盒/点击区）：x −4 = 字形左缘距屏 16dp，
         // 与内容区（bucket 网格 hpad12 + tile 内边 4）左右两缘对齐且与
         // 右侧 ViewOptionsToggle 图标边距对称（真机实测 20dp → 16dp）；
-        // y +1.5 = 字形光学重心偏上补偿（原 menu/close 实测，见类注释）。
-        offset: const Offset(-4, 1.5),
+        // y = 0：侧栏框图形几何正中，与 AppBar 几何中线同线（原 +1.5
+        // 补偿已删，见类注释）。
+        offset: const Offset(-4, 0),
         child: anim != null
             ? AnimatedBuilder(
                 animation: anim,

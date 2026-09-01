@@ -271,32 +271,41 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           onPressed: () => Navigator.maybePop(context),
         ),
         titleSpacing: 0,
-        // 搜索框保持原位（title 左起占满，[用户定稿]）；已选胶囊移到
+        // 搜索框保持 title 左起占满（[用户定稿]）；已选胶囊移到
         // actions 右侧（见下）。无边框须三态显式置 none：focusedBorder
         // 缺省回落主题，聚焦时会亮出主题高亮描边（用户反馈）。
-        title: TextField(
-          controller: _queryCtrl,
-          focusNode: _searchFocus,
-          textInputAction: TextInputAction.search,
-          onSubmitted: (_) => _searchFocus.unfocus(),
-          onChanged: (_) => setState(() {}),
-          style: const TextStyle(
-            fontFamily: 'Space Mono',
-            fontFamilyFallback: AppFonts.cjkFallback,
-            color: AppColors.text,
-            fontSize: 15,
-          ),
-          decoration: InputDecoration(
-            hintText: t(ref, 'search_hint'),
-            hintStyle: const TextStyle(
-              color: AppColors.muted,
+        // 视觉对齐补偿（2026-09 跨页顶栏统一，不动布局盒/点击区）：
+        //  · x −13.9：TextField 默认 contentPadding 水平 12 + 光标 ~0.8，
+        //    左移后 hint/输入文字左缘 ~54.9dp —— 与返回箭头字形（右缘
+        //    ~30.4dp）图形间隙 24.5dp，对齐首页「按钮→标题」基准。
+        //  · y −1.2：输入文字（15px）重心偏下与 CJK 标题同因，上移贴
+        //    AppBar 几何中线（同批四元素共线调校，见 app_bar_title.dart）。
+        title: Transform.translate(
+          offset: const Offset(-13.9, -1.2),
+          child: TextField(
+            controller: _queryCtrl,
+            focusNode: _searchFocus,
+            textInputAction: TextInputAction.search,
+            onSubmitted: (_) => _searchFocus.unfocus(),
+            onChanged: (_) => setState(() {}),
+            style: const TextStyle(
+              fontFamily: 'Space Mono',
+              fontFamilyFallback: AppFonts.cjkFallback,
+              color: AppColors.text,
               fontSize: 15,
             ),
-            border: InputBorder.none,
-            enabledBorder: InputBorder.none,
-            focusedBorder: InputBorder.none,
-            isDense: true,
-            filled: false,
+            decoration: InputDecoration(
+              hintText: t(ref, 'search_hint'),
+              hintStyle: const TextStyle(
+                color: AppColors.muted,
+                fontSize: 15,
+              ),
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              isDense: true,
+              filled: false,
+            ),
           ),
         ),
         // 右侧：已选胶囊（横滑，最大 210dp）+ 有输入时清除按钮。点顶栏

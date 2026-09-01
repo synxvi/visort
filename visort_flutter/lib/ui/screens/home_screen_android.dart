@@ -32,6 +32,7 @@ import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/shared/widgets/resume_button.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart'
     show showCenterDialog;
+import 'package:visort_flutter/shared/widgets/app_bar_title.dart';
 import 'package:visort_flutter/shared/widgets/view_options_toggle.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/router.dart';
@@ -545,16 +546,9 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           tooltip: t(ref, 'quick_sort_title'),
         ),
         titleSpacing: 0,
-        title: Text(
-          t(ref, 'quick_sort_title'),
-          style: const TextStyle(
-            fontFamily: 'Space Mono',
-            height: 1.2,
-            fontFamilyFallback: AppFonts.cjkFallback,
-            fontWeight: FontWeight.w700,
-            fontSize: 16,
-          ),
-        ),
+        // 标题视觉对齐共用组件（CJK 重心偏下 −1.4dp 上移贴中线，
+        // 见 app_bar_title.dart）。
+        title: AppBarTitleText(t(ref, 'quick_sort_title')),
         actions: [
           // 视图选项（[ente 对齐]）：布局切换 + 网格列数 + 排序收口到一个
           // 选项按钮；相册排序为源/目标 section 共用状态 albumSortBy/Asc。
