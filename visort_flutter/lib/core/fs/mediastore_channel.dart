@@ -249,10 +249,6 @@ class MsSearchMeta {
 
   /// 市级标签（地点卡片标题）：市 → 省 → 国家 兜底链。
   String get placeLabel => locality ?? adminArea ?? country ?? '';
-
-  /// 是否有任何可用维度数据。
-  bool get isEmpty =>
-      dateTakenMs == null && lat == null && camera == null && placeLabel.isEmpty;
 }
 
 /// 单图元信息

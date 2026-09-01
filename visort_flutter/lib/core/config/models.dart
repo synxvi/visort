@@ -324,9 +324,6 @@ class AppConfig {
   /// 人物识别开关：预留（需要人脸检测模型，当前版本未内置）。
   final bool mlFaceEnabled;
 
-  /// 地点识别开关：拍摄坐标反地理编码为城市名（国家/省/市），
-  /// 并控制搜索页「地点」分类是否展示。
-
   /// 抽屉开合动画档位（舒适/快速），默认快速（Material 黄金值）。
   final DrawerAnimSpeed drawerAnimSpeed;
 

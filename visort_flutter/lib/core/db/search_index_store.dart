@@ -76,18 +76,6 @@ class SearchIndexStore {
     }
   }
 
-  /// 行数(设置页「已索引 N 张」)。
-  Future<int> count() async {
-    try {
-      final db = await _db;
-      if (db == null) return 0;
-      final r = await db.rawQuery('SELECT COUNT(*) AS c FROM search_index');
-      return sqflite.Sqflite.firstIntValue(r) ?? 0;
-    } catch (_) {
-      return 0;
-    }
-  }
-
   /// 清空(关闭智能识别索引时,同旧 SP 位置数据清库语义)。
   Future<void> clear() async {
     try {

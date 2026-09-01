@@ -25,6 +25,8 @@
 // 历史：v1 文件名搜索 + 坐标网格两组；v2 大卡片五维度（未按 Aves 交互
 // 设计，废弃）；v2.2 chip 组合过滤；人物分类已移除（人脸识别未采用）。
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart' show SortBy;
@@ -176,9 +178,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     if (currentRouteName.value == AlbumRoutes.search) _loadPhotos(silent: true);
   }
 
+  /// 全库扫描在飞守卫：initState 的 _loadPhotos 与 route 回调
+  /// （RouteNameObserver postFrame 触发 _onRouteChanged）并发时会双倍
+  /// 扫描全库（子代理审查 P3）。
+  bool _scanInFlight = false;
+
   Future<void> _loadPhotos({bool silent = false}) async {
+    if (_scanInFlight) return;
+    _scanInFlight = true;
     try {
-      final photos = await scanAllImages(_channel);
+      var photos = await scanAllImages(_channel);
       final buckets = await _channel.listBuckets();
       if (!mounted) return;
       setState(() {
@@ -188,9 +197,47 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         if (!silent) _loading = false;
       });
       _rebuildGroups();
+      // 惰性补解析（子代理审查 P2）：首索引时无网/Geocoder 异常的行
+      // （有坐标无名）补一轮 geocode，完成后刷新分组。
+      unawaited(ref
+          .read(searchIndexServiceProvider.notifier)
+          .resolvePendingPlaces()
+          .then((_) {
+        if (mounted) _rebuildGroups();
+      }));
+      // HDR 检测：scanImages 不带 isHdr（Kotlin 只在 detectHdrs 通道读
+      // 文件头，key 含 mtime 缓存——重复进页零成本），quick 行 HDR chip
+      // 依赖它（此前恒 false 死功能，子代理审查 P2）。后台跑完二次刷新。
+      final jpegs = photos.where((p) => p.mime == 'image/jpeg').toList();
+      if (jpegs.isNotEmpty) {
+        try {
+          final hdrs = await _channel.detectHdrs(
+            jpegs.map((p) => p.id).toList(),
+            jpegs.map((p) => p.dateModifiedMs).toList(),
+            jpegs.map((p) => p.mime).toList(),
+          );
+          if (!mounted) return;
+          final hdrIds = <String>{};
+          for (var i = 0; i < jpegs.length && i < hdrs.length; i++) {
+            if (hdrs[i]) hdrIds.add(jpegs[i].id);
+          }
+          if (hdrIds.isNotEmpty) {
+            photos = [
+              for (final p in photos)
+                if (hdrIds.contains(p.id)) p.copyWith(isHdr: true) else p,
+            ];
+            setState(() => _photos = photos);
+            _rebuildGroups();
+          }
+        } catch (_) {
+          // HDR 检测失败不阻塞搜索（chip 缺席可接受）
+        }
+      }
     } catch (_) {
       if (!mounted) return;
       if (!silent) setState(() => _loading = false);
+    } finally {
+      _scanInFlight = false;
     }
   }
 
@@ -211,12 +258,18 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     final now = DateTime.now();
     final weekAgo = now.subtract(const Duration(days: 7));
     for (final p in photos) {
+      // 「最近添加」按入库时间判（EXIF 拍摄时间是老照片导入场景的语义
+      // 干扰——今天导入的 2020 年照片也应出现，子代理审查 P2）。
+      if (p.dateAddedMs > 0 &&
+          DateTime.fromMillisecondsSinceEpoch(p.dateAddedMs)
+              .isAfter(weekAgo)) {
+        recentIds.add(p.id);
+      }
       final taken = metas[p.id]?.dateTakenMs ?? p.dateAddedMs;
       if (taken <= 0) continue;
       final dt = DateTime.fromMillisecondsSinceEpoch(taken);
       byMonth.putIfAbsent(dt.month, () => []).add(p);
       byWeekday.putIfAbsent(dt.weekday, () => []).add(p);
-      if (dt.isAfter(weekAgo)) recentIds.add(p.id);
     }
     final monthFmt = t(ref, 'search_month_only');
     final weekdayNames = t(ref, 'search_weekday_names').split(',');
@@ -336,18 +389,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     final provinceList = provinces.values.toList()
       ..sort((a, b) => b.photos.length.compareTo(a.photos.length));
 
-    // 元数据（[aves 对齐] 负向过滤区：缺日期/未定位/无相机）。仅当库内
-    // 存在对应正向数据时才露出——否则全库皆「缺」，chip 无过滤价值。
-    bool hasDate(MsImageInfo p) =>
-        (metas[p.id]?.dateTakenMs ?? p.dateAddedMs) > 0;
+    // 元数据（[aves 对齐] 负向过滤区：缺日期/未定位/无相机）。「未注明
+    // 日期」= 无 EXIF 拍摄时间（兜底 dateAdded 后原判定恒真，chip 永不
+    // 出现，子代理审查 P2）。仅当库内存在对应正向数据时才露出——否则
+    // 全库皆「缺」，chip 无过滤价值。
+    int takenMs(MsImageInfo p) => metas[p.id]?.dateTakenMs ?? 0;
     bool hasLoc(MsImageInfo p) =>
         metas[p.id]?.lat != null && metas[p.id]?.lng != null;
-    final hasAnyDate = photos.any(hasDate);
+    final hasAnyDate = photos.any((p) => takenMs(p) > 0);
     final hasAnyLoc = photos.any(hasLoc);
     final hasAnyCamera =
         photos.any((p) => (metas[p.id]?.camera ?? '').isNotEmpty);
     final missingDateIds = hasAnyDate
-        ? photos.where((p) => !hasDate(p)).map((p) => p.id).toSet()
+        ? photos.where((p) => takenMs(p) <= 0).map((p) => p.id).toSet()
         : <String>{};
     final unlocatedIds = hasAnyLoc
         ? photos.where((p) => !hasLoc(p)).map((p) => p.id).toSet()
@@ -478,11 +532,26 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           ids: noCameraIds,
         ),
     ];
-    // 保留动态「具体日期」chips：_pickDate 生成的 picked 项不在静态分组
-    // 里，重建注册表会丢（索引完成回调/route 返回刷新都触发重建），
-    // 丢了连 _selected 里的选中项也会被幽灵清理误删。
-    list.addAll(
-        _filters.values.where((x) => x.key.startsWith('date:picked-')));
+    // 保留动态「具体日期」chips 并按最新 _photos 重算 ids（新增同日照片
+    // 也要进该日期的结果；ids 是挑选时刻快照会漏，子代理审查 P3）：
+    // picked 项不在静态分组里，重建注册表会丢（索引完成回调/route 返回
+    // 刷新都触发重建），丢了连 _selected 里的选中项也会被幽灵清理误删。
+    for (final picked in _filters.values
+        .where((x) => x.key.startsWith('date:picked-'))) {
+      final d = DateTime.tryParse(picked.key.replaceFirst('date:picked-', ''));
+      if (d == null) continue;
+      final ids = <String>{
+        for (final p in photos)
+          if (_sameDay(p, d, metas)) p.id,
+      };
+      list.add(SearchFilterData(
+        key: picked.key,
+        label: picked.label,
+        category: 'date',
+        icon: picked.icon,
+        ids: ids,
+      ));
+    }
 
     setState(() {
       _filters = {for (final x in list) x.key: x};
@@ -637,16 +706,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   // ──────────── 维度 chip 建议（[aves 对齐] 建议 chip 行 + 组合过滤）────────────
 
   /// 组合谓词：同维度（category）多 chip 取并（OR），跨维度取交（AND）。
-  bool _matchSelected(String id) {
-    if (_selected.isEmpty) return true;
-    final byCat = <String, List<SearchFilterData>>{};
-    for (final k in _selected) {
-      final f = _filters[k];
-      if (f == null) continue;
-      byCat.putIfAbsent(f.category, () => []).add(f);
-    }
-    return byCat.values.every((fs) => fs.any((f) => f.contains(id)));
-  }
+  /// 已并入 _applyQueryAndFilters（byCat 提升构建一次）。
 
   /// 点 chip：toggle 选中集合（同页实时过滤，不跳页）。
   /// 「日期选择器」是特殊入口 chip（不进选中集合，点了弹日期面板）。
@@ -664,7 +724,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
 
   /// 输入过滤后的维度 chips（label contains，大小写不敏感；
   /// [aves 对齐] Aves containQuery 同款语义）。顺序保持注册序——
-  /// 各维度列表构建时已按数量排好；quick 行须保序（日期选择器恒最前）。
+  /// 各维度列表构建时已按数量排好；date 区注册序=显示序（选择器/最近
+  /// 添加/月份/星期在前）。
   /// [categories] 支持多维度合并（地点栏 = 省份在前 + 地点在后；category
   /// 仍各自独立，跨维度 AND 语义不受显示合并影响）。
   List<SearchFilterData> _sectionChips(List<String> categories, String q) {
@@ -821,6 +882,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     );
   }
 
+  /// 照片拍摄日（EXIF 缺失兜底入库时间）是否与 [d] 同日（date picker
+  /// 与 picked chip 重算共用）。
+  bool _sameDay(MsImageInfo p, DateTime d, Map<String, MsSearchMeta> metas) {
+    final taken = metas[p.id]?.dateTakenMs ?? p.dateAddedMs;
+    if (taken <= 0) return false;
+    final dt = DateTime.fromMillisecondsSinceEpoch(taken);
+    return dt.year == d.year && dt.month == d.month && dt.day == d.day;
+  }
+
   /// 日期选择器：选日后生成「2025年6月15日」过滤 chip 并选中。
   Future<void> _pickDate() async {
     if (_photos.isEmpty) return; // 全量扫描未完，无据可滤
@@ -833,16 +903,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       helpText: t(ref, 'search_date_picker'),
     );
     if (d == null || !mounted) return;
-    final ids = <String>{};
-    final metas = ref.read(searchIndexServiceProvider.notifier).metas;
-    for (final p in _photos) {
-      final taken = metas[p.id]?.dateTakenMs ?? p.dateAddedMs;
-      if (taken <= 0) continue;
-      final dt = DateTime.fromMillisecondsSinceEpoch(taken);
-      if (dt.year == d.year && dt.month == d.month && dt.day == d.day) {
-        ids.add(p.id);
-      }
-    }
+    final ids = <String>{
+      for (final p in _photos)
+        if (_sameDay(p, d, ref.read(searchIndexServiceProvider.notifier).metas))
+          p.id,
+    };
     final fmt = t(ref, 'search_picked_fmt')
         .replaceFirst('{y}', '${d.year}')
         .replaceFirst('{m}', '${d.month}')
@@ -873,13 +938,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     String? title,
     required List<String> categories,
     required String query,
-    int Function(SearchFilterData, SearchFilterData)? sort,
     bool alwaysExpanded = false,
   }) {
     final sectionKey = categories.join('+');
-    var chips = _sectionChips(categories, query);
+    final chips = _sectionChips(categories, query);
     if (chips.isEmpty) return const SizedBox.shrink();
-    if (sort != null) chips = chips.toList()..sort(sort);
     // 恒展开区（quick 类型行）：无折叠箭头、不参与手风琴（[用户定稿]
     // 「第一行保持展开状态，把折叠按钮去掉」）。
     final expanded = alwaysExpanded || _expandedSection == sectionKey;
@@ -921,9 +984,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                         _expandedSection = null;
                       } else {
                         // 单值：开新区旧区自动收起（[aves 对齐] 手风琴）；
-                        // 「更多」态随区收起重置。
+                        // 「更多」态全部重置（收起旧区的残留 showAll 会让
+                        // 其重展开时仍处全显态，与注释语义不符，子代理 P3）。
                         _expandedSection = sectionKey;
-                        _showAllSections.remove(sectionKey);
+                        _showAllSections.clear();
                       }
                     });
                   },
@@ -1043,11 +1107,21 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
 
   /// 组合过滤：文本匹配（文件名+地名+相机+相册名 contains）∩ 已选 chips
   /// （同维度 OR / 跨维度 AND）。文本为空时仅 chips 生效。
+  /// byCat 按选中集构建一次复用到每张照片（此前每照片在 _matchSelected
+  /// 里重建 map，2000 张 × 每次按键全量重算，子代理审查 P3）。
   List<MsImageInfo> _applyQueryAndFilters(String query) {
     final q = query.toLowerCase();
     final metas = ref.read(searchIndexServiceProvider.notifier).metas;
+    final byCat = <String, List<SearchFilterData>>{};
+    for (final k in _selected) {
+      final f = _filters[k];
+      if (f == null) continue;
+      byCat.putIfAbsent(f.category, () => []).add(f);
+    }
+    bool matchSelected(String id) =>
+        byCat.isEmpty || byCat.values.every((fs) => fs.any((f) => f.contains(id)));
     return _photos.where((p) {
-      if (!_matchSelected(p.id)) return false;
+      if (!matchSelected(p.id)) return false;
       if (q.isEmpty) return true;
       if (p.name.toLowerCase().contains(q)) return true;
       if ((_bucketNames[p.bucketId] ?? '').toLowerCase().contains(q)) {

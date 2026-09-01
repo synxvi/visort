@@ -639,8 +639,9 @@ class _CacheSectionState extends ConsumerState<_CacheSection> {
 ///
 /// 索引总开关驱动后台全库 EXIF 扫描（拍摄时间/GPS/相机一次 pass，
 /// 产物 SQLite search_index 表——与上方「缓存」区的图片解码缓存完全
-/// 分离，用户要求）；地点识别为分能力开关（坐标 → 国家/省/市名，
-/// 系统 Geocoder），开启时对已索引坐标补解析。
+/// 分离，用户要求）；地名解析随索引恒开（2026-09 地点识别分开关并入
+/// 总开关），「索引数据」行与地点识别开关已移除（与进度重复/权限随
+/// 总开关）。
 /// 人物识别已移除（2026-08：本地人脸识别方案未采用）。
 class _MlSection extends ConsumerStatefulWidget {
   const _MlSection();

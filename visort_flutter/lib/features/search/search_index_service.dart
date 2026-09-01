@@ -6,10 +6,12 @@
 //   - 开启「智能识别索引」后后台分批扫描全部照片,每批一次 EXIF pass
 //     经 Kotlin `indexSearchMeta` 同时提取拍摄时间/GPS/相机
 //     (读文件头,单张几 ms,不卡主线程);
-//   - 开启「地点识别」时,批次内新出现的坐标(0.02° 网格去重,跨批 Kotlin
-//     侧还有缓存)经 `geocodePlaces` 反地理编码为国家/省/市地名
-//     ([aves 对齐] Aves GeocodingHandler 的系统 Geocoder 方案;Geocoder
-//     不可用时字段为 null,搜索页降级回坐标分组);
+//   - 地名解析随索引恒开(2026-09 地点识别分开关并入总开关):批次内
+//     新坐标(0.02° 网格去重,Kotlin 侧仅缓存成功结果)经 `geocodePlaces`
+//     反地理编码为国家/省/市地名([aves 对齐] Aves GeocodingHandler 的
+//     系统 Geocoder 方案);Geocoder 暂时不可用(无网/服务未就绪)时字段
+//     为 null 且不落缓存,搜索页数据就绪后经 [resolvePendingPlaces]
+//     惰性补解析,无地名时降级坐标分组;
 //   - 产物写 SQLite `search_index` 表(SearchIndexStore),冷启动恢复;
 //     进度(done/total)持久化 SharedPreferences,设置页轮询展示;
 //   - 关闭总开关清空表([ente 对齐] ENTE 关 ML 清库语义)。
@@ -51,7 +53,6 @@ class SearchIndexState {
     this.running = false,
     this.processed = 0,
     this.total = 0,
-    this.indexedCount = 0,
   });
 
   final bool running;
@@ -59,9 +60,6 @@ class SearchIndexState {
   /// EXIF pass 进度分子（已处理照片数）。
   final int processed;
   final int total;
-
-  /// 索引表行数（load 恢复用；只含有 EXIF 数据的照片）。
-  final int indexedCount;
 
   /// 是否已完整跑过一轮（total>0 且全处理）。
   bool get done => total > 0 && processed >= total;
@@ -99,6 +97,9 @@ class SearchIndexService extends Notifier<SearchIndexState> {
   SearchIndexStore get _store => ref.read(searchIndexStoreProvider);
 
   /// 启动/切页时从 SQLite 恢复索引与进度（设置页、搜索页 initState 调）。
+  /// 保留 running 态：索引循环跑批中进搜索页会触发 load，若把 running
+  /// 覆写为 false，搜索页自愈逻辑会并发拉起第二个 start()（双循环并发，
+  /// 子代理审查 P1）。
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     // v1 SP 数据迁移清理:数据不可比(EXIF pass 会产出更全字段),直接弃。
@@ -106,37 +107,35 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       await prefs.remove(k);
     }
     _metas = await _store.loadAll();
-    // ignore: avoid_print
-    print('[SIDX] load: metas=${_metas.length}');
+    debugPrint('[SIDX] load: metas=${_metas.length}');
     final prog = prefs.getString(_kProgressKey);
     if (prog != null) {
       final parts = prog.split('/');
       if (parts.length == 2) {
         state = SearchIndexState(
+          running: state.running,
           processed: int.tryParse(parts[0]) ?? 0,
           total: int.tryParse(parts[1]) ?? 0,
-          indexedCount: _metas.length,
         );
       }
     } else if (_metas.isNotEmpty) {
       // 无进度但表有数据(异常中断/清进度):按行数近似恢复,允许复用。
       state = SearchIndexState(
+        running: state.running,
         processed: _metas.length,
         total: _metas.length,
-        indexedCount: _metas.length,
       );
     }
   }
 
-  /// 开启索引：全量扫描提取 EXIF（+地点识别开启时地名解析）。
+  /// 开启索引：全量扫描提取 EXIF + 地名解析（随总开关恒开）。
   /// 已完整跑过一轮且表非空时直接复用（增量重建留待后续版本）。
   Future<void> start() async {
-    // ignore: avoid_print
-    print('[SIDX] start enter: running=${state.running} '
+    debugPrint('[SIDX] start enter: running=${state.running} '
         'done=${state.done} metas=${_metas.length} cancel=$_cancel');
     if (state.running) return;
     if (state.done && _metas.isNotEmpty) return;
-    state = SearchIndexState(running: true);
+    state = const SearchIndexState(running: true);
     _cancel = false;
     try {
       // ACCESS_MEDIA_LOCATION（Android 10+ 未授权时系统剥离 MediaStore
@@ -164,34 +163,64 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         var batchOut = r.values.toList();
         // 地名解析随索引恒开（用户定稿：地点识别开关已并入总开关）。
         batchOut = await _resolvePlaces(batchOut);
+        // _resolvePlaces 是长 await（Kotlin 串行 geocode，首批可达数十秒），
+        // 其后必须复查 cancel：关开关已 clear() 时继续执行会把该批写回
+        // 已清空的表并覆写 state/进度 SP（清库复活，子代理审查 P1）。
+        if (_cancel) return;
         for (final m in batchOut) {
           metas[m.id] = m;
         }
         await _store.putAll(batchOut);
+        if (_cancel) return; // putAll 同为 async gap，落地后复查
         done += batch.length;
         state = SearchIndexState(
           running: true,
           processed: done,
           total: total,
-          indexedCount: state.indexedCount + batchOut.length,
         );
         await _saveProgress(done, total);
       }
       _metas = metas;
       debugPrint('[SIDX] finished: rows=${metas.length}');
     } catch (e, s) {
+      // 不 rethrow：调用方（设置页 unawaited / 搜索页 .then）均无 catch，
+      // rethrow 会成 unhandled async exception（子代理审查 P3）。
       debugPrint('[SIDX] FAILED: $e\n$s');
-      rethrow;
     } finally {
       if (!_cancel) {
         state = SearchIndexState(
           processed: state.processed,
           total: state.total,
-          indexedCount: state.indexedCount,
         );
       }
       debugPrint('[SIDX] finally: $_cancel state=${state.processed}/${state.total}');
     }
+  }
+
+  /// 惰性补解析：首索引时无网/Geocoder 异常的行（有坐标但地名三元组
+  /// 空）原本无恢复路径（补轮已随地点识别开关移除；Kotlin 侧失败已不
+  /// 落缓存）。搜索页数据就绪后调用：pending 为空时 no-op（一趟 where
+  /// 扫描），有则分批补 geocode 落库，通知方刷新分组。
+  Future<void> resolvePendingPlaces() async {
+    if (state.running) return;
+    final pending = _metas.values
+        .where((m) => m.lat != null && m.lng != null && m.placeLabel.isEmpty)
+        .toList();
+    if (pending.isEmpty) return;
+    debugPrint('[SIDX] resolvePendingPlaces: ${pending.length}');
+    _cancel = false;
+    for (var i = 0; i < pending.length; i += _kBatchSize) {
+      if (_cancel) return;
+      final chunk = pending.skip(i).take(_kBatchSize).toList();
+      final resolved = await _resolvePlaces(chunk);
+      if (_cancel) return;
+      await _store.putAll(resolved);
+      if (_cancel) return;
+      for (final m in resolved) {
+        _metas[m.id] = m;
+      }
+    }
+    debugPrint('[SIDX] resolvePendingPlaces done');
   }
 
   /// 批内地名解析:收集批内新坐标(0.02° 网格键去重)→ geocodePlaces →
