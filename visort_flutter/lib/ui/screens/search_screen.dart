@@ -1,30 +1,33 @@
 // 搜索页 —— 相册页右上角搜索按钮进入
 //
-// v2.3 结构对齐 Aves 版（v2.2 chip 组合过滤 + 用户定稿修正）：
-//   - 顶栏即搜索框（[aves 对齐] SearchPage：无大标题、无边框输入框、
-//     hint「搜索相片」、转场后自动聚焦呼出键盘）；leading = 抽屉三线
-//     morph 成返回箭头（[aves 对齐] AnimatedIcons.menu_arrow 语义）；
-//   - 区顺序同 Aves：类型（无标题首行）/ 日期 / 格式 / 相册 / 省份 /
-//     地点 / 元数据（评分、标签 visort 不做）；每行右侧恒显折叠/展开
-//     箭头（[用户定稿] 只留箭头无文字），手风琴单开（[aves 对齐]
-//     expandedNotifier 单值）；折叠露前 N 个（[用户定稿] 不横滑全列，
-//     日期近月优先近→远排序），展开 Wrap 全铺（[aves 对齐]
-//     _ExpandedFilterRow），超 50 截断给「更多」；
-//   - 首行 = 日期选择器（特殊入口 chip）+ 最近添加 + 类型集（收藏/
-//     动图/竖屏/横屏/HDR/RAW，[aves 对齐] typeFilters 子集）；
-//   - 点 chip 即过滤：同维度多选 OR、跨维度 AND，已选行可逐个移除，
-//     结果同页实时出网格（Aves 跳 CollectionPage，我们少一跳）；
-//   - 输入实时过滤各维度 chips（label contains，Aves containQuery 同款）；
-//   - 文本 ∩ chips 组合；文本匹配 文件名+地名+相机+相册名。
+// v2.4 结构对齐 Aves 版（真机反馈第二轮修正）：
+//   - 顶栏即搜索框（[aves 对齐]：无大标题、无边框[三态显式 none，聚焦
+//     不亮主题描边]、hint「搜索相片」、转场后自动聚焦呼出键盘——仅
+//     建议态；点空白/滚动列表/进看图/选 chip 都收键盘）；leading =
+//     侧栏图形 morph 成返回箭头（终态逐坐标等于 BackGlyphIcon，与其
+//     他页面返回位置严格一致；[aves 对齐] menu_arrow 语义）；
+//   - 区顺序同 Aves：类型（无标题首行，恒展开无箭头）/ 日期 / 格式 /
+//     相册 / 省份 / 地点 / 元数据（评分标签 visort 无数据不做）；各
+//     区右侧恒显折叠/展开箭头（只箭头无文字），手风琴单开；折叠露前
+//     N 个，展开 Wrap 全铺，超 50 截断「更多」；
+//   - 日期区跨年聚合（[aves 对齐] DateFilter，不写死年月——绝对年月
+//     同月份逐年重复无法分辨）：日期选择器 → 最近添加 → 1~12 月 →
+//     周一~周日；picked chip 在注册表重建时保留；
+//   - 相册区排序跟随相册页偏好（albumSortBy/Asc），空名兜底「根目录」；
+//   - 点 chip 即过滤：同维度 OR、跨维度 AND，结果同页实时出网格；
+//     输入实时过滤 chips（label contains）；文本匹配 文件名+地名+
+//     相册名；
+//   - route 返回本页静默重扫（看图删除/收藏变更后结果网格刷新）。
 // 日期恒可用（EXIF 拍摄时间缺失兜底 dateAdded）；地点/元数据依赖
 // 「智能识别索引」（设置页开关驱动，search_index SQLite 表）。
 // 看图复用 Gallery 网格 + DetailPage（tagPrefix 'search' 防跨路由 tag 冲突）。
 //
-// 历史：v1 文件名搜索 + 坐标网格/文件类型两组；v2 大卡片五维度（用户
-// 反馈未按 Aves 交互设计，废弃）；人物分类已移除（人脸识别未采用）。
+// 历史：v1 文件名搜索 + 坐标网格两组；v2 大卡片五维度（未按 Aves 交互
+// 设计，废弃）；v2.2 chip 组合过滤；人物分类已移除（人脸识别未采用）。
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:visort_flutter/core/config/models.dart' show SortBy;
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
@@ -35,6 +38,7 @@ import 'package:visort_flutter/ui/ente_viewer/gallery_boundaries_provider.dart';
 import 'package:visort_flutter/ui/ente_viewer/gallery_files_inherited_widget.dart';
 import 'package:visort_flutter/ui/ente_viewer/group_type.dart';
 import 'package:visort_flutter/ui/ente_viewer/selected_files.dart';
+import 'package:visort_flutter/ui/router.dart' show currentRouteName;
 import 'package:visort_flutter/ui/router_android.dart';
 import 'package:visort_flutter/ui/screens/search_filter_chip.dart';
 import 'package:visort_flutter/ui/route_transitions.dart';
@@ -96,6 +100,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   /// bucketId → 相册名（文本搜索「按相册名」匹配 + 相册维度卡片标签）。
   Map<String, String> _bucketNames = const {};
 
+  /// 相册 bucket 元数据（相册区排序键：创建/修改时间，跟相册页偏好）。
+  List<MsBucket> _buckets = const [];
+
   // ── chip 注册表与已选集合（[aves 对齐] 建议 chip + 组合过滤）──
   /// 全量可选 chips（key → 定义）；_rebuildGroups 从五维度分组派生。
   Map<String, SearchFilterData> _filters = const {};
@@ -121,11 +128,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     });
     // 搜索框自动聚焦呼出键盘（[aves 对齐] 转场完成后聚焦——立即聚焦会
     // 在转场中压缩布局晃动）。350ms ≈ enteFadeRoute 200ms + 余量。
+    // 条件：仅当仍处建议态（无输入无选中）——用户已点 chip 进结果
+    // 网格时再弹键盘是干扰（用户反馈）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future.delayed(const Duration(milliseconds: 350), () {
-        if (mounted) _searchFocus.requestFocus();
+        if (!mounted) return;
+        if (_queryCtrl.text.isEmpty && _selected.isEmpty) {
+          _searchFocus.requestFocus();
+        }
       });
     });
+    // 从看图/其他页返回本页：静默重扫（删除/收藏变更后结果网格与 chips
+    // 计数需刷新——否则已删照片的缩略图/计数残留，用户实测）。
+    currentRouteName.addListener(_onRouteChanged);
     // 恢复智能识别索引（日期/地点/相机维度数据）；完成回调会更新分组。
     ref.read(searchIndexServiceProvider.notifier).load().then((_) {
       if (!mounted) return;
@@ -147,26 +162,35 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
 
   @override
   void dispose() {
+    currentRouteName.removeListener(_onRouteChanged);
     _queryCtrl.dispose();
     _searchFocus.dispose();
     _menuBackCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _loadPhotos() async {
+  /// 回到本页时静默重扫：看图中删除/收藏变更会改变 _photos 与分组，
+  /// 不刷新则已删照片的缩略图/ids 残留（用户实测）。不置 _loading，
+  /// 旧列表照常渲染，扫完一次性换新。
+  void _onRouteChanged() {
+    if (currentRouteName.value == AlbumRoutes.search) _loadPhotos(silent: true);
+  }
+
+  Future<void> _loadPhotos({bool silent = false}) async {
     try {
       final photos = await scanAllImages(_channel);
       final buckets = await _channel.listBuckets();
       if (!mounted) return;
       setState(() {
         _photos = photos;
+        _buckets = buckets;
         _bucketNames = {for (final b in buckets) b.id: b.name};
-        _loading = false;
+        if (!silent) _loading = false;
       });
       _rebuildGroups();
     } catch (_) {
       if (!mounted) return;
-      setState(() => _loading = false);
+      if (!silent) setState(() => _loading = false);
     }
   }
 
@@ -177,11 +201,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     final photos = _photos;
     final metas = ref.read(searchIndexServiceProvider.notifier).metas;
 
-    // 日期（[aves 对齐] 相对时间优先，不写死年月）：绝对月份分组
-    // （ym:2025-06 键）+ 年分组；展示层按「离当前最近」排序，折叠态
-    // 只露近几个月（见 _dateOrder）。
-    final byAbsMonth = <String, List<MsImageInfo>>{};
-    final years = <int, List<MsImageInfo>>{};
+    // 日期（[aves 对齐] DateFilter 跨年聚合：月份 1~12 每月一个 chip、
+    // 星期一~日各一个，不绑定年份——绝对年月会让同月份逐年重复，用户
+    // 无法分辨）。展示顺序（注册序）：日期选择器 → 最近添加 → 月份 →
+    // 星期几（Aves 同序：onThisDay/RecentlyAdded/月份/星期）。
+    final byMonth = <int, List<MsImageInfo>>{};
+    final byWeekday = <int, List<MsImageInfo>>{};
     final recentIds = <String>{};
     final now = DateTime.now();
     final weekAgo = now.subtract(const Duration(days: 7));
@@ -189,30 +214,22 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       final taken = metas[p.id]?.dateTakenMs ?? p.dateAddedMs;
       if (taken <= 0) continue;
       final dt = DateTime.fromMillisecondsSinceEpoch(taken);
-      byAbsMonth
-          .putIfAbsent('${dt.year}-${dt.month.toString().padLeft(2, '0')}', () => [])
-          .add(p);
-      years.putIfAbsent(dt.year, () => []).add(p);
+      byMonth.putIfAbsent(dt.month, () => []).add(p);
+      byWeekday.putIfAbsent(dt.weekday, () => []).add(p);
       if (dt.isAfter(weekAgo)) recentIds.add(p.id);
     }
-    final yearFmt = t(ref, 'search_year_fmt');
     final monthFmt = t(ref, 'search_month_only');
-    final yearGroups = years.entries
-        .map((e) => _Group(
-              '${e.key}',
-              yearFmt.replaceFirst('{y}', '${e.key}'),
-              e.value,
-            ))
-        .toList()
-      ..sort((a, b) => b.key.compareTo(a.key)); // 年份降序
-    // 绝对月份 → Group；排序交给展示层（_absMonthRank 按离当前近远）。
-    final monthGroups = byAbsMonth.entries
-        .map((e) {
-          final parts = e.key.split('-');
-          final m = int.parse(parts[1]);
-          return _Group(e.key, monthFmt.replaceFirst('{m}', '$m'), e.value);
-        })
-        .toList();
+    final weekdayNames = t(ref, 'search_weekday_names').split(',');
+    final monthGroups = [
+      for (var m = 1; m <= 12; m++)
+        if (byMonth.containsKey(m))
+          _Group('$m', monthFmt.replaceFirst('{m}', '$m'), byMonth[m]!),
+    ];
+    final weekdayGroups = [
+      for (var d = 1; d <= 7; d++)
+        if (byWeekday.containsKey(d))
+          _Group('$d', weekdayNames[d - 1], byWeekday[d]!),
+    ];
 
     // 地点：城市名分组（country+省+市 三元组为键防同城名撞车）；
     // 无名有坐标 → 坐标网格兜底（v1 行为）。
@@ -245,15 +262,42 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     }
     placeList.sort((a, b) => b.photos.length.compareTo(a.photos.length));
 
-    // 相册：bucketId 分组。
+    // 相册：bucketId 分组；排序跟随相册页偏好（albumSortBy/Asc——用户
+    // 反馈「排序规则跟随相册页」）。空名 bucket 显示「根目录」（同
+    // home 相册列表 root_dir 兜底，用户反馈「没有名字的相册」）。
     final albums = <String, List<MsImageInfo>>{};
     for (final p in photos) {
       albums.putIfAbsent(p.bucketId, () => []).add(p);
     }
+    final cfg = ref.read(configProvider);
+    // bucket 元数据（名称/创建/修改时间）按 id 索引——排序键用。
+    final bucketById = {for (final b in _buckets) b.id: b};
+    String albumLabel(String id) =>
+        (_bucketNames[id]?.isNotEmpty ?? false) ? _bucketNames[id]! : t(ref, 'root_dir');
+    int albumCmp(_Group a, _Group b) {
+      final ba = bucketById[a.key];
+      final bb = bucketById[b.key];
+      int cmp;
+      switch (cfg.albumSortBy) {
+        case SortBy.name:
+          cmp = albumLabel(a.key)
+              .toLowerCase()
+              .compareTo(albumLabel(b.key).toLowerCase());
+          break;
+        case SortBy.dateCreated:
+        case SortBy.dateTrashed: // bucket 无删除时间，回退创建（同 home）
+          cmp = (ba?.dateCreatedMs ?? 0).compareTo(bb?.dateCreatedMs ?? 0);
+          break;
+        case SortBy.dateModified:
+          cmp = (ba?.dateModifiedMs ?? 0).compareTo(bb?.dateModifiedMs ?? 0);
+          break;
+      }
+      return cfg.albumSortAsc ? cmp : -cmp;
+    }
     final albumList = albums.entries
-        .map((e) => _Group(e.key, _bucketNames[e.key] ?? e.key, e.value))
+        .map((e) => _Group(e.key, albumLabel(e.key), e.value))
         .toList()
-      ..sort((a, b) => b.photos.length.compareTo(a.photos.length));
+      ..sort(albumCmp);
 
     // 文件类型：mime 分组（v1 行为）。
     final types = <String, List<MsImageInfo>>{};
@@ -313,25 +357,30 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           ids: g.photos.map((p) => p.id).toSet(),
         );
     final list = <SearchFilterData>[
-      // 快捷行（[aves 对齐] Aves 首行无标题 typeFilters 位）：日期选择器
-      //（[用户定稿] 首位特殊入口 chip，toggle 特判弹日期面板）+ 最近添加
-      // + 类型集（顺序同 Aves：收藏/动图/竖屏/横屏/HDR/RAW；图片/视频/
-      // 全景等 visort 无数据源不做）。
+      // 日期区（[aves 对齐] 顺序：日期选择器 → 最近添加 → 月份 → 星期几；
+      // picker 是特殊入口 chip，toggle 特判弹日期面板）。
       SearchFilterData(
         key: 'date:picker',
         label: t(ref, 'search_date_picker'),
-        category: 'quick',
+        category: 'date',
         icon: Icons.edit_calendar_outlined,
         ids: const {},
       ),
       if (recentIds.isNotEmpty)
         SearchFilterData(
-          key: 'quick:recent',
+          key: 'date:recent',
           label: t(ref, 'search_recent'),
-          category: 'quick',
+          category: 'date',
           icon: Icons.schedule,
           ids: recentIds,
         ),
+      for (final g in monthGroups)
+        f(g, 'date', Icons.calendar_month_outlined),
+      for (final g in weekdayGroups)
+        f(g, 'date', Icons.date_range_outlined),
+      // 快捷行（[aves 对齐] Aves 首行无标题 typeFilters 位）类型集
+      //（顺序同 Aves：收藏/动图/竖屏/横屏/HDR/RAW；图片/视频/全景等
+      // visort 无数据源不做）。
       if (photos.any((p) => p.isFavorite))
         SearchFilterData(
           key: 'quick:fav',
@@ -383,9 +432,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           icon: Icons.camera_roll_outlined,
           ids: photos.where((p) => _isRawMime(p.mime)).map((p) => p.id).toSet(),
         ),
-      // 日期：绝对月份（ym:2025-06，展示层按近远排序）+ 年。
-      for (final g in monthGroups) f(g, 'date', Icons.calendar_month_outlined),
-      for (final g in yearGroups) f(g, 'date', Icons.calendar_today_outlined),
       // 省份 + 地点两级（[aves 对齐] 国家/省/市拆行；全库单一国家行无
       // 过滤价值，省行取 adminArea）。
       for (final g in provinceList) f(g, 'province', Icons.map_outlined),
@@ -418,6 +464,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           ids: noCameraIds,
         ),
     ];
+    // 保留动态「具体日期」chips：_pickDate 生成的 picked 项不在静态分组
+    // 里，重建注册表会丢（索引完成回调/route 返回刷新都触发重建），
+    // 丢了连 _selected 里的选中项也会被幽灵清理误删。
+    list.addAll(
+        _filters.values.where((x) => x.key.startsWith('date:picked-')));
 
     setState(() {
       _filters = {for (final x in list) x.key: x};
@@ -433,10 +484,31 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     return d.toStringAsFixed(2).replaceFirst(RegExp(r'\.?0+$'), '');
   }
 
-  /// mime → 显示名：`image/jpeg` → `JPEG`；RAW 私有类型统一 `RAW`。
+  /// mime → 显示名（常见格式友好名映射；未收录的回退尾段大写——
+  /// `image/x-ms-bmp` 这类私有串不会裸露）。
+  static const _mimeNames = {
+    'jpeg': 'JPEG',
+    'jpg': 'JPEG',
+    'png': 'PNG',
+    'gif': 'GIF',
+    'webp': 'WebP',
+    'heic': 'HEIC',
+    'heif': 'HEIF',
+    'avif': 'AVIF',
+    'bmp': 'BMP',
+    'tiff': 'TIFF',
+    'tif': 'TIFF',
+    'svg+xml': 'SVG',
+    'mp4': 'MP4',
+    'mpeg': 'MPEG',
+    'quicktime': 'MOV',
+    '3gpp': '3GP',
+  };
+
   String _mimeLabel(String mime) {
     if (_isRawMime(mime)) return 'RAW';
-    return mime.split('/').last.toUpperCase();
+    final last = mime.split('/').last.toLowerCase();
+    return _mimeNames[last] ?? last.toUpperCase();
   }
 
   /// 竖屏/横屏（MediaStore WIDTH/HEIGHT；0=未知不参与，正方形两边都不算）。
@@ -476,6 +548,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
               color: AppColors.text,
               fontSize: 15,
             ),
+            // 无边框须三态显式置 none：focusedBorder 缺省回落主题，聚焦
+            // 时会亮出主题高亮描边（用户反馈"不需要聚焦的高亮边框"）。
             decoration: InputDecoration(
               hintText: t(ref, 'search_hint'),
               hintStyle: const TextStyle(
@@ -483,12 +557,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 fontSize: 15,
               ),
               border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
               isDense: true,
               filled: false,
             ),
           ),
         ),
-        // [aves 对齐] buildActions：有输入时给清除按钮，清空后焦点回框。
+        // [aves 对齐] buildActions：有输入时给清除按钮。清空后仅当回到
+        // 建议态（无选中 chips）才回焦——结果网格中清文本不该弹键盘。
         actions: [
           if (query.isNotEmpty)
             IconButton(
@@ -496,7 +573,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
               tooltip: t(ref, 'search_clear'),
               onPressed: () {
                 _queryCtrl.clear();
-                _searchFocus.requestFocus();
+                if (_selected.isEmpty) _searchFocus.requestFocus();
                 setState(() {});
               },
             ),
@@ -505,19 +582,24 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       ),
       body: SafeArea(
         bottom: false,
-        child: Builder(
-          builder: (context) {
-            // 组合结果 = 文本过滤 ∩ 已选 chips（任一存在即出网格）。
-            final results = _applyQueryAndFilters(query);
-            final showResults = query.isNotEmpty || _selected.isNotEmpty;
-            if (!showResults) return _buildSuggestions(query);
-            return Column(
-              children: [
-                _buildSelectedRow(results),
-                Expanded(child: _buildResults(results)),
-              ],
-            );
-          },
+        // 点击空白收键盘（chips 自带手势在前，不与之冲突）。
+        child: GestureDetector(
+          onTap: () => _searchFocus.unfocus(),
+          behavior: HitTestBehavior.opaque,
+          child: Builder(
+            builder: (context) {
+              // 组合结果 = 文本过滤 ∩ 已选 chips（任一存在即出网格）。
+              final results = _applyQueryAndFilters(query);
+              final showResults = query.isNotEmpty || _selected.isNotEmpty;
+              if (!showResults) return _buildSuggestions(query);
+              return Column(
+                children: [
+                  _buildSelectedRow(results),
+                  Expanded(child: _buildResults(results)),
+                ],
+              );
+            },
+          ),
         ),
       ),
     );
@@ -539,7 +621,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
 
   /// 点 chip：toggle 选中集合（同页实时过滤，不跳页）。
   /// 「日期选择器」是特殊入口 chip（不进选中集合，点了弹日期面板）。
+  /// 选 chip 即进结果网格——同时收键盘（结果页不该有输入法）。
   void _toggleFilter(String key) {
+    _searchFocus.unfocus();
     if (key == 'date:picker') {
       _pickDate();
       return;
@@ -632,6 +716,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         config.mlPlaceEnabled &&
         _filters.values.any((f) => f.category == 'place');
     return ListView(
+      // 滚动即收键盘（用户反馈：滚动页面应自动收起输入法）。
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       padding: const EdgeInsets.only(top: 4, bottom: 24),
       children: [
         // 全量扫描加载中：顶部轻量指示（chips 依赖全量列表）。
@@ -649,16 +735,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         // 索引进度 banner（设置页「智能识别」区同源）。
         if (index.running || index.geocoding)
           _MlProgressBanner(state: index, onTap: null),
-        // 快捷行（无标题，[aves 对齐] Aves 首行 typeFilters 位）：同样
-        // 可折叠（[用户定稿] 所有横向列表都要有折叠箭头）。
-        _buildSection(category: 'quick', query: query),
-        // 日期：近月优先；展开看全部年/月。
+        // 快捷行（无标题，[aves 对齐] Aves 首行 typeFilters 位）：恒展开
+        // 无折叠箭头（[用户定稿]「第一行保持展开状态，把折叠按钮去掉」）。
+        _buildSection(
+            category: 'quick', query: query, alwaysExpanded: true),
+        // 日期（[aves 对齐]：选择日期/最近添加/月份/星期，注册序即显示序）。
         _buildSection(
           title: t(ref, 'search_dates'),
           category: 'date',
           query: query,
-          collapsedCount: 5,
-          sort: _byAbsMonthDesc,
         ),
         // 省份 + 地点两级（[aves 对齐] 国家/省/市拆行，国库无国家行）；
         // 索引驱动，空态按配置分流引导。
@@ -696,30 +781,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     );
   }
 
-  /// 绝对月份键（'2025-06'）距当前月数——日期维度排序键（近→远）。
-  int _absMonthRank(String key) {
-    final parts = key.split('-');
-    final y = int.parse(parts[0]);
-    final m = int.parse(parts[1]);
-    final now = DateTime.now();
-    return (now.year - y) * 12 + (now.month - m);
-  }
-
-  /// 日期维度排序：月份按距当前近远在前，年份按新旧排其后（展开态用）。
-  /// 年份 key（'2026'）无 '-'，不能走 [_absMonthRank] 的 parts[1]——
-  /// 真机红屏 RangeError 实证。
-  int _byAbsMonthDesc(SearchFilterData a, SearchFilterData b) {
-    int rank(SearchFilterData f) {
-      final k = f.key.replaceFirst('date:', '');
-      if (!k.contains('-')) return 100000 - (int.tryParse(k) ?? 0);
-      return _absMonthRank(k);
-    }
-
-    return rank(a).compareTo(rank(b));
-  }
-
   /// 日期选择器：选日后生成「2025年6月15日」过滤 chip 并选中。
   Future<void> _pickDate() async {
+    if (_photos.isEmpty) return; // 全量扫描未完，无据可滤
+    _searchFocus.unfocus(); // 弹日期面板前收键盘
     final d = await showDatePicker(
       context: context,
       initialDate: DateTime.now(),
@@ -768,11 +833,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     required String query,
     int collapsedCount = 8,
     int Function(SearchFilterData, SearchFilterData)? sort,
+    bool alwaysExpanded = false,
   }) {
     var chips = _sectionChips(category, query);
     if (chips.isEmpty) return const SizedBox.shrink();
     if (sort != null) chips = chips.toList()..sort(sort);
-    final expanded = _expandedSection == category;
+    // 恒展开区（quick 类型行）：无折叠箭头、不参与手风琴（[用户定稿]
+    // 「第一行保持展开状态，把折叠按钮去掉」）。
+    final expanded = alwaysExpanded || _expandedSection == category;
     List<SearchFilterData> visible;
     var hiddenCount = 0;
     if (!expanded) {
@@ -787,40 +855,42 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 8, 4),
-          child: Row(
-            children: [
-              if (title != null) Expanded(child: _SectionHeader(title)),
-              // 折叠/展开箭头（每行恒显；语义同 Aves collapse/expand icon）。
-              GestureDetector(
-                onTap: () => setState(() {
-                  if (expanded) {
-                    _expandedSection = null;
-                  } else {
-                    // 单值：开新区旧区自动收起（[aves 对齐] 手风琴）；
-                    // 「更多」态随区收起重置。
-                    _expandedSection = category;
-                    _showAllSections.remove(category);
-                  }
-                }),
-                behavior: HitTestBehavior.opaque,
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  child: Icon(
-                    expanded
-                        ? Icons.keyboard_arrow_up
-                        : Icons.keyboard_arrow_down,
-                    size: 18,
-                    color: AppColors.muted,
+        // 恒展开区（quick 类型行）无标题无箭头，整行 header 不渲染。
+        if (!alwaysExpanded)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 8, 4),
+            child: Row(
+              children: [
+                if (title != null) Expanded(child: _SectionHeader(title)),
+                // 折叠/展开箭头（每行恒显；语义同 Aves collapse/expand icon）。
+                GestureDetector(
+                  onTap: () => setState(() {
+                    if (expanded) {
+                      _expandedSection = null;
+                    } else {
+                      // 单值：开新区旧区自动收起（[aves 对齐] 手风琴）；
+                      // 「更多」态随区收起重置。
+                      _expandedSection = category;
+                      _showAllSections.remove(category);
+                    }
+                  }),
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    child: Icon(
+                      expanded
+                          ? Icons.keyboard_arrow_up
+                          : Icons.keyboard_arrow_down,
+                      size: 18,
+                      color: AppColors.muted,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-            ],
+                const SizedBox(width: 8),
+              ],
+            ),
           ),
-        ),
         if (expanded)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -953,6 +1023,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   /// 大图浏览（[ente 对齐] ente routeToPage 淡入转场；无 Hero 飞行——
   /// 搜索页网格 tagPrefix 与 viewer 的 'photo_$id' 不同，飞行不配对）。
   void _openPhoto(List<MsImageInfo> files, MsImageInfo info) {
+    _searchFocus.unfocus(); // 进看图页收起输入法（用户反馈）
     final index = files.indexWhere((f) => f.id == info.id);
     if (index < 0) return;
     Navigator.of(context).push(enteFadeRoute(
@@ -1116,10 +1187,12 @@ class _MlProgressBanner extends ConsumerWidget {
   }
 }
 
-/// 顶栏 leading：抽屉三线 → 返回箭头 morph（[aves 对齐]
+/// 顶栏 leading：侧栏图形 → 返回箭头 morph（[aves 对齐]
 /// AnimatedIcons.menu_arrow 语义；用户定稿「原抽屉按钮位置过渡为返回，
-/// 而不是生硬替换页面」）。自绘 stroke 1.9 圆头与抽屉/返回/选项按钮
-/// 同形制：三线上下两条向中线并拢淡出，中线演变为箭头横线并向左生长。
+/// 而不是生硬替换页面」）。起点 = 相册页左侧抽屉按钮的侧栏图形
+///（面板框+竖分隔线，几何抄 app_shell _SidebarMorphPainter 的 t=0 态）；
+/// 终点 = BackGlyphIcon 精确字形（横线 7.2→17.4，头 6.9~11.4——morph
+/// 落位必须逐坐标等于它，否则返回箭头与其他页面错位偏移）。
 class _MenuBackMorph extends StatelessWidget {
   const _MenuBackMorph({required this.progress});
 
@@ -1140,40 +1213,58 @@ class _MenuBackMorph extends StatelessWidget {
 class _MenuBackPainter extends CustomPainter {
   const _MenuBackPainter(this.t);
 
-  final double t; // 0 = 三线菜单，1 = 返回箭头
+  /// morph 进度：0 = 侧栏图形（抽屉收起态），1 = 返回箭头。
+  final double t;
+
+  /// 返回箭头字形坐标（与 BackGlyphPainter 完全一致）。
+  static const _arrowLine1 = Offset(7.2, 12);
+  static const _arrowLine2 = Offset(17.4, 12);
+  static const _arrowHeadTop = Offset(11.4, 7.5);
+  static const _arrowHeadTip = Offset(6.9, 12);
+  static const _arrowHeadBottom = Offset(11.4, 16.5);
+  static const _c = Offset(12, 12);
 
   @override
   void paint(Canvas canvas, Size size) {
     canvas.save();
     canvas.scale(size.width / 24);
-    final base = Paint()
+    final stroke = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.9
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
-    final menuAlpha = 1.0 - Curves.easeOut.transform(t);
-    if (menuAlpha > 0) {
-      final p = base..color = AppColors.text.withValues(alpha: menuAlpha);
-      // 上下两条线向中线（y=12）并拢淡出；中线保留到最后一刻，与箭头
-      // 横线（同在 y=12）衔接形成「中线变横线」的 morph 感。
-      canvas.drawLine(
-          Offset(6.5 + t, 7.5 - 2.2 * t), Offset(17.5, 7.5 - 2.2 * t), p);
-      canvas.drawLine(const Offset(6.5, 12), Offset(17.5, 12), p);
-      canvas.drawLine(
-          Offset(6.5 + t, 16.5 + 2.2 * t), Offset(17.5, 16.5 + 2.2 * t), p);
+
+    // 侧栏图形：面板框绕中心收缩（1 → 0.4）并淡出（同抽屉按钮形制）。
+    final frameAlpha = (1 - t).clamp(0.0, 1.0);
+    if (frameAlpha > 0) {
+      stroke.color = AppColors.text.withValues(alpha: frameAlpha);
+      final s = 1 - 0.6 * t;
+      final rect = Rect.fromCenter(
+        center: _c,
+        width: 14 * s,
+        height: 13 * s,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, const Radius.circular(2)),
+        stroke,
+      );
+      final dx = rect.left + rect.width * 0.32;
+      canvas.drawLine(Offset(dx, rect.top), Offset(dx, rect.bottom), stroke);
     }
-    final arrowAlpha = Curves.easeIn.transform(t);
+
+    // 返回箭头：淡入并自中心生长（端点从中心插值到字形坐标，落位
+    // t=1 时逐坐标等于 BackGlyphIcon，位置与其他页面严格一致）。
+    final arrowAlpha = t.clamp(0.0, 1.0);
     if (arrowAlpha > 0) {
-      final p = base..color = AppColors.text.withValues(alpha: arrowAlpha);
-      // 横线自右端向左生长（终点位 7.2），chevron 头跟随线头位移。
-      final w = 10.2 * Curves.easeOut.transform(t);
-      final hx = 17.4 - (10.2 - w);
-      canvas.drawLine(Offset(hx, 12), const Offset(17.4, 12), p);
+      stroke.color = AppColors.text.withValues(alpha: arrowAlpha);
+      Offset grow(Offset p) =>
+          Offset(_c.dx + (p.dx - _c.dx) * t, _c.dy + (p.dy - _c.dy) * t);
+      canvas.drawLine(grow(_arrowLine1), grow(_arrowLine2), stroke);
       final head = Path()
-        ..moveTo(hx + 4.5, 7.5)
-        ..lineTo(hx, 12)
-        ..lineTo(hx + 4.5, 16.5);
-      canvas.drawPath(head, p);
+        ..moveTo(grow(_arrowHeadTop).dx, grow(_arrowHeadTop).dy)
+        ..lineTo(grow(_arrowHeadTip).dx, grow(_arrowHeadTip).dy)
+        ..lineTo(grow(_arrowHeadBottom).dx, grow(_arrowHeadBottom).dy);
+      canvas.drawPath(head, stroke);
     }
     canvas.restore();
   }
