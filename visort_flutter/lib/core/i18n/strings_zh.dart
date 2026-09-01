@@ -368,9 +368,9 @@ const Map<String, String> stringsZh = {
   // ── 智能识别（缓存下方新区块，[ente 对齐] 开关+进度+注释）──
   'settings_section_ml': '智能识别',
   'settings_ml_index': '智能识别索引',
-  'settings_ml_index_note': '扫描照片提取拍摄时间、地点、相机等信息，供搜索页按日期/地点/相机分类。与上方「缓存」（缩略图加速）相互独立。',
+  'settings_ml_index_note': '扫描照片提取拍摄时间、地点、相机等信息，供搜索页按日期/地点/相机分类。开启时会申请访问媒体位置信息。与上方「缓存」（缩略图加速）相互独立。',
   'settings_ml_place': '地点识别',
-  'settings_ml_place_note': '解析拍摄坐标的城市名（国家/省/市），需要系统定位服务。',
+  'settings_ml_place_note': '解析拍摄坐标的城市名（国家/省/市），供地点分类显示。',
   'settings_ml_progress': '索引进度',
   'settings_ml_running': '正在索引…',
   'settings_ml_geocoding': '正在解析地名…',

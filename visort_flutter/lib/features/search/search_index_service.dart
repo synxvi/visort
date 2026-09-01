@@ -146,14 +146,14 @@ class SearchIndexService extends Notifier<SearchIndexState> {
     final placeEnabled = ref.read(configProvider).mlPlaceEnabled;
     try {
       // ACCESS_MEDIA_LOCATION（Android 10+ 未授权时系统剥离 MediaStore
-      // 流的 EXIF GPS——真机实证：pm clear 撤销后索引 0 坐标）。开跑前
-      // 请求；拒绝则照常索引（地点维度无数据，不阻塞其余维度）。
-      if (placeEnabled) {
-        try {
-          await _channel.requestAccessMediaLocation();
-        } catch (_) {
-          // 无 Activity/失败不阻塞索引
-        }
+      // 流的 EXIF GPS——真机实证：pm clear 撤销后索引 0 坐标）。跟随
+      // 「智能识图索引」总开关在开跑前申请一次（用户定稿：地点识别子
+      // 开关不单独触发权限弹窗）；拒绝则照常索引（地点维度无数据，
+      // 不阻塞其余维度）。
+      try {
+        await _channel.requestAccessMediaLocation();
+      } catch (_) {
+        // 无 Activity/失败不阻塞索引
       }
       final photos = await scanAllImages(_channel);
       debugPrint('[SIDX] scanned ${photos.length} photos');

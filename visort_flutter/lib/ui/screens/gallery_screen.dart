@@ -223,9 +223,10 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
   /// 网格布局：与快速整理页网格同构（Wrap + 固定列宽），列数独立配置。
   Widget _buildGridBody(List<MsBucket> buckets, double bottomInset) {
     final cols = ref.watch(configProvider).galleryGridColumns;
-    // spacing 2 + tile 内水平 padding 4×2 = 相邻封面间隙 10dp（用户定稿，
-    // 原 12dp）；top 10 + tile vertical 2 = 顶栏到首行封面 12dp（原 10）。
-    const spacing = 2.0;
+    // spacing 4 + tile 内水平 padding 4×2 = 相邻封面间隙 12dp（用户定稿，
+    // 中间曾调 10dp 后回调）；top 10 + tile vertical 2 = 顶栏到首行封面
+    // 12dp。
+    const spacing = 4.0;
     const hpad = 12.0;
     return LayoutBuilder(
       builder: (ctx, c) {

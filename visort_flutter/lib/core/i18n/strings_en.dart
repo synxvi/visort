@@ -378,10 +378,10 @@ const Map<String, String> stringsEn = {
   'settings_section_ml': 'Smart Recognition',
   'settings_ml_index': 'Smart Indexing',
   'settings_ml_index_note':
-      'Scans photos for date, location and camera info to power search by date/place/camera. Independent from the thumbnail Cache above.',
+      'Scans photos for date, location and camera info to power search by date/place/camera. Requests access to media location when enabled. Independent from the thumbnail Cache above.',
   'settings_ml_place': 'Place Recognition',
   'settings_ml_place_note':
-      'Resolves city names (country/state/city) from photo coordinates. Requires system location service.',
+      'Resolves city names (country/state/city) from photo coordinates for place grouping.',
   'settings_ml_progress': 'Indexing Progress',
   'settings_ml_running': 'Indexing…',
   'settings_ml_geocoding': 'Resolving place names…',
