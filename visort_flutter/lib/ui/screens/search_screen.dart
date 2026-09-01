@@ -134,6 +134,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       Future.delayed(const Duration(milliseconds: 350), () {
         if (!mounted) return;
         if (_queryCtrl.text.isEmpty && _selected.isEmpty) {
+          // ignore: avoid_print
+          print('[SDBG] autofocus t=${DateTime.now().millisecondsSinceEpoch}');
           _searchFocus.requestFocus();
         }
       });
@@ -483,6 +485,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     // 丢了连 _selected 里的选中项也会被幽灵清理误删。
     list.addAll(
         _filters.values.where((x) => x.key.startsWith('date:picked-')));
+
+    // [SDBG] 排查期打点：进页「从左向右插入」动画的真实时间线（数据
+    // 分几批到达/各区何时出现）。排查完删除。
+    final byCat = <String, int>{};
+    for (final x in list) {
+      byCat[x.category] = (byCat[x.category] ?? 0) + 1;
+    }
+    // ignore: avoid_print
+    print('[SDBG] rebuild t=${DateTime.now().millisecondsSinceEpoch} '
+        'photos=${photos.length} $byCat');
 
     setState(() {
       _filters = {for (final x in list) x.key: x};
@@ -956,81 +968,59 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
               ],
             ),
           ),
-        // 折叠(单行横滑) ↔ 展开(Wrap 全铺) 的切换：AnimatedCrossFade——
-        // 两 child 恒定在树、布局不重建，切换只做高度插值(sizeCurve)+
-        // 交叉淡入，无 AnimatedSize 的两个坑（真机实测）：
-        //   1) 首帧从 Size.zero 起测，section 数据异步到达时触发 0→满宽
-        //      高的入场动画（「从左向右插入」观感）；
-        //   2) 动画中 child 重排（Wrap 换行/文本度量变化）会重启尺寸
-        //      插值 → 布局波动、内容被顶抬。
-        // 展开态 SizedBox 锁满宽：两 child 宽度一致，高度是唯一变量。
-        AnimatedCrossFade(
+        // 折叠(前 N 静态铺) ↔ 展开(全量) 的切换：单树 Wrap + AnimatedSize
+        // 高度动画。三轮真机实测的教训（双树切换方案全灭）：
+        //   - AnimatedCrossFade/AnimatedSwitcher 交叉淡化会让位置未变的
+        //     前几个 chips 也经历透明度 1→0→1（「原有胶囊闪烁」）；
+        //   - 尺寸插值期间 child 重排会重启插值（波动/顶抬）。
+        // 单树方案：切换只增减 Wrap.children 数量，前 N 个 chips 的
+        // Element 按位置复用（原地不动、零闪烁）；动画中 children 固定
+        // 无重排，AnimatedSize 纯高度插值 topCenter（首行钉顶）。
+        // AnimatedSize 首帧 _layoutStart 直接采用 child 尺寸（SDK
+        // rendering/animated_size.dart），数据到达无入场动画。
+        // 折叠态不横滑（[用户定稿]「折叠露前 N 个」，横滑曾被否定）。
+        AnimatedSize(
           duration: const Duration(milliseconds: 240),
-          sizeCurve: Curves.easeOutCubic,
-          firstCurve: Curves.easeOutCubic,
-          secondCurve: Curves.easeOutCubic,
-          crossFadeState: expanded
-              ? CrossFadeState.showSecond
-              : CrossFadeState.showFirst,
-          firstChild: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
               children: [
-                for (var i = 0; i < visible.length; i++)
-                  Padding(
-                    padding:
-                        EdgeInsets.only(right: i == visible.length - 1 ? 0 : 8),
-                    child: FilterChipWidget(
-                      filter: visible[i],
-                      selected: _selected.contains(visible[i].key),
-                      onTap: () => _toggleFilter(visible[i].key),
-                    ),
+                for (final c in visible)
+                  FilterChipWidget(
+                    filter: c,
+                    selected: _selected.contains(c.key),
+                    onTap: () => _toggleFilter(c.key),
                   ),
-              ],
-            ),
-          ),
-          secondChild: SizedBox(
-            width: double.infinity,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final c in visible)
-                    FilterChipWidget(
-                      filter: c,
-                      selected: _selected.contains(c.key),
-                      onTap: () => _toggleFilter(c.key),
-                    ),
-                  if (hiddenCount > 0)
-                    GestureDetector(
-                      onTap: () =>
-                          setState(() => _showAllSections.add(sectionKey)),
-                      behavior: HitTestBehavior.opaque,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 7),
-                        decoration: BoxDecoration(
-                          color: AppColors.surface,
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(color: AppColors.border),
-                        ),
-                        child: Text(
-                          '${t(ref, 'search_more')}($hiddenCount)',
-                          style: const TextStyle(
-                            fontFamily: 'Space Mono',
-                            fontFamilyFallback: AppFonts.cjkFallback,
-                            color: AppColors.accent,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 12,
-                          ),
+                if (hiddenCount > 0)
+                  GestureDetector(
+                    onTap: () =>
+                        setState(() => _showAllSections.add(sectionKey)),
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: Text(
+                        '${t(ref, 'search_more')}($hiddenCount)',
+                        style: const TextStyle(
+                          fontFamily: 'Space Mono',
+                          fontFamilyFallback: AppFonts.cjkFallback,
+                          color: AppColors.accent,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
                         ),
                       ),
                     ),
-                ],
-              ),
+                  ),
+              ],
             ),
           ),
         ),
