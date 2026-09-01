@@ -21,6 +21,7 @@ import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
+import 'package:visort_flutter/shared/widgets/app_bar_title.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/shared/widgets/view_options_toggle.dart';
 import 'package:visort_flutter/ui/router.dart';
@@ -83,16 +84,9 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
           tooltip: t(ref, 'gallery_title'),
         ),
         titleSpacing: 0,
-        title: Text(
-          t(ref, 'gallery_title'),
-          style: const TextStyle(
-            fontFamily: 'Space Mono',
-            height: 1.2,
-            fontFamilyFallback: AppFonts.cjkFallback,
-            fontWeight: FontWeight.w700,
-            fontSize: 16,
-          ),
-        ),
+        // 标题视觉对齐共用组件（CJK 字形重心偏下 −1.4dp 上移贴中线，
+        // 见 app_bar_title.dart）。
+        title: AppBarTitleText(t(ref, 'gallery_title')),
         actions: [
           // 搜索（[ente 对齐] 选项按钮左侧）：进入分类搜索页
           //（人物/位置/文件类型），页内支持文件名过滤与结果网格。
@@ -100,11 +94,13 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
           // stroke 1.9 圆头），Material Icons.search 轮廓过细过小不搭。
           // 贴近选项按钮：真机像素实测两图形间隙 34.2dp（图标盒间隙
           // 是假象——图形包络仅 ~11dp，盒内留白全算进视觉间隙）。
-          // Transform 右移 15 → 图形间隙 19.2dp（34.2 原始→11.2 偏紧→
-          // 16.2 略紧，真机两轮反馈逐步回调）。
+          // x 12.75 → 图形间隙 22dp（34.2 原始→11.2 偏紧→16.2 略紧→
+          // 19.2→22，真机多轮反馈逐步回调）；y 1.1 = 图形重心偏上
+          // 补偿（镜圆偏上短柄，包络中心 y≈11.1/24，真机实测比三线
+          // 筛选高 1.13dp，下压贴齐 AppBar 几何中线，四元素共线）。
           // 选项按钮不动（保其与内容区右缘 16dp 对齐的既有调校）。
           Transform.translate(
-            offset: const Offset(15, 0),
+            offset: const Offset(12.75, 1.1),
             child: IconButton(
               icon: const _SearchGlyphIcon(),
               tooltip: t(ref, 'search'),

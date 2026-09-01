@@ -28,6 +28,7 @@ import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/ui/router_android.dart';
 import 'package:visort_flutter/ui/screens/app_shell_android.dart'
     show DrawerMenuButton, ShellHandle;
+import 'package:visort_flutter/shared/widgets/app_bar_title.dart';
 import 'package:visort_flutter/shared/widgets/back_glyph_button.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
@@ -385,33 +386,21 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                 ),
           // 标题紧贴返回箭头（默认 titleSpacing 16 会显得相册名离箭头太远）
           titleSpacing: 0,
-          title: _selectMode
-              ? Text(
-                  t(ref, 'selected_n', [_selectedIds.length]),
-                  style: TextStyle(
-                    fontFamily: 'Space Mono',
-                    height: 1.2,
-                    fontFamilyFallback: AppFonts.cjkFallback,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 16,
-                  ),
-                )
-              : Text(
-                  widget.trashedOnly
+          // 标题视觉对齐共用组件：CJK 重心 −1.4dp 上移贴中线；push 模式
+          //（返回箭头 leading）加 dx −1.6——箭头字形比侧栏图形窄 ~1.5dp，
+          // 左移使「按钮→标题」图形间隙跨页一致（首页基准 24.5dp）。
+          title: AppBarTitleText(
+            _selectMode
+                ? t(ref, 'selected_n', [_selectedIds.length])
+                : (widget.trashedOnly
                       ? t(ref, 'trash_title')
                       : (widget.favoritesOnly
                             ? t(ref, 'favorites_title')
-                            : (widget.bucketName ?? t(ref, 'gallery_title'))),
-                  style: TextStyle(
-                    fontFamily: 'Space Mono',
-                    height: 1.2,
-                    fontFamilyFallback: AppFonts.cjkFallback,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 16,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                            : (widget.bucketName ?? t(ref, 'gallery_title')))),
+            dx: widget._embedded ? 0 : -1.6,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
           actions: _selectMode
               ? [
                   IconButton(
