@@ -145,17 +145,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _menuBackCtrl.forward();
     });
-    // 搜索框自动聚焦呼出键盘（[aves 对齐] 转场完成后聚焦——立即聚焦会
-    // 在转场中压缩布局晃动）。350ms ≈ enteFadeRoute 200ms + 余量。
-    // 条件：仅当仍处建议态（无输入无选中）——用户已点 chip 进结果
-    // 网格时再弹键盘是干扰（用户反馈）。
+    // 搜索框自动聚焦呼出键盘（[aves 对齐]；Google Photos 同款行为）：
+    // 进页下一帧立即聚焦，键盘与路由转场并行升起。此前延迟 350ms 聚焦
+    // 会与首扫数据 setState（230ms 启动、快照缓存下 ~280ms 到达）撞车
+    // ——键盘 inset 动画帧上叠加整页 chips 从空到满，表现为「瞬间布局
+    // 闪烁」；手动点击时数据早已稳定故无闪（真机对比实证）。提前聚焦
+    // 让键盘（~300ms 升起）先于内容出现，序列彻底错开。
+    // 立即聚焦在 resizeToAvoidBottomInset:false 下不再压缩布局（旧结论
+    // 「转场中聚焦晃动」是 resize 时代产物）。条件：仅建议态（无输入
+    // 无选中）——用户已点 chip 进结果网格时再弹键盘是干扰（用户反馈）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Future.delayed(const Duration(milliseconds: 350), () {
-        if (!mounted) return;
-        if (_queryCtrl.text.isEmpty && _selected.isEmpty) {
-          _searchFocus.requestFocus();
-        }
-      });
+      if (mounted && _queryCtrl.text.isEmpty && _selected.isEmpty) {
+        _searchFocus.requestFocus();
+      }
     });
     // 从看图/其他页返回本页：静默重扫（删除/收藏变更后结果网格与 chips
     // 计数需刷新——否则已删照片的缩略图/计数残留，用户实测）。
