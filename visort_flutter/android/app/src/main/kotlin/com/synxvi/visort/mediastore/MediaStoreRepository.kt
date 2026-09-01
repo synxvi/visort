@@ -1023,6 +1023,20 @@ class MediaStoreRepository(private val context: Context) {
         }
     }
 
+    /// 全图缓存轻量探测（viewer 快甩「盘缓存直通」前置门）：只查文件存在 +
+    /// dm 失效，不读不解。校验逻辑与 [readFullCache] 完全对齐（存在 + mtime
+    /// 校验），保证「探测命中 ⇒ 真读命中」——否则直通白发起一次请求。
+    /// miss 零 DB 查询；命中付一次 dm 查询（快甩全命中场景 ~50 次，轻量）。
+    /// 只读语义：失效文件留给真读路径删（此处删会与并发真读竞争）。
+    fun fullCacheExists(id: String, targetWidth: Int): Boolean {
+        val longId = id.toLongOrNull() ?: return false
+        val safeTarget = targetWidth.coerceIn(960, 4096)
+        val file = File(File(fullCacheDir, safeTarget.toString()), "$longId.jpg")
+        if (!file.exists()) return false // miss：零查询
+        val dm = queryDateModifiedMs(longId)
+        return !(dm != null && file.lastModified() < dm)
+    }
+
     /// 写全图缓存（compress 后立即落盘 + 节流 trim）。失败静默（不阻断解码
     /// 主路径）。
     private fun writeFullCache(id: Long, targetWidth: Int, bitmap: Bitmap) {

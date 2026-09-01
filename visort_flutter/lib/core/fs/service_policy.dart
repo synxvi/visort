@@ -39,6 +39,12 @@ abstract final class RequestPriority {
   /// 网格清晰层（256/512）：快滚中挂起，停稳/慢滚时集中补。
   static const int sizedThumbnail = 200;
 
+  /// 快甩「盘缓存直通」full（zoomable_image 探测命中后发起）：排条占位
+  /// (100) 之后、清晰层 (200) 之前——掠过页不等 150ms 延迟窗直接加载盘
+  /// 就绪的 full（盘读 22-46ms/张）。只对盘缓存命中图发起（exists 前置
+  /// 门），miss 零请求，无洪泛；停稳页经 bumpPriority 插队到 50。
+  static const int passthroughFull = 120;
+
   /// 空闲预缓存（全相册 screenNail 预生成）：比一切用户请求低——任何
   /// 用户解码天然插队；配合 IdlePrecacheService 的交互静默检测双保险。
   static const int idlePrecache = 300;
@@ -51,7 +57,9 @@ abstract final class RequestPriority {
 
 class _Task<T> {
   _Task(this.priority, this.job, [this.tag, this.enqueuedQlen, this.enqueuedAt]);
-  final int priority;
+
+  /// 可变：bumpPriority 停稳插队时升级（其余字段入队后不变）。
+  int priority;
   final Future<T> Function() job;
   /// 性能打点标识（可空）。
   final String? tag;
@@ -135,6 +143,22 @@ class ServicePolicy {
       ..clear()
       ..addAll(keep)
       ..addAll(moved);
+  }
+
+  /// 把队列中匹配的【未启动】任务改为 [priority] 并重排（已在跑的不动
+  /// ——MethodChannel 无法中断，照常完成进缓存）。快甩直通 p120 在途、
+  /// 页存活过 150ms 延迟窗（停稳/翻页预建）时升级到当前页级：同 key 的
+  /// precacheImage 会合并 listener，重复发起改不了已在队列的任务——
+  /// 升级是唯一插队手段。挂起区恒空（pauseAbove 未启用），只查队列。
+  void bumpPriority(bool Function(_Task<dynamic> task) test, int priority) {
+    var changed = false;
+    for (final t in _queue) {
+      if (t.priority != priority && test(t)) {
+        t.priority = priority;
+        changed = true;
+      }
+    }
+    if (changed) _schedule();
   }
 
   /// 滚动开始：把队列中 priority > [threshold] 的任务移出挂起（保序），
