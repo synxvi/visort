@@ -33,33 +33,42 @@ class FilterChipWidget extends StatelessWidget {
   const FilterChipWidget({
     super.key,
     required this.filter,
-    required this.selected,
+    this.selected = false,
     required this.onTap,
+    this.selectedT,
   });
 
   final SearchFilterData filter;
   final bool selected;
   final VoidCallback onTap;
 
+  /// 选中度插值（0=未选中色，1=选中色）：飞行动画期间传入动画值，
+  /// 颜色/字重随飞行渐变（[用户定稿] 变色发生在动画期间而非点击瞬间，
+  /// 起飞/落位两侧零跳变）。null 时退回 [selected] 布尔语义。
+  final double? selectedT;
+
   @override
   Widget build(BuildContext context) {
-    final fg = selected ? AppColors.bg : AppColors.text;
+    final t = (selectedT ?? (selected ? 1.0 : 0.0)).clamp(0.0, 1.0);
+    final bg = Color.lerp(AppColors.surface, AppColors.accent, t)!;
+    final borderColor = Color.lerp(AppColors.border, AppColors.accent, t)!;
+    final fg = Color.lerp(AppColors.text, AppColors.bg, t)!;
+    final iconColor = Color.lerp(AppColors.muted, AppColors.bg, t)!;
+    final weight = FontWeight.lerp(FontWeight.w400, FontWeight.w700, t)!;
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
-          color: selected ? AppColors.accent : AppColors.surface,
+          color: bg,
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: selected ? AppColors.accent : AppColors.border,
-          ),
+          border: Border.all(color: borderColor),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(filter.icon, size: 13, color: selected ? fg : AppColors.muted),
+            Icon(filter.icon, size: 13, color: iconColor),
             const SizedBox(width: 6),
             Flexible(
               child: Text(
@@ -71,7 +80,7 @@ class FilterChipWidget extends StatelessWidget {
                   fontFamily: 'Space Mono',
                   height: 1.2,
                   fontFamilyFallback: AppFonts.cjkFallback,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+                  fontWeight: weight,
                   fontSize: 12,
                   color: fg,
                 ),

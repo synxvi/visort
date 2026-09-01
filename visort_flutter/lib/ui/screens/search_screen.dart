@@ -101,22 +101,20 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   /// 飞行中的胶囊 key（落点真实胶囊透明占位，落位后显现）。
   final Set<String> _flying = {};
 
-  /// 最近移除的 chip key（建议区该 chip 挂 [_removedChipKey] 供飞回
-  /// 动画测目标坐标；动画结束清除）。
-  String? _recentlyRemoved;
-  final GlobalKey _removedChipKey = GlobalKey();
+  /// 最近移除的 chip keys（建议区这些 chips 挂 [_removedChipKeys] 供
+  /// 飞回动画测目标坐标；系统返回清空是批量移除，坐标测完即清）。
+  final Set<String> _recentlyRemoved = {};
+  final Map<String, GlobalKey> _removedChipKeys = {};
 
-  OverlayEntry? _flyOverlay;
-  late final AnimationController _flyCtrl = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 260),
-  );
+  /// 进行中的飞行（entry + 独立 controller）：每次飞行自建 controller，
+  /// 连点/系统返回批量飞回时多路并行互不打断（共享 controller 会被后
+  /// 起飞的 reset 重启，先飞的瞬移）。dispose 时统一清。
+  final List<({OverlayEntry entry, AnimationController ctrl})> _flies = [];
 
   /// 多选状态恒传（非选择模式恒空）：Gallery 依赖 SelectionState 包裹
   /// 结构恒定（album_screen 同款，见其 610 行注释）。
   final SelectedFiles _selection = SelectedFiles();
   List<MsImageInfo> _photos = const [];
-  bool _loading = true;
 
   /// bucketId → 相册名（文本搜索「按相册名」匹配 + 相册维度卡片标签）。
   Map<String, String> _bucketNames = const {};
@@ -179,8 +177,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       }
     });
     // 首扫延迟到路由转场（200ms 淡入）之后：数据 setState 落在半透明
-    // 转场中会让内容跳一下（进页「整体闪烁」的来源之一，真机实测）；
-    // spinner 期 ~230ms 无感。route 返回刷新（_onRouteChanged）不延迟。
+    // 转场中会让内容跳一下（进页「整体闪烁」的来源之一，真机实测）。
+    // 空窗 ~230ms 内容静默出现（快照缓存下扫描本身仅几十 ms，无感；
+    // 无 spinner——首行加载圈在延迟窗口里先露出来是噪音，用户反馈）。
+    // route 返回刷新（_onRouteChanged）不延迟。
     Future.delayed(const Duration(milliseconds: 230), () {
       if (mounted) _loadPhotos();
     });
@@ -189,8 +189,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   @override
   void dispose() {
     currentRouteName.removeListener(_onRouteChanged);
-    _flyOverlay?.remove();
-    _flyCtrl.dispose();
+    for (final f in _flies) {
+      f.entry.remove();
+      f.ctrl.dispose();
+    }
+    _flies.clear();
     _queryCtrl.dispose();
     _searchFocus.dispose();
     _menuBackCtrl.dispose();
@@ -198,10 +201,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   }
 
   /// 回到本页时静默重扫：看图中删除/收藏变更会改变 _photos 与分组，
-  /// 不刷新则已删照片的缩略图/ids 残留（用户实测）。不置 _loading，
-  /// 旧列表照常渲染，扫完一次性换新。
+  /// 不刷新则已删照片的缩略图/ids 残留（用户实测）。
   void _onRouteChanged() {
-    if (currentRouteName.value == AlbumRoutes.search) _loadPhotos(silent: true);
+    if (currentRouteName.value == AlbumRoutes.search) _loadPhotos();
   }
 
   /// 全库扫描在飞守卫：initState 的 _loadPhotos 与 route 回调
@@ -209,7 +211,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   /// 扫描全库（子代理审查 P3）。
   bool _scanInFlight = false;
 
-  Future<void> _loadPhotos({bool silent = false}) async {
+  Future<void> _loadPhotos() async {
     if (_scanInFlight) return;
     _scanInFlight = true;
     try {
@@ -220,7 +222,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         _photos = photos;
         _buckets = buckets;
         _bucketNames = {for (final b in buckets) b.id: b.name};
-        if (!silent) _loading = false;
       });
       _rebuildGroups();
       // 前台增量对账 + 惰性补解析（[precache 对齐] 缩略图缓存「前台
@@ -265,8 +266,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         }
       }
     } catch (_) {
-      if (!mounted) return;
-      if (!silent) setState(() => _loading = false);
+      // 扫描失败静默（页面保持空态，下次进页重扫）。
     } finally {
       _scanInFlight = false;
     }
@@ -642,8 +642,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         if (query.isNotEmpty) {
           _queryCtrl.clear();
           setState(() {});
-        } else {
-          setState(() => _selected.clear());
+        } else if (_selected.isNotEmpty) {
+          // 系统返回清筛选与点胶囊移除同款飞回动画（用户反馈「只有点击
+          // 胶囊才触发，系统返回不触发」）。
+          _clearFiltersWithFlyBack();
         }
       },
       child: Scaffold(
@@ -778,7 +780,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     if (_selected.contains(key)) {
       setState(() {
         _selected.remove(key);
-        _recentlyRemoved = key;
+        _recentlyRemoved.add(key);
       });
       _flyChipFromBar(key, from);
     } else {
@@ -791,6 +793,54 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     }
   }
 
+  /// 系统返回清空筛选（返回键分层第二层）：与点胶囊移除同款批量飞回
+  /// ——清空前逐个测顶栏胶囊源坐标，清空渲染建议区后各自飞回原位；
+  /// 建议区未渲染该 chip（折叠截断/滚动出视口）的降级原地淡出。
+  void _clearFiltersWithFlyBack() {
+    final rects = <String, Rect>{};
+    for (final k in _selected) {
+      final r = _rectOf(_barChipKeys[k]?.currentContext);
+      if (r != null) rects[k] = r;
+    }
+    final keys = _selected.toList();
+    setState(() {
+      _selected.clear();
+      _recentlyRemoved.addAll(keys);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // 建议区已渲染、目标 chips 已挂 key：本帧测完坐标即可摘标记
+      // （setState 只标脏，重 build 在下一帧，不影响本次测量）。
+      setState(() {
+        _flying.addAll(keys);
+        _recentlyRemoved.removeAll(keys);
+      });
+      for (final k in keys) {
+        void clean() {
+          if (mounted) setState(() => _flying.remove(k));
+        }
+
+        final filter = _filters[k];
+        if (filter == null) {
+          clean(); // 幽灵 key（理论上重建时已清）：只清占位
+          continue;
+        }
+        final from = rects[k];
+        final to = _rectOf(_removedChipKeys[k]?.currentContext);
+        if (from == null) {
+          clean(); // 无源坐标（顶栏胶囊未挂上）：无可飞的，只清占位
+          continue;
+        }
+        if (to == null) {
+          // 建议区未渲染该 chip（折叠截断/滚出视口）：原地淡出。
+          _fadeOutFly(filter, from, onDone: clean);
+          continue;
+        }
+        _startFly(filter, from, to, t0: 1, t1: 0, onDone: clean);
+      }
+    });
+  }
+
   /// context 的屏幕矩形（飞行起/终点测量）；无效 context 返回 null。
   Rect? _rectOf(BuildContext? ctx) {
     final box = ctx?.findRenderObject();
@@ -801,23 +851,29 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     return null;
   }
 
-  /// 通用飞行层：from → to 直线插值（easeOutCubic 260ms），结束移除。
+  /// 通用飞行层：from → to 直线插值（easeOutCubic 260ms），选中色随程
+  /// 插值（[用户定稿] 变色发生在飞行期间——飞去 t 0→1 渐变选中色、飞回
+  /// 1→0 渐回普通色，起飞/落位两侧与真实胶囊零色差跳变）。每次飞行
+  /// 独立 controller：并行多飞互不打断（共享会被后起飞的 reset 重启）。
   void _startFly(SearchFilterData filter, Rect from, Rect to,
-      {VoidCallback? onDone}) {
-    _flyOverlay?.remove();
+      {double t0 = 0, double t1 = 1, VoidCallback? onDone}) {
+    final ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 260),
+    );
     late final OverlayEntry entry;
     entry = OverlayEntry(
       builder: (ctx) => AnimatedBuilder(
-        animation: _flyCtrl,
+        animation: ctrl,
         builder: (ctx, _) {
-          final t = Curves.easeOutCubic.transform(_flyCtrl.value);
+          final k = Curves.easeOutCubic.transform(ctrl.value);
           return Positioned.fromRect(
-            rect: Rect.lerp(from, to, t)!,
+            rect: Rect.lerp(from, to, k)!,
             child: Material(
               type: MaterialType.transparency,
               child: FilterChipWidget(
                 filter: filter,
-                selected: true,
+                selectedT: t0 + (t1 - t0) * k,
                 onTap: () {},
               ),
             ),
@@ -825,18 +881,18 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         },
       ),
     );
-    _flyOverlay = entry;
+    _flies.add((entry: entry, ctrl: ctrl));
     Overlay.of(context, rootOverlay: true).insert(entry);
-    _flyCtrl
-      ..reset()
-      ..forward().whenComplete(() {
-        entry.remove();
-        if (_flyOverlay == entry) _flyOverlay = null;
-        onDone?.call();
-      });
+    ctrl.forward().whenComplete(() {
+      entry.remove();
+      _flies.removeWhere((f) => f.entry == entry);
+      ctrl.dispose();
+      onDone?.call();
+    });
   }
 
-  /// 添加选中：布局稳定后测顶栏落位坐标，从建议区源位飞过去。
+  /// 添加选中：布局稳定后测顶栏落位坐标，从建议区源位飞过去
+  /// （普通色 → 选中色）。
   void _flyChipToBar(String key, Rect from) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -846,60 +902,61 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         setState(() => _flying.remove(key));
         return;
       }
-      _startFly(filter, from, to,
-          onDone: () {
-            if (mounted) setState(() => _flying.remove(key));
-          });
+      _startFly(filter, from, to, onDone: () {
+        if (mounted) setState(() => _flying.remove(key));
+      });
     });
   }
 
-  /// 移除选中：回到建议态时从顶栏飞回建议区原位（_recentlyRemoved 标记
-  /// 的 chip 挂临时 GlobalKey 测目标）；仍处结果态（建议区不可见）时
-  /// 原地淡出。
+  /// 移除选中：回到建议态时从顶栏飞回建议区原位（[_recentlyRemoved]
+  /// 标记的 chip 挂临时 GlobalKey 测目标，选中色 → 普通色）；仍处
+  /// 结果态（建议区不可见）时原地淡出。
   void _flyChipFromBar(String key, Rect? from) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final filter = _filters[key];
       if (filter == null) {
-        setState(() => _recentlyRemoved = null);
+        setState(() => _recentlyRemoved.remove(key));
         return;
       }
-      final to = _rectOf(_removedChipKey.currentContext);
+      final to = _rectOf(_removedChipKeys[key]?.currentContext);
       if (from == null || to == null) {
-        // 无源坐标或建议区未渲染（仍处结果态）：原地淡出 150ms。
+        // 无源坐标或建议区未渲染（仍处结果态）：原地淡出（同步渐失色）。
         if (from != null) _fadeOutFly(filter, from);
-        setState(() => _recentlyRemoved = null);
+        setState(() => _recentlyRemoved.remove(key));
         return;
       }
       setState(() => _flying.add(key));
-      _startFly(filter, from, to,
-          onDone: () {
-            if (mounted) {
-              setState(() {
-                _flying.remove(key);
-                _recentlyRemoved = null;
-              });
-            }
+      _startFly(filter, from, to, t0: 1, t1: 0, onDone: () {
+        if (mounted) {
+          setState(() {
+            _flying.remove(key);
+            _recentlyRemoved.remove(key);
           });
+        }
+      });
     });
   }
 
-  /// 原地淡出（目标不可见时的移除动画）。
-  void _fadeOutFly(SearchFilterData filter, Rect at) {
-    _flyOverlay?.remove();
+  /// 原地淡出（目标不可见时的移除动画）：透明度与选中色同步回落。
+  void _fadeOutFly(SearchFilterData filter, Rect at, {VoidCallback? onDone}) {
+    final ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 150),
+    );
     late final OverlayEntry entry;
     entry = OverlayEntry(
       builder: (ctx) => AnimatedBuilder(
-        animation: _flyCtrl,
+        animation: ctrl,
         builder: (ctx, _) => Positioned.fromRect(
           rect: at,
           child: Opacity(
-            opacity: 1 - _flyCtrl.value,
+            opacity: 1 - ctrl.value,
             child: Material(
               type: MaterialType.transparency,
               child: FilterChipWidget(
                 filter: filter,
-                selected: true,
+                selectedT: 1 - ctrl.value,
                 onTap: () {},
               ),
             ),
@@ -907,14 +964,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         ),
       ),
     );
-    _flyOverlay = entry;
+    _flies.add((entry: entry, ctrl: ctrl));
     Overlay.of(context, rootOverlay: true).insert(entry);
-    _flyCtrl
-      ..reset()
-      ..forward().whenComplete(() {
-        entry.remove();
-        if (_flyOverlay == entry) _flyOverlay = null;
-      });
+    ctrl.forward().whenComplete(() {
+      entry.remove();
+      _flies.removeWhere((f) => f.entry == entry);
+      ctrl.dispose();
+      onDone?.call();
+    });
   }
 
   /// 输入过滤后的维度 chips（label contains，大小写不敏感；
@@ -947,18 +1004,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       // top 12：quick 首行距顶栏（用户定稿 12dp，与相册页新顶距一致）。
       padding: const EdgeInsets.only(top: 12, bottom: 24),
       children: [
-        // 全量扫描加载中：顶部轻量指示（chips 依赖全量列表）。
-        if (_loading)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 20),
-            child: Center(
-              child: SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ),
-          ),
         // 索引进度 banner（设置页「智能识别」区同源）。
         if (index.running)
           _MlProgressBanner(state: index, onTap: null),
@@ -1181,8 +1226,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 children: [
                   for (final c in visible)
                     Builder(
-                      // 飞回动画的目标 chip 临时挂 key（测落位坐标）。
-                      key: _recentlyRemoved == c.key ? _removedChipKey : null,
+                      // 飞回动画的目标 chips 临时挂 key（测落位坐标；
+                      // 批量移除时多个并存）。
+                      key: _recentlyRemoved.contains(c.key)
+                          ? _removedChipKeys.putIfAbsent(
+                              c.key, () => GlobalKey())
+                          : null,
                       builder: (chipCtx) => Opacity(
                         opacity: _flying.contains(c.key) ? 0 : 1,
                         child: FilterChipWidget(
