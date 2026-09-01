@@ -26,7 +26,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:visort_flutter/core/db/database_service.dart';
 import 'package:visort_flutter/core/db/search_index_store.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
-import 'package:visort_flutter/core/i18n/i18n.dart';
 
 /// 全量照片分页拉取（空 bucketIds = 全部相册；Kotlin 侧查询已显式排除
 /// 回收站项）。搜索页与索引服务共用——全库扫描只做一次。
@@ -52,7 +51,6 @@ class SearchIndexState {
     this.running = false,
     this.processed = 0,
     this.total = 0,
-    this.geocoding = false,
     this.indexedCount = 0,
   });
 
@@ -62,10 +60,7 @@ class SearchIndexState {
   final int processed;
   final int total;
 
-  /// 地点识别补充轮进行中（索引完成后地名缺失时补 geocode）。
-  final bool geocoding;
-
-  /// 索引表行数（设置页「已索引 N 张」；只含有 EXIF 数据的照片）。
+  /// 索引表行数（load 恢复用；只含有 EXIF 数据的照片）。
   final int indexedCount;
 
   /// 是否已完整跑过一轮（total>0 且全处理）。
@@ -143,7 +138,6 @@ class SearchIndexService extends Notifier<SearchIndexState> {
     if (state.done && _metas.isNotEmpty) return;
     state = SearchIndexState(running: true);
     _cancel = false;
-    final placeEnabled = ref.read(configProvider).mlPlaceEnabled;
     try {
       // ACCESS_MEDIA_LOCATION（Android 10+ 未授权时系统剥离 MediaStore
       // 流的 EXIF GPS——真机实证：pm clear 撤销后索引 0 坐标）。跟随
@@ -168,9 +162,8 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         debugPrint('[SIDX] batch $i: meta=${r.length}');
         if (_cancel) return; // 清库竞态：关开关后不再写
         var batchOut = r.values.toList();
-        if (placeEnabled) {
-          batchOut = await _resolvePlaces(batchOut);
-        }
+        // 地名解析随索引恒开（用户定稿：地点识别开关已并入总开关）。
+        batchOut = await _resolvePlaces(batchOut);
         for (final m in batchOut) {
           metas[m.id] = m;
         }
@@ -198,36 +191,6 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         );
       }
       debugPrint('[SIDX] finally: $_cancel state=${state.processed}/${state.total}');
-    }
-  }
-
-  /// 地点识别补充轮：索引已完成但地名缺失（索引时开关未开/Geocoder
-  /// 当时不可用）时,对已存坐标补 geocode。设置页开「地点识别」时调。
-  Future<void> geocodeAll() async {
-    if (state.running || state.geocoding) return;
-    final pending =
-        _metas.values.where((m) => m.lat != null && m.placeLabel.isEmpty).toList();
-    if (pending.isEmpty) return;
-    state = SearchIndexState(
-      processed: state.processed,
-      total: state.total,
-      geocoding: true,
-    );
-    _cancel = false;
-    try {
-      for (var i = 0; i < pending.length; i += _kBatchSize) {
-        if (_cancel) return;
-        final chunk = pending.skip(i).take(_kBatchSize).toList();
-        final resolved = await _resolvePlaces(chunk);
-        await _store.putAll(resolved);
-        for (final m in resolved) {
-          _metas[m.id] = m;
-        }
-      }
-    } finally {
-      if (!_cancel) {
-        state = SearchIndexState(processed: state.processed, total: state.total);
-      }
     }
   }
 

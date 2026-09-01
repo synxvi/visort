@@ -746,7 +746,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     final index = ref.watch(searchIndexServiceProvider);
     final config = ref.watch(configProvider);
     final hasPlace = config.mlIndexEnabled &&
-        config.mlPlaceEnabled &&
         _filters.values.any((f) => f.category == 'place');
     return ListView(
       // 滚动即收键盘（用户反馈：滚动页面应自动收起输入法）。
@@ -767,7 +766,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
             ),
           ),
         // 索引进度 banner（设置页「智能识别」区同源）。
-        if (index.running || index.geocoding)
+        if (index.running)
           _MlProgressBanner(state: index, onTap: null),
         // 快捷行（无标题，[aves 对齐] Aves 首行 typeFilters 位）：恒展开
         // 无折叠箭头（[用户定稿]「第一行保持展开状态，把折叠按钮去掉」）。
@@ -805,9 +804,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
             title: t(ref, 'search_places_empty'),
             hint: !config.mlIndexEnabled
                 ? t(ref, 'search_places_hint_index')
-                : (!config.mlPlaceEnabled
-                    ? t(ref, 'search_places_hint_place')
-                    : t(ref, 'search_places_hint')),
+                : t(ref, 'search_places_hint'),
           ),
         ],
         // 拍摄设备（索引 camera 字段，元数据上面）。

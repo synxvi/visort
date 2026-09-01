@@ -657,13 +657,9 @@ class _MlSectionState extends ConsumerState<_MlSection> {
     ref.read(searchIndexServiceProvider.notifier).load();
   }
 
-  Future<void> _update({
-    bool? mlIndexEnabled,
-    bool? mlPlaceEnabled,
-  }) async {
+  Future<void> _update({bool? mlIndexEnabled}) async {
     final updated = ref.read(configProvider).copyWith(
           mlIndexEnabled: mlIndexEnabled,
-          mlPlaceEnabled: mlPlaceEnabled,
         );
     ref.read(configProvider.notifier).state = updated;
     await ref.read(profilesServiceProvider).save(updated);
@@ -692,15 +688,6 @@ class _MlSectionState extends ConsumerState<_MlSection> {
     }
   }
 
-  /// 地点识别分开关：开→索引已完成且有无名坐标时补一轮地名解析；
-  /// 关→仅停止地名展示（已解析数据保留，重开不重扫）。
-  Future<void> _onPlaceToggle(bool enable) async {
-    await _update(mlPlaceEnabled: enable);
-    if (enable) {
-      ref.read(searchIndexServiceProvider.notifier).geocodeAll();
-    }
-  }
-
   /// 进度百分比（0-100 整数）；total 未知时返回 null 显示「—」。
   int? _percent(SearchIndexState ml) =>
       ml.total <= 0 ? null : (ml.processed * 100 / ml.total).round().clamp(0, 100);
@@ -709,7 +696,6 @@ class _MlSectionState extends ConsumerState<_MlSection> {
   /// 无文案返回 null 不渲染——避免与主行占位符叠出双「—」。
   String? _statusLine(SearchIndexState ml) {
     if (ml.running) return t(ref, 'settings_ml_running');
-    if (ml.geocoding) return t(ref, 'settings_ml_geocoding');
     if (ml.done) return t(ref, 'settings_ml_done');
     return null;
   }
@@ -782,6 +768,8 @@ class _MlSectionState extends ConsumerState<_MlSection> {
         ),
         // 进度组：主行百分比数字，副行状态；仅开启时显示（缓存区配额行
         // 同款模式）。关闭时显示 = 主行副行各一个「—」占位，视觉噪音。
+        // 「索引数据」「地点识别」开关已移除（用户定稿：前者与进度重复，
+        // 后者并入总开关——开索引即地点识别）。
         if (config.mlIndexEnabled)
           InkWell(
             onTap: () => ref.read(searchIndexServiceProvider.notifier).load(),
@@ -813,36 +801,6 @@ class _MlSectionState extends ConsumerState<_MlSection> {
               ),
             ),
           ),
-        // 索引数据行（同缓存区统计行模式）：已索引条数，点击刷新。
-        if (config.mlIndexEnabled)
-          InkWell(
-            onTap: () => ref.read(searchIndexServiceProvider.notifier).load(),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-              child: Row(
-                children: [
-                  Text(t(ref, 'settings_ml_data'), style: _labelStyle),
-                  const Spacer(),
-                  Text(
-                    t(ref, 'settings_ml_data_value')
-                        .replaceFirst('{n}', '${ml.indexedCount}'),
-                    style: const TextStyle(
-                        fontFamily: 'Space Mono',
-                        fontFamilyFallback: ['Noto Sans Mono CJK SC'],
-                        color: AppColors.muted,
-                        fontSize: 13),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        // 分能力开关（各一组，自动线分隔）。
-        _switchGroup(
-          labelKey: 'settings_ml_place',
-          noteKey: 'settings_ml_place_note',
-          value: config.mlPlaceEnabled,
-          onChanged: _onPlaceToggle,
-        ),
       ],
     );
   }

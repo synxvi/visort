@@ -180,8 +180,6 @@ const Map<String, String> stringsEn = {
   'search_places_hint': 'Photos have no GPS data, or indexing is in progress.',
   'search_places_hint_index':
       'Enable Smart Indexing in Settings to group photos by city.',
-  'search_places_hint_place':
-      'Enable Place Recognition in Settings to group photos by city.',
   'search_albums': 'Albums',
   'search_types': 'File Types',
   'search_cameras': 'Cameras',
@@ -379,15 +377,9 @@ const Map<String, String> stringsEn = {
   'settings_ml_index': 'Smart Indexing',
   'settings_ml_index_note':
       'Scans photos for date, location and camera info to power search by date/place/camera. Requests access to media location when enabled. Independent from the thumbnail Cache above.',
-  'settings_ml_place': 'Place Recognition',
-  'settings_ml_place_note':
-      'Resolves city names (country/state/city) from photo coordinates for place grouping.',
   'settings_ml_progress': 'Indexing Progress',
   'settings_ml_running': 'Indexing…',
-  'settings_ml_geocoding': 'Resolving place names…',
   'settings_ml_done': 'Complete',
-  'settings_ml_data': 'Index Data',
-  'settings_ml_data_value': '{n} photos indexed',
   'settings_ml_off_title': 'Disable smart indexing?',
   'settings_ml_off_desc': 'Indexed search category data will be cleared.',
   'settings_title': 'Settings',

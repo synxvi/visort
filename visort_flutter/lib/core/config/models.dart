@@ -256,7 +256,6 @@ class AppConfig {
     this.precacheQuotaMb = 1024,
     this.mlIndexEnabled = false,
     this.mlFaceEnabled = false,
-    this.mlPlaceEnabled = true,
     this.drawerAnimSpeed = DrawerAnimSpeed.fast,
     this.defaultHomePage = DefaultHomePage.gallery,
     this.galleryLayout = HomeLayout.grid,
@@ -327,7 +326,6 @@ class AppConfig {
 
   /// 地点识别开关：拍摄坐标反地理编码为城市名（国家/省/市），
   /// 并控制搜索页「地点」分类是否展示。
-  final bool mlPlaceEnabled;
 
   /// 抽屉开合动画档位（舒适/快速），默认快速（Material 黄金值）。
   final DrawerAnimSpeed drawerAnimSpeed;
@@ -378,7 +376,6 @@ class AppConfig {
     int? precacheQuotaMb,
     bool? mlIndexEnabled,
     bool? mlFaceEnabled,
-    bool? mlPlaceEnabled,
     DrawerAnimSpeed? drawerAnimSpeed,
     DefaultHomePage? defaultHomePage,
     HomeLayout? galleryLayout,
@@ -404,7 +401,6 @@ class AppConfig {
         precacheQuotaMb: precacheQuotaMb ?? this.precacheQuotaMb,
         mlIndexEnabled: mlIndexEnabled ?? this.mlIndexEnabled,
         mlFaceEnabled: mlFaceEnabled ?? this.mlFaceEnabled,
-        mlPlaceEnabled: mlPlaceEnabled ?? this.mlPlaceEnabled,
         drawerAnimSpeed: drawerAnimSpeed ?? this.drawerAnimSpeed,
         defaultHomePage: defaultHomePage ?? this.defaultHomePage,
         galleryLayout: galleryLayout ?? this.galleryLayout,
@@ -431,7 +427,6 @@ class AppConfig {
         'precache_quota_mb': precacheQuotaMb,
         'ml_index_enabled': mlIndexEnabled,
         'ml_face_enabled': mlFaceEnabled,
-        'ml_place_enabled': mlPlaceEnabled,
         'drawer_anim_speed': drawerAnimSpeed.name,
         'default_home_page': defaultHomePage.name,
         'gallery_layout': galleryLayout.name,
@@ -505,7 +500,6 @@ class AppConfig {
       precacheQuotaMb: (json['precache_quota_mb'] as int?) ?? 1024,
       mlIndexEnabled: (json['ml_index_enabled'] as bool?) ?? false,
       mlFaceEnabled: (json['ml_face_enabled'] as bool?) ?? false,
-      mlPlaceEnabled: (json['ml_place_enabled'] as bool?) ?? true,
       drawerAnimSpeed: _parseDrawerAnimSpeed(
           json['drawer_anim_speed'], DrawerAnimSpeed.fast),
       defaultHomePage: _parseDefaultHomePage(
