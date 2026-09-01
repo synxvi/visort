@@ -223,6 +223,9 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
   /// 网格布局：与快速整理页网格同构（Wrap + 固定列宽），列数独立配置。
   Widget _buildGridBody(List<MsBucket> buckets, double bottomInset) {
     final cols = ref.watch(configProvider).galleryGridColumns;
+    // spacing 4 + tile 内水平 padding 4×2 = 相邻封面间隙 12dp（用户定稿，
+    // 中间曾调 10dp 后回调）；top 10 + tile vertical 2 = 顶栏到首行封面
+    // 12dp。
     const spacing = 4.0;
     const hpad = 12.0;
     return LayoutBuilder(
@@ -233,7 +236,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
           physics: const BouncingScrollPhysics(
             parent: AlwaysScrollableScrollPhysics(),
           ),
-          padding: EdgeInsets.fromLTRB(hpad, 8, hpad, 16 + bottomInset),
+          padding: EdgeInsets.fromLTRB(hpad, 10, hpad, 16 + bottomInset),
           // 内容最小高度 = 视口：相册不满一屏时撑满，下拉刷新/回弹时
           // 底部不再露出大片黑（真机实测下拉时底部 1/4 黑屏）。
           child: ConstrainedBox(
@@ -266,7 +269,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
       physics: const BouncingScrollPhysics(
         parent: AlwaysScrollableScrollPhysics(),
       ),
-      padding: EdgeInsets.only(top: 8, bottom: 16 + bottomInset),
+      padding: EdgeInsets.only(top: 10, bottom: 16 + bottomInset),
       itemCount: buckets.length,
       itemBuilder: (ctx, i) => _AlbumTile(
         grid: false,

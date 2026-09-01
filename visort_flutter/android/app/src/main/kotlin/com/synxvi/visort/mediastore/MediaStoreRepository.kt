@@ -452,7 +452,11 @@ class MediaStoreRepository(private val context: Context) {
     // ──────────── 搜索索引（批量 EXIF：拍摄时间 + GPS + 相机，供搜索页分类）────────────
 
     /// EXIF DateTimeOriginal 格式（"yyyy:MM:dd HH:mm:ss"，本地时间无时区）。
-    private val exifDateFormat = java.text.SimpleDateFormat("yyyy:MM:dd HH:mm:ss", java.util.Locale.US)
+    /// isLenient=false：脏 EXIF（"0000:00:00 00:00:00"）lenient 下会解析成
+    /// 怪日期而非抛异常（子代理审查 P3），严格模式直接 null。
+    private val exifDateFormat = java.text.SimpleDateFormat(
+        "yyyy:MM:dd HH:mm:ss", java.util.Locale.US
+    ).apply { isLenient = false }
 
     /// 批量提取搜索索引所需元数据（Dart 侧分批传入、累计进度；设置页
     /// 「智能识别」区展示）。逐张单次 openInputStream + androidx
@@ -513,7 +517,10 @@ class MediaStoreRepository(private val context: Context) {
     private val geocodeGrid = 0.02
 
     /// 地理编码坐标缓存（网格 key → 地名三元组），跨批存活减少重复调用。
-    private val geocodeCache = mutableMapOf<String, Triple<String?, String?, String?>>()
+    /// ConcurrentHashMap：索引双循环竞态下（load 覆写 running 已修，但防御
+    /// 未来并发路径）HashMap 并发写可丢条目/损坏（子代理审查 P1）。
+    private val geocodeCache =
+        java.util.concurrent.ConcurrentHashMap<String, Triple<String?, String?, String?>>()
 
     /// 批量反地理编码：入参 [lat, lng] 列表，出参同长度数组，每项
     /// { country / adminArea(省) / locality(市) }——Geocoder 不可用或
@@ -554,7 +561,12 @@ class MediaStoreRepository(private val context: Context) {
             } catch (e: Exception) {
                 Log.w(TAG, "geocodePlaces 异常: ${e.message}")
             }
-            geocodeCache[key] = resolved ?: Triple(null, null, null)
+            // 失败（异常/无结果）不落缓存：多为暂时性（无网/服务未就绪），
+            // 缓存会让坐标在进程内永久无名且补解析轮也命中失败缓存
+            // （子代理审查 P2）；仅成功结果跨批复用。
+            if (resolved != null) {
+                geocodeCache[key] = resolved
+            }
             out.add(mapOf("country" to resolved?.first, "adminArea" to resolved?.second, "locality" to resolved?.third))
         }
         return out

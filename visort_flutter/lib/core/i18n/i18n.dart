@@ -36,6 +36,11 @@ String t(WidgetRef ref, String key, [List<Object> args = const []]) {
 /// 供非 Widget 层做语言分支格式化（如日期分组标题的中英文格式）。
 String get currentLang => _currentLangOverride;
 
+/// 无 WidgetRef 场景（常驻 Notifier/store）显式同步语言给 [tr]：
+/// t() 只在 UI build 中被调，store 预热可能早于首个 UI build，
+/// 缺此同步会把默认语言的 label 缓存进分组产物。
+void syncLang(String lang) => _currentLangOverride = lang;
+
 String _translate(String lang, String key, List<Object> args) {
   final dict = lang == 'zh' ? stringsZh : stringsEn;
   var value = dict[key] ?? stringsEn[key] ?? key;
