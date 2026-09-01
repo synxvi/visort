@@ -20,7 +20,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/painting.dart' show PaintingBinding;
 
 /// 排查开关（真机装机排查期 true；平时 false）。
-const bool kCachePerfLog = true;
+const bool kCachePerfLog = false;
 
 String _snap() {
   final c = PaintingBinding.instance.imageCache;
