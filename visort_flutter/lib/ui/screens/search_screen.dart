@@ -134,8 +134,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       Future.delayed(const Duration(milliseconds: 350), () {
         if (!mounted) return;
         if (_queryCtrl.text.isEmpty && _selected.isEmpty) {
-          // ignore: avoid_print
-          print('[SDBG] autofocus t=${DateTime.now().millisecondsSinceEpoch}');
           _searchFocus.requestFocus();
         }
       });
@@ -485,16 +483,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     // 丢了连 _selected 里的选中项也会被幽灵清理误删。
     list.addAll(
         _filters.values.where((x) => x.key.startsWith('date:picked-')));
-
-    // [SDBG] 排查期打点：进页「从左向右插入」动画的真实时间线（数据
-    // 分几批到达/各区何时出现）。排查完删除。
-    final byCat = <String, int>{};
-    for (final x in list) {
-      byCat[x.category] = (byCat[x.category] ?? 0) + 1;
-    }
-    // ignore: avoid_print
-    print('[SDBG] rebuild t=${DateTime.now().millisecondsSinceEpoch} '
-        'photos=${photos.length} $byCat');
 
     setState(() {
       _filters = {for (final x in list) x.key: x};
@@ -876,17 +864,18 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
 
   /// 一个可折叠维度区（[aves 对齐] TitledExpandableFilterRow + 手风琴）：
   /// 标题（可空——quick 快捷行无标题）+ 右侧展开/折叠箭头按钮（[用户
-  /// 定稿] 每行恒显、只留箭头无文字；[aves 对齐] 无条件显示 IconButton）。
-  /// 同一时刻至多一个区展开（开新区自动收旧区，见 _expandedSection）。
-  /// 折叠露前 [collapsedCount] 个（日期按近远、其余按数量，[用户定稿]
-  /// 折叠态不横滑全列）；展开改 Wrap 流式铺满（[aves 对齐]
-  /// _ExpandedFilterRow），超 [_kTopFilterCount] 截断并给「更多」按钮；
-  /// 输入过滤跨折叠态生效。
+  /// 定稿] 每行恒显、初始朝右展开旋 90°）。同一时刻至多一个区展开。
+  /// 折叠态按宽度截断一行（TextPainter 实测 chip 宽，放满即止——不按
+  /// 数量，固定数量在 Wrap 下会折成多行，用户反馈「默认行数过多」）；
+  /// 展开态 Wrap 全铺，超 [_kTopFilterCount] 截断给「更多」。
+  /// 切换无任何尺寸/透明动画（四轮真机实证：AnimatedSize/AnimatedCrossFade/
+  /// AnimatedSwitcher 的尺寸或交叉淡化插值分别造成进页「从左向右飞入」、
+  /// 原有胶囊闪烁、展开晃动；高度瞬跳 + 单树前缀复用是唯一干净形态，
+  /// 动画感由箭头旋转单独承担）；输入过滤跨折叠态生效。
   Widget _buildSection({
     String? title,
     required List<String> categories,
     required String query,
-    int collapsedCount = 8,
     int Function(SearchFilterData, SearchFilterData)? sort,
     bool alwaysExpanded = false,
   }) {
@@ -897,17 +886,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     // 恒展开区（quick 类型行）：无折叠箭头、不参与手风琴（[用户定稿]
     // 「第一行保持展开状态，把折叠按钮去掉」）。
     final expanded = alwaysExpanded || _expandedSection == sectionKey;
-    List<SearchFilterData> visible;
-    var hiddenCount = 0;
-    if (!expanded) {
-      visible = chips.take(collapsedCount).toList();
-    } else if (chips.length > _kTopFilterCount &&
-        !_showAllSections.contains(sectionKey)) {
-      visible = chips.take(_kTopFilterCount).toList();
-      hiddenCount = chips.length - _kTopFilterCount;
-    } else {
-      visible = chips;
-    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -968,64 +946,97 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
               ],
             ),
           ),
-        // 折叠(前 N 静态铺) ↔ 展开(全量) 的切换：单树 Wrap + AnimatedSize
-        // 高度动画。三轮真机实测的教训（双树切换方案全灭）：
-        //   - AnimatedCrossFade/AnimatedSwitcher 交叉淡化会让位置未变的
-        //     前几个 chips 也经历透明度 1→0→1（「原有胶囊闪烁」）；
-        //   - 尺寸插值期间 child 重排会重启插值（波动/顶抬）。
-        // 单树方案：切换只增减 Wrap.children 数量，前 N 个 chips 的
-        // Element 按位置复用（原地不动、零闪烁）；动画中 children 固定
-        // 无重排，AnimatedSize 纯高度插值 topCenter（首行钉顶）。
-        // AnimatedSize 首帧 _layoutStart 直接采用 child 尺寸（SDK
-        // rendering/animated_size.dart），数据到达无入场动画。
-        // 折叠态不横滑（[用户定稿]「折叠露前 N 个」，横滑曾被否定）。
-        AnimatedSize(
-          duration: const Duration(milliseconds: 240),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.topCenter,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final c in visible)
-                  FilterChipWidget(
-                    filter: c,
-                    selected: _selected.contains(c.key),
-                    onTap: () => _toggleFilter(c.key),
-                  ),
-                if (hiddenCount > 0)
-                  GestureDetector(
-                    onTap: () =>
-                        setState(() => _showAllSections.add(sectionKey)),
-                    behavior: HitTestBehavior.opaque,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 7),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: AppColors.border),
-                      ),
-                      child: Text(
-                        '${t(ref, 'search_more')}($hiddenCount)',
-                        style: const TextStyle(
-                          fontFamily: 'Space Mono',
-                          fontFamilyFallback: AppFonts.cjkFallback,
-                          color: AppColors.accent,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
+        // 折叠(一行，按宽度截断) ↔ 展开(全量 Wrap)：单树、无任何尺寸/
+        // 透明动画。四轮真机实证的教训（尺寸/淡化插值方案全灭）：
+        //   - AnimatedSize 数据到达时跑尺寸插值 → 进页「从左向右飞入」；
+        //   - 双树交叉淡化 → 位置未变的前几个胶囊闪烁；
+        //   - 插值期间 child 重排重启插值 → 展开晃动/顶抬。
+        // 高度瞬跳 + 单树前缀复用是唯一干净形态（前缀 chips Element
+        // 原位不动零闪烁），动画感由箭头旋转单独承担。
+        // 折叠态一行：TextPainter 实测 chip 宽度累加，放满即止（固定
+        // 数量在 Wrap 下折多行——用户反馈「默认行数过多」）。
+        LayoutBuilder(
+          builder: (ctx, constraints) {
+            final avail = constraints.maxWidth - 32; // Wrap 水平 padding
+            var w = 0.0;
+            final visible = <SearchFilterData>[];
+            var hiddenCount = 0;
+            if (!expanded) {
+              for (final c in chips) {
+                final cw = _chipWidth(c);
+                if (visible.isNotEmpty && w + 8 + cw > avail) break;
+                visible.add(c);
+                w += 8 + cw;
+              }
+              hiddenCount = chips.length - visible.length;
+            } else if (chips.length > _kTopFilterCount &&
+                !_showAllSections.contains(sectionKey)) {
+              visible.addAll(chips.take(_kTopFilterCount));
+              hiddenCount = chips.length - _kTopFilterCount;
+            } else {
+              visible.addAll(chips);
+            }
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final c in visible)
+                    FilterChipWidget(
+                      filter: c,
+                      selected: _selected.contains(c.key),
+                      onTap: () => _toggleFilter(c.key),
+                    ),
+                  if (expanded && hiddenCount > 0)
+                    GestureDetector(
+                      onTap: () =>
+                          setState(() => _showAllSections.add(sectionKey)),
+                      behavior: HitTestBehavior.opaque,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: AppColors.surface,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: AppColors.border),
+                        ),
+                        child: Text(
+                          '${t(ref, 'search_more')}($hiddenCount)',
+                          style: const TextStyle(
+                            fontFamily: 'Space Mono',
+                            fontFamilyFallback: AppFonts.cjkFallback,
+                            color: AppColors.accent,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-              ],
-            ),
-          ),
+                ],
+              ),
+            );
+          },
         ),
       ],
     );
+  }
+
+  /// chip 宽度（折叠态一行截断用）：水平 padding 24 + icon 13 + gap 6 +
+  /// 文本实测宽（TextPainter 同款 TextStyle）+ 边框 2。
+  double _chipWidth(SearchFilterData f) {
+    final tp = TextPainter(
+      text: TextSpan(
+        text: f.label,
+        style: const TextStyle(
+          fontFamily: 'Space Mono',
+          fontFamilyFallback: AppFonts.cjkFallback,
+          fontSize: 12,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    return 24 + 13 + 6 + tp.width + 2;
   }
 
   // ──────────── 搜索结果网格（文本/chips 触发时）────────────
