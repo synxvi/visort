@@ -19,6 +19,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show IconData, Icons;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:visort_flutter/core/config/models.dart' show SortBy;
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
@@ -80,6 +81,30 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
   final MediaStoreChannel _channel = const MediaStoreChannel();
   bool _loading = false;
 
+  /// HDR 持久化 key（id 逗号串）：Kotlin detectHdrs 的 mtime 缓存是进程
+  /// 内存，冷启动清空 → 全量 JPEG 重读文件头数百 ms，HDR chip 迟到
+  /// （用户实测「第一次进搜索页 HDR 不在，过会才出现」）。冷启动先
+  /// 用上次结果秒渲染，后台检测校准（无差异零 setState）。
+  static const _kHdrPrefsKey = 'search_hdr_ids';
+
+  Future<Set<String>> _loadPersistedHdr() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kHdrPrefsKey);
+      if (raw == null || raw.isEmpty) return const {};
+      return raw.split(',').toSet();
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<void> _persistHdr(Set<String> ids) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kHdrPrefsKey, ids.join(','));
+    } catch (_) {}
+  }
+
   @override
   SearchDataState build() {
     // 语言切换 → 分组 label 重建（tr() 用全局 override，UI 的 t() 平时
@@ -101,12 +126,16 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
       if (!state.ready) {
         final photos = await scanAllImages(_channel);
         final buckets = await _channel.listBuckets();
+        // HDR 上次结果先恢复（首帧 HDR chip 即在）；后台真检测校准。
+        final persistedHdr = await _loadPersistedHdr();
         state = SearchDataState(
           photos: photos,
           buckets: buckets,
+          hdrIds: persistedHdr,
           ready: true,
         );
-        debugPrint('[SDS] first load: ${photos.length} photos');
+        debugPrint('[SDS] first load: ${photos.length} photos, '
+            'persisted hdr=${persistedHdr.length}');
         rebuildFilters();
         unawaited(_detectHdr());
         _syncIndex(photos);
@@ -165,6 +194,8 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
       for (var i = 0; i < jpegs.length && i < hdrs.length; i++) {
         if (hdrs[i]) hdrIds.add(jpegs[i].id);
       }
+      // 校准结果落盘（下次冷启动秒渲染）；与恢复值相同则零 setState。
+      unawaited(_persistHdr(hdrIds));
       if (hdrIds.length == state.hdrIds.length &&
           hdrIds.containsAll(state.hdrIds)) {
         return;
