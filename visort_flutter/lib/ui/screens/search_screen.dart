@@ -98,17 +98,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   /// 顶栏已选胶囊的 GlobalKey（飞行目标坐标测量）。
   final Map<String, GlobalKey> _barChipKeys = {};
 
-  /// 飞行中的胶囊 key（顶栏真实胶囊透明占位，落位后显现）。
+  /// 飞行中的胶囊 key（落点真实胶囊透明占位，落位后显现）。
   final Set<String> _flying = {};
+
+  /// 最近移除的 chip key（建议区该 chip 挂 [_removedChipKey] 供飞回
+  /// 动画测目标坐标；动画结束清除）。
+  String? _recentlyRemoved;
+  final GlobalKey _removedChipKey = GlobalKey();
 
   OverlayEntry? _flyOverlay;
   late final AnimationController _flyCtrl = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 260),
   );
-
-  /// 顶栏 TextField 的树位 key（reparent 保 State/focus 跨布局切换）。
-  final GlobalKey _searchFieldTreeKey = GlobalKey();
 
   /// 多选状态恒传（非选择模式恒空）：Gallery 依赖 SelectionState 包裹
   /// 结构恒定（album_screen 同款，见其 610 行注释）。
@@ -176,7 +178,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         });
       }
     });
-    _loadPhotos();
+    // 首扫延迟到路由转场（200ms 淡入）之后：数据 setState 落在半透明
+    // 转场中会让内容跳一下（进页「整体闪烁」的来源之一，真机实测）；
+    // spinner 期 ~230ms 无感。route 返回刷新（_onRouteChanged）不延迟。
+    Future.delayed(const Duration(milliseconds: 230), () {
+      if (mounted) _loadPhotos();
+    });
   }
 
   @override
@@ -640,6 +647,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         }
       },
       child: Scaffold(
+      // 键盘弹出不再挤压 body（resize 会让整个内容列表上移跳动——进页
+      // 自动聚焦时观感为「整体闪烁」，真机实测）；键盘盖在内容上层，
+      // 与系统搜索页行为一致。
+      resizeToAvoidBottomInset: false,
       backgroundColor: AppColors.bg,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
@@ -653,77 +664,64 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           onPressed: () => Navigator.maybePop(context),
         ),
         titleSpacing: 0,
-        // 顶栏即搜索框集合（[用户定稿]）：已选胶囊在搜索框内 + 后跟
-        // 内联输入区（胶囊与文字可组合二次查找）。TextField 同一实例经
-        // GlobalKey reparent——无选中时 Expanded 占满 title，有选中时
-        // 收窄到 120dp 跟在胶囊后，State/focus 跨布局切换不丢。
-        title: Builder(builder: (context) {
-          final field = KeyedSubtree(
-            key: _searchFieldTreeKey,
-            child: TextField(
-              controller: _queryCtrl,
-              focusNode: _searchFocus,
-              textInputAction: TextInputAction.search,
-              onSubmitted: (_) => _searchFocus.unfocus(),
-              onChanged: (_) => setState(() {}),
-              style: const TextStyle(
-                fontFamily: 'Space Mono',
-                fontFamilyFallback: AppFonts.cjkFallback,
-                color: AppColors.text,
-                fontSize: 15,
-              ),
-              // 无边框须三态显式置 none：focusedBorder 缺省回落主题，
-              // 聚焦时会亮出主题高亮描边（用户反馈）。
-              decoration: InputDecoration(
-                hintText: t(ref, 'search_hint'),
-                hintStyle: const TextStyle(
-                  color: AppColors.muted,
-                  fontSize: 15,
-                ),
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                isDense: true,
-                filled: false,
-              ),
+        // 搜索框保持原位（title 左起占满，[用户定稿]）；已选胶囊移到
+        // actions 右侧（见下）。无边框须三态显式置 none：focusedBorder
+        // 缺省回落主题，聚焦时会亮出主题高亮描边（用户反馈）。
+        title: TextField(
+          controller: _queryCtrl,
+          focusNode: _searchFocus,
+          textInputAction: TextInputAction.search,
+          onSubmitted: (_) => _searchFocus.unfocus(),
+          onChanged: (_) => setState(() {}),
+          style: const TextStyle(
+            fontFamily: 'Space Mono',
+            fontFamilyFallback: AppFonts.cjkFallback,
+            color: AppColors.text,
+            fontSize: 15,
+          ),
+          decoration: InputDecoration(
+            hintText: t(ref, 'search_hint'),
+            hintStyle: const TextStyle(
+              color: AppColors.muted,
+              fontSize: 15,
             ),
-          );
-          if (_selected.isEmpty) {
-            return Row(children: [Expanded(child: field)]);
-          }
-          return Row(
-            children: [
-              Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      for (final k in _selected.toList())
-                        if (_filters.containsKey(k))
-                          Padding(
-                            padding: const EdgeInsets.only(right: 6),
-                            child: Opacity(
-                              opacity: _flying.contains(k) ? 0 : 1,
-                              child: FilterChipWidget(
-                                key: _barChipKeys.putIfAbsent(
-                                    k, () => GlobalKey()),
-                                filter: _filters[k]!,
-                                selected: true,
-                                onTap: () => _toggleFilter(k),
-                              ),
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            isDense: true,
+            filled: false,
+          ),
+        ),
+        // 右侧：已选胶囊（横滑，最大 210dp）+ 有输入时清除按钮。点顶栏
+        // 胶囊移除并飞回建议区原位（仍处结果态时原地淡出）。
+        actions: [
+          if (_selected.isNotEmpty)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 210),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final k in _selected.toList())
+                      if (_filters.containsKey(k))
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: Opacity(
+                            opacity: _flying.contains(k) ? 0 : 1,
+                            child: FilterChipWidget(
+                              key: _barChipKeys.putIfAbsent(
+                                  k, () => GlobalKey()),
+                              filter: _filters[k]!,
+                              selected: true,
+                              onTap: () => _toggleFilter(k,
+                                  source: _barChipKeys[k]?.currentContext),
                             ),
                           ),
-                    ],
-                  ),
+                        ),
+                  ],
                 ),
               ),
-              SizedBox(width: 120, child: field),
-            ],
-          );
-        }),
-        // [aves 对齐] buildActions：有输入时给清除按钮。清空后仅当回到
-        // 建议态（无选中 chips）才回焦——结果网格中清文本不该弹键盘。
-        actions: [
+            ),
           if (query.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.close, color: AppColors.muted, size: 20),
@@ -768,78 +766,155 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   /// 点 chip：toggle 选中集合（同页实时过滤，不跳页）。
   /// 「日期选择器」是特殊入口 chip（不进选中集合，点了弹日期面板）。
   /// 选 chip 即进结果网格——同时收键盘（结果页不该有输入法）。
-  /// [source] = 点击源 chip 的 context（新增选中时取屏幕坐标做飞行动画）。
-  void _toggleFilter(String key, [BuildContext? source]) {
+  /// [source] = 点击源 chip 的 context：添加时飞向顶栏、移除（顶栏胶囊）
+  /// 时飞回建议区原位（仍处结果态、建议区不可见则原地淡出）。
+  void _toggleFilter(String key, {BuildContext? source}) {
     _searchFocus.unfocus();
     if (key == 'date:picker') {
       _pickDate();
       return;
     }
-    final adding = !_selected.contains(key);
-    Rect? from;
-    if (adding && source != null) {
-      final box = source.findRenderObject();
-      if (box is RenderBox && box.attached) {
-        final o = box.localToGlobal(Offset.zero);
-        from = Rect.fromLTWH(o.dx, o.dy, box.size.width, box.size.height);
-      }
-    }
-    setState(() {
-      if (!_selected.remove(key)) {
+    final from = _rectOf(source);
+    if (_selected.contains(key)) {
+      setState(() {
+        _selected.remove(key);
+        _recentlyRemoved = key;
+      });
+      _flyChipFromBar(key, from);
+    } else {
+      setState(() {
         _selected.add(key);
-        // 飞行中的胶囊在顶栏透明占位（坐标可测），落位后显现。
+        // 飞行中的胶囊在落点透明占位（坐标可测），落位后显现。
         if (from != null) _flying.add(key);
-      }
-    });
-    if (from != null) _flyChipToBar(key, from);
+      });
+      if (from != null) _flyChipToBar(key, from);
+    }
   }
 
-  /// 胶囊飞行：布局稳定后测顶栏落位坐标，Overlay 飞行层从源矩形插值
-  /// 飞过去（easeOutCubic 260ms），结束移除飞行层并显现真实胶囊。
+  /// context 的屏幕矩形（飞行起/终点测量）；无效 context 返回 null。
+  Rect? _rectOf(BuildContext? ctx) {
+    final box = ctx?.findRenderObject();
+    if (box is RenderBox && box.attached) {
+      final o = box.localToGlobal(Offset.zero);
+      return Rect.fromLTWH(o.dx, o.dy, box.size.width, box.size.height);
+    }
+    return null;
+  }
+
+  /// 通用飞行层：from → to 直线插值（easeOutCubic 260ms），结束移除。
+  void _startFly(SearchFilterData filter, Rect from, Rect to,
+      {VoidCallback? onDone}) {
+    _flyOverlay?.remove();
+    late final OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) => AnimatedBuilder(
+        animation: _flyCtrl,
+        builder: (ctx, _) {
+          final t = Curves.easeOutCubic.transform(_flyCtrl.value);
+          return Positioned.fromRect(
+            rect: Rect.lerp(from, to, t)!,
+            child: Material(
+              type: MaterialType.transparency,
+              child: FilterChipWidget(
+                filter: filter,
+                selected: true,
+                onTap: () {},
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    _flyOverlay = entry;
+    Overlay.of(context, rootOverlay: true).insert(entry);
+    _flyCtrl
+      ..reset()
+      ..forward().whenComplete(() {
+        entry.remove();
+        if (_flyOverlay == entry) _flyOverlay = null;
+        onDone?.call();
+      });
+  }
+
+  /// 添加选中：布局稳定后测顶栏落位坐标，从建议区源位飞过去。
   void _flyChipToBar(String key, Rect from) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final box =
-          _barChipKeys[key]?.currentContext?.findRenderObject();
-      if (box is! RenderBox || !box.attached) {
+      final to = _rectOf(_barChipKeys[key]?.currentContext);
+      final filter = _filters[key];
+      if (to == null || filter == null) {
         setState(() => _flying.remove(key));
         return;
       }
-      final o = box.localToGlobal(Offset.zero);
-      final to = Rect.fromLTWH(o.dx, o.dy, box.size.width, box.size.height);
-      final filter = _filters[key];
-      if (filter == null) return;
-      _flyOverlay?.remove();
-      late final OverlayEntry entry;
-      entry = OverlayEntry(
-        builder: (ctx) => AnimatedBuilder(
-          animation: _flyCtrl,
-          builder: (ctx, _) {
-            final t = Curves.easeOutCubic.transform(_flyCtrl.value);
-            return Positioned.fromRect(
-              rect: Rect.lerp(from, to, t)!,
-              child: Material(
-                type: MaterialType.transparency,
-                child: FilterChipWidget(
-                  filter: filter,
-                  selected: true,
-                  onTap: () {},
-                ),
-              ),
-            );
-          },
-        ),
-      );
-      _flyOverlay = entry;
-      Overlay.of(context, rootOverlay: true).insert(entry);
-      _flyCtrl
-        ..reset()
-        ..forward().whenComplete(() {
-          entry.remove();
-          if (_flyOverlay == entry) _flyOverlay = null;
-          if (mounted) setState(() => _flying.remove(key));
-        });
+      _startFly(filter, from, to,
+          onDone: () {
+            if (mounted) setState(() => _flying.remove(key));
+          });
     });
+  }
+
+  /// 移除选中：回到建议态时从顶栏飞回建议区原位（_recentlyRemoved 标记
+  /// 的 chip 挂临时 GlobalKey 测目标）；仍处结果态（建议区不可见）时
+  /// 原地淡出。
+  void _flyChipFromBar(String key, Rect? from) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final filter = _filters[key];
+      if (filter == null) {
+        setState(() => _recentlyRemoved = null);
+        return;
+      }
+      final to = _rectOf(_removedChipKey.currentContext);
+      if (from == null || to == null) {
+        // 无源坐标或建议区未渲染（仍处结果态）：原地淡出 150ms。
+        if (from != null) _fadeOutFly(filter, from);
+        setState(() => _recentlyRemoved = null);
+        return;
+      }
+      setState(() => _flying.add(key));
+      _startFly(filter, from, to,
+          onDone: () {
+            if (mounted) {
+              setState(() {
+                _flying.remove(key);
+                _recentlyRemoved = null;
+              });
+            }
+          });
+    });
+  }
+
+  /// 原地淡出（目标不可见时的移除动画）。
+  void _fadeOutFly(SearchFilterData filter, Rect at) {
+    _flyOverlay?.remove();
+    late final OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) => AnimatedBuilder(
+        animation: _flyCtrl,
+        builder: (ctx, _) => Positioned.fromRect(
+          rect: at,
+          child: Opacity(
+            opacity: 1 - _flyCtrl.value,
+            child: Material(
+              type: MaterialType.transparency,
+              child: FilterChipWidget(
+                filter: filter,
+                selected: true,
+                onTap: () {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    _flyOverlay = entry;
+    Overlay.of(context, rootOverlay: true).insert(entry);
+    _flyCtrl
+      ..reset()
+      ..forward().whenComplete(() {
+        entry.remove();
+        if (_flyOverlay == entry) _flyOverlay = null;
+      });
   }
 
   /// 输入过滤后的维度 chips（label contains，大小写不敏感；
@@ -1106,10 +1181,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 children: [
                   for (final c in visible)
                     Builder(
-                      builder: (chipCtx) => FilterChipWidget(
-                        filter: c,
-                        selected: _selected.contains(c.key),
-                        onTap: () => _toggleFilter(c.key, chipCtx),
+                      // 飞回动画的目标 chip 临时挂 key（测落位坐标）。
+                      key: _recentlyRemoved == c.key ? _removedChipKey : null,
+                      builder: (chipCtx) => Opacity(
+                        opacity: _flying.contains(c.key) ? 0 : 1,
+                        child: FilterChipWidget(
+                          filter: c,
+                          selected: _selected.contains(c.key),
+                          onTap: () => _toggleFilter(c.key, source: chipCtx),
+                        ),
                       ),
                     ),
                   if (expanded && hiddenCount > 0)
