@@ -146,19 +146,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       if (mounted) _menuBackCtrl.forward();
     });
     // 搜索框自动聚焦呼出键盘（[aves 对齐]；Google Photos 同款行为）：
-    // 进页下一帧立即聚焦，键盘与路由转场并行升起。此前延迟 350ms 聚焦
-    // 会与首扫数据 setState（230ms 启动、快照缓存下 ~280ms 到达）撞车
-    // ——键盘 inset 动画帧上叠加整页 chips 从空到满，表现为「瞬间布局
-    // 闪烁」；手动点击时数据早已稳定故无闪（真机对比实证）。提前聚焦
-    // 让键盘（~300ms 升起）先于内容出现，序列彻底错开。
-    // 立即聚焦在 resizeToAvoidBottomInset:false 下不再压缩布局（旧结论
-    // 「转场中聚焦晃动」是 resize 时代产物）。条件：仅建议态（无输入
-    // 无选中）——用户已点 chip 进结果网格时再弹键盘是干扰（用户反馈）。
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _queryCtrl.text.isEmpty && _selected.isEmpty) {
-        _searchFocus.requestFocus();
-      }
-    });
+    // **首扫数据落地后**触发（_loadPhotos 里调 [_maybeAutoFocus]），不猜
+    // 固定延迟——0ms/350ms 两种延迟版本真机均闪：首扫 230ms 启动、扫描
+    // 耗时浮动（快照命中 ~50ms、冷启动数百 ms），固定延迟总能与数据
+    // setState 撞车，键盘 inset 动画帧上叠加整页 chips 从空到满，表现
+    // 为「除第一行外内容上移瞬移+残影」；手动点击唤出无闪正是因为数据
+    // 早已稳定（真机对比实证）。数据先渲染、键盘后弹出 = 恒等于手动
+    // 场景的稳定前提。
     // 从看图/其他页返回本页：静默重扫（删除/收藏变更后结果网格与 chips
     // 计数需刷新——否则已删照片的缩略图/计数残留，用户实测）。
     currentRouteName.addListener(_onRouteChanged);
@@ -208,6 +202,18 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     if (currentRouteName.value == AlbumRoutes.search) _loadPhotos();
   }
 
+  /// 自动聚焦只做一次（route 返回刷新/索引回调不再弹键盘）；用户已
+  /// 手动聚焦过或已离开建议态（有输入/已选 chip）则不打扰。
+  bool _autoFocused = false;
+
+  void _maybeAutoFocus() {
+    if (_autoFocused || !mounted) return;
+    _autoFocused = true;
+    if (_searchFocus.hasFocus) return;
+    if (_queryCtrl.text.isNotEmpty || _selected.isNotEmpty) return;
+    _searchFocus.requestFocus();
+  }
+
   /// 全库扫描在飞守卫：initState 的 _loadPhotos 与 route 回调
   /// （RouteNameObserver postFrame 触发 _onRouteChanged）并发时会双倍
   /// 扫描全库（子代理审查 P3）。
@@ -226,6 +232,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         _bucketNames = {for (final b in buckets) b.id: b.name};
       });
       _rebuildGroups();
+      // 首扫数据落地（含 chips 重建）后再自动聚焦：键盘弹出时页面内容
+      // 已渲染稳定（见 initState 注释——固定延迟聚焦与数据到达撞车是
+      // 「瞬移+残影」根因）。
+      _maybeAutoFocus();
       // 前台增量对账 + 惰性补解析（[precache 对齐] 缩略图缓存「前台
       // 增量」模式）：开关开启时，MediaStore 实时列表与索引表的 id 差集
       // 补录新照片（根治新增不入索引）；再对「有坐标无名」的行补一轮
@@ -268,7 +278,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
         }
       }
     } catch (_) {
-      // 扫描失败静默（页面保持空态，下次进页重扫）。
+      // 扫描失败静默（页面保持空态，下次进页重扫）；键盘照常聚焦。
+      _maybeAutoFocus();
     } finally {
       _scanInFlight = false;
     }
