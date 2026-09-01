@@ -48,12 +48,13 @@ Future<List<MsImageInfo>> scanAllImages(MediaStoreChannel channel) async {
   return out;
 }
 
-/// 索引运行态（设置页「智能识别」区与搜索页 banner 共用）。
+/// 索引运行态（设置页「索引」区与搜索页 banner 共用）。
 class SearchIndexState {
   const SearchIndexState({
     this.running = false,
     this.processed = 0,
     this.total = 0,
+    this.metaCount = 0,
   });
 
   final bool running;
@@ -61,6 +62,11 @@ class SearchIndexState {
   /// EXIF pass 进度分子（已处理照片数）。
   final int processed;
   final int total;
+
+  /// 当前索引条目数（= `_metas.length`）。与 processed/total 分开：
+  /// 增量对账（syncNewPhotos）不动首轮进度，但张数要跟着涨——设置页
+  /// 进度行靠它观察增量变化。
+  final int metaCount;
 
   /// 是否已完整跑过一轮（total>0 且全处理）。
   bool get done => total > 0 && processed >= total;
@@ -117,6 +123,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
           running: state.running,
           processed: int.tryParse(parts[0]) ?? 0,
           total: int.tryParse(parts[1]) ?? 0,
+          metaCount: _metas.length,
         );
       }
     } else if (_metas.isNotEmpty) {
@@ -125,6 +132,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         running: state.running,
         processed: _metas.length,
         total: _metas.length,
+        metaCount: _metas.length,
       );
     }
   }
@@ -178,6 +186,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
           running: true,
           processed: done,
           total: total,
+          metaCount: state.metaCount,
         );
         await _saveProgress(done, total);
       }
@@ -192,6 +201,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         state = SearchIndexState(
           processed: state.processed,
           total: state.total,
+          metaCount: _metas.length,
         );
       }
       debugPrint('[SIDX] finally: $_cancel state=${state.processed}/${state.total}');
@@ -232,6 +242,14 @@ class SearchIndexService extends Notifier<SearchIndexState> {
     for (final m in out) {
       _metas[m.id] = m;
     }
+    // 张数进 state：增量落地后设置页进度行立即反映（processed/total 是
+    // 首轮进度语义，不动）。
+    state = SearchIndexState(
+      running: state.running,
+      processed: state.processed,
+      total: state.total,
+      metaCount: _metas.length,
+    );
     debugPrint('[SIDX] syncNewPhotos done: +${out.length}');
   }
 

@@ -696,6 +696,31 @@ class _MlSectionState extends ConsumerState<_MlSection> {
   int? _percent(SearchIndexState ml) =>
       ml.total <= 0 ? null : (ml.processed * 100 / ml.total).round().clamp(0, 100);
 
+  /// 进度主行右侧：百分比 + 索引张数。张数独立于首轮百分比——增量对账
+  /// （syncNewPhotos）只涨张数不动百分比，是观察增量变化的窗口；首轮
+  /// 跑批中张数保持旧值，跑完/增量落地后刷新。
+  String? _progressText(SearchIndexState ml) {
+    final pct = _percent(ml);
+    final parts = <String>[
+      if (pct != null) '$pct%',
+      if (ml.metaCount > 0)
+        t(ref, 'settings_ml_count', [_thousands(ml.metaCount)]),
+    ];
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+
+  /// 千分位（仅此一处用，不引 intl）。
+  String _thousands(int n) {
+    final s = '$n';
+    final buf = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      buf.write(s[i]);
+      final rem = s.length - i - 1;
+      if (rem > 0 && rem % 3 == 0) buf.write(',');
+    }
+    return buf.toString();
+  }
+
   /// 进度状态副行：索引中/地名解析中/已完成；其余（刚开启未起跑/中断）
   /// 无文案返回 null 不渲染——避免与主行占位符叠出双「—」。
   String? _statusLine(SearchIndexState ml) {
@@ -759,7 +784,7 @@ class _MlSectionState extends ConsumerState<_MlSection> {
   Widget build(BuildContext context) {
     final config = ref.watch(configProvider);
     final ml = ref.watch(searchIndexServiceProvider);
-    final pct = _percent(ml);
+    final progressText = _progressText(ml);
     final status = _statusLine(ml);
     return _SettingsCard(
       children: [
@@ -787,8 +812,8 @@ class _MlSectionState extends ConsumerState<_MlSection> {
                       Text(t(ref, 'settings_ml_progress'), style: _labelStyle),
                       const Spacer(),
                       Text(
-                        // pct null = 刚开启 total 未就绪，'…' 单占位
-                        pct == null ? '…' : '$pct%',
+                        // null = 刚开启 total/张数均未就绪，'…' 单占位
+                        progressText ?? '…',
                         style: const TextStyle(
                             fontFamily: 'Space Mono',
                             fontFamilyFallback: ['Noto Sans Mono CJK SC'],

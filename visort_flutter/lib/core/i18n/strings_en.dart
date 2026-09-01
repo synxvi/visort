@@ -372,15 +372,16 @@ const Map<String, String> stringsEn = {
   'settings_clear_cache_desc':
       'All full-image and thumbnail caches will be cleared and regenerated on next browse',
   'settings_cache_cleared': 'Freed',
-  // ── 智能识别（缓存下方新区块，[ente 对齐] 开关+进度+注释）──
-  'settings_section_ml': 'Smart Recognition',
-  'settings_ml_index': 'Smart Indexing',
+  // ── 索引（缓存下方新区块，[ente 对齐] 开关+进度+注释；2026-09 更名）──
+  'settings_section_ml': 'Index',
+  'settings_ml_index': 'Image Info Index',
   'settings_ml_index_note':
       'Scans photos for date, location and camera info to power search by date/place/camera. Requests access to media location when enabled. Independent from the thumbnail Cache above.',
   'settings_ml_progress': 'Indexing Progress',
+  'settings_ml_count': '{0} photos',
   'settings_ml_running': 'Indexing…',
   'settings_ml_done': 'Complete',
-  'settings_ml_off_title': 'Disable smart indexing?',
+  'settings_ml_off_title': 'Disable image info index?',
   'settings_ml_off_desc': 'Indexed search category data will be cleared.',
   'settings_title': 'Settings',
   'layout_list': 'List',
