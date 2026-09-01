@@ -686,11 +686,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // 已选药丸行：距顶栏 12、距下方计数行 4（用户反馈三段太紧，
-        // 拉开节奏：顶栏→药丸→计数→网格）。
+        // 已选药丸行三段节奏（用户定稿）：顶栏→药丸 12 / 药丸→计数
+        // 文字 6 / 计数文字→图片网格 8。
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
           child: Row(
             children: [
               for (var i = 0; i < chips.length; i++)
@@ -706,7 +706,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
           child: Row(
             children: [
               Text(
@@ -751,8 +751,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     return ListView(
       // 滚动即收键盘（用户反馈：滚动页面应自动收起输入法）。
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-      // top 8 对齐相册首页首行距顶栏间距（gallery 网格/列表同值）。
-      padding: const EdgeInsets.only(top: 8, bottom: 24),
+      // top 12：quick 首行距顶栏（用户定稿 12dp，与相册页新顶距一致）。
+      padding: const EdgeInsets.only(top: 12, bottom: 24),
       children: [
         // 全量扫描加载中：顶部轻量指示（chips 依赖全量列表）。
         if (_loading)
@@ -900,13 +900,30 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // 恒展开区（quick 类型行）无标题无箭头，整行 header 不渲染。
+        // 标题左缘 / 箭头图形右缘都对齐 16dp（=「暂无地点信息」空态
+        // 卡片左右外缘、chips 行边线；用户定稿）。标题内联不走
+        // _SectionHeader（其自带 16 padding 会叠加成 32）。
         if (!alwaysExpanded)
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 8, 4),
+            padding: const EdgeInsets.fromLTRB(16, 14, 6, 4),
             child: Row(
               children: [
-                if (title != null) Expanded(child: _SectionHeader(title)),
-                // 折叠/展开箭头（每行恒显；语义同 Aves collapse/expand icon）。
+                if (title != null)
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        fontFamily: 'Space Mono',
+                        height: 1.2,
+                        fontFamilyFallback: AppFonts.cjkFallback,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                        color: AppColors.text,
+                      ),
+                    ),
+                  ),
+                // 折叠/展开箭头（每行恒显；语义同 Aves collapse/expand
+                // icon）。按钮内 padding 10 + header 右 6 → 图形右缘 16。
                 GestureDetector(
                   onTap: () => setState(() {
                     if (expanded) {
@@ -931,7 +948,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
               ],
             ),
           ),
