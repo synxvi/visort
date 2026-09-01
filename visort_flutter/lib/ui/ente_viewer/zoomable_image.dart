@@ -16,8 +16,10 @@
 //   - 删除：memories/live photo/QR/服务端/DB/事件总线/共享/guest view
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/src/core/photo_view_core.dart'
     show PhotoViewCoreState;
@@ -25,6 +27,7 @@ import 'package:visort_flutter/core/fs/cache_perf.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
+import 'package:visort_flutter/core/fs/service_policy.dart';
 
 import '../screens/album_common.dart' show extOf;
 import 'detail_page_state.dart';
@@ -107,6 +110,12 @@ class _ZoomableImageState extends State<ZoomableImage> {
   bool _loadingFinalImage = false;
   bool _loadedFinalImage = false;
   bool _showingThumbnailFallback = false;
+
+  /// 盘缓存直通（快甩掠过即清晰）：exists 已探测（每图一次，换图复位）/
+  /// 直通 full 在途（p120，停稳时被 bumpPriority 升级插队）。见
+  /// [_probePassThrough]。
+  bool _passThroughProbed = false;
+  bool _passThroughInFlight = false;
   bool _firedOnReady = false;
   ValueChanged<PhotoViewScaleState>? _scaleStateChangedCallback;
   bool _isZooming = false;
@@ -189,6 +198,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
     _loadedFinalImage = false;
     _loadingLargeThumbnail = false;
     _loadingFinalImage = false;
+    _passThroughProbed = false;
+    _passThroughInFlight = false;
     _pickCachedProvider(allowCellThumb: false);
     _showingThumbnailFallback = false;
     _firedOnReady = false;
@@ -522,11 +533,88 @@ class _ZoomableImageState extends State<ZoomableImage> {
     });
   }
 
+  /// 快甩「盘缓存直通」：掠过页不等 150ms 延迟窗——full 盘缓存 exists
+  /// 探测命中即 p120 发起（盘就绪 decodeByteArray 22-46ms 出图，掠过帧内
+  /// 即清晰）；miss 零请求零副作用，原延迟窗 p50 路径兜底（停稳插队）。
+  /// 洪泛防线：只有全库预缓存就绪的图才发起（无中生有的解码不存在），
+  /// ImageCache 峰值由 detail_page 的 _trimDistantViewerCache 翻页窗口
+  /// 兜底。每图一次（_passThroughProbed），换图随 generation 复位。
+  void _probePassThrough(BuildContext context) {
+    if (_passThroughProbed) return;
+    if (!Platform.isAndroid) return; // 盘缓存在 MediaStore 侧
+    if (_photo.mime == 'image/gif') return; // GIF 走 readBytes 多帧，不读盘缓存
+    if (_loadedFinalImage || _loadingFinalImage) return;
+    _passThroughProbed = true;
+    final gen = _loadGeneration;
+    final tw = computeViewerTargetWidth(
+      MediaQuery.sizeOf(context).width *
+          MediaQuery.devicePixelRatioOf(context),
+    );
+    // ImageConfiguration 在 async gap 前捕获：exists 回调里预热不再触碰
+    // BuildContext（precacheImage 的 context 也只在同步首行构 config 用）。
+    final config = createLocalImageConfiguration(context);
+    MediaStoreChannel()
+        .fullCacheExists(_photo.id, targetWidth: tw)
+        .then((hit) {
+      if (!mounted || gen != _loadGeneration) return;
+      if (!hit || _loadedFinalImage || _loadingFinalImage) return;
+      _loadingFinalImage = true;
+      _passThroughInFlight = true;
+      cachePerfEvent('pass hit id=${_photo.id} tw=$tw');
+      final full = buildImageProvider(
+        _ref,
+        targetWidth: tw,
+        priority: RequestPriority.passthroughFull,
+      );
+      _precacheWithConfig(full, config).then((_) {
+        if (gen != _loadGeneration) return;
+        _passThroughInFlight = false;
+        if (!mounted) return;
+        // 解码失败时这里同样会到（precacheImage 语义：错误也 complete，
+        // 不抛）——与 _fireHeavyLoads 的 full 分支同款，坏 provider 由
+        // PhotoView 错误态兜底（源图损坏场景，无图可显示）。
+        if (!_loadedFinalImage) {
+          _updateViewWithFinalImage(full);
+        }
+      });
+    });
+  }
+
+  /// precacheImage 的 context-free 变体（语义对齐 SDK：resolve + 首帧/
+  /// 错误均 complete + 帧末摘 listener），供 async gap 后预热——gap 前把
+  /// ImageConfiguration 捕获好，回调里不再触碰 BuildContext。
+  Future<void> _precacheWithConfig(
+    ImageProvider provider,
+    ImageConfiguration config,
+  ) {
+    final completer = Completer<void>();
+    final stream = provider.resolve(config);
+    late final ImageStreamListener listener;
+    listener = ImageStreamListener(
+      (ImageInfo? image, bool sync) {
+        if (!completer.isCompleted) completer.complete();
+        // 帧末再摘 listener（给 ImageCache live 追踪留一帧窗口，同 SDK）。
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          image?.dispose();
+          stream.removeListener(listener);
+        });
+      },
+      onError: (Object e, StackTrace? st) {
+        // 对齐 precacheImage：错误也 complete，不作异常抛出。
+        if (!completer.isCompleted) completer.complete();
+        stream.removeListener(listener);
+      },
+    );
+    stream.addListener(listener);
+    return completer.future;
+  }
+
   /// 三级加载（ente 同款顺序）：
   /// 1) cell 同款缩略图（cache 命中首帧，同步廉价）→ 2) 大缩略图(512) →
   /// 3) 下采样原图。2/3 为重加载，延迟 [_kHeavyLoadDelay] 起跳（快甩路过
   /// 页零入队，见其 doc）；已起跳/终态由 _loading 标志幂等，不再重排 timer。
   void _loadLocalImage(BuildContext context) {
+    _probePassThrough(context);
     if (!_loadedSmallThumbnail &&
         !_loadedLargeThumbnail &&
         !_loadedFinalImage) {
@@ -584,15 +672,26 @@ class _ZoomableImageState extends State<ZoomableImage> {
             //（didUpdateWidget generation++ 复位全部加载标志）触发。
           });
     }
-    if (!_loadingFinalImage && !_loadedFinalImage) {
+    final fullTw = computeViewerTargetWidth(
+      MediaQuery.sizeOf(context).width *
+          MediaQuery.devicePixelRatioOf(context),
+    );
+    if (_passThroughInFlight) {
+      // 直通在途而页已存活过延迟窗（停稳/翻页预建）：把队列中该图的
+      // p120 直通任务升级到当前页级插队——快甩积压的其它直通不再排在
+      // 它前面，「停稳即清晰」不回归。同 key 的 precacheImage 合并
+      // listener 改不了已入队任务的优先级，bump 是唯一插队手段；已在跑
+      // 的不动（盘读 22-46ms 本就秒完）。
+      ServicePolicy.instance.bumpPriority(
+        (t) => t.tag == 'full$fullTw:${_photo.id}',
+        RequestPriority.viewerImage,
+      );
+    } else if (!_loadingFinalImage && !_loadedFinalImage) {
       _loadingFinalImage = true;
       final gen = _loadGeneration;
       final full = buildImageProvider(
         _ref,
-        targetWidth: computeViewerTargetWidth(
-          MediaQuery.sizeOf(context).width *
-              MediaQuery.devicePixelRatioOf(context),
-        ),
+        targetWidth: fullTw,
       );
       precacheImage(full, context)
           .then((_) {

@@ -395,6 +395,8 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             "cancelPrecacheWork" -> handleCancelPrecacheWork(result)
             "precacheWorkState" -> handlePrecacheWorkState(result)
             "fullCacheStats" -> handleFullCacheStats(call, result)
+            // 快甩「盘缓存直通」前置门：轻量探测 full 盘缓存是否就绪。
+            "fullCacheExists" -> handleFullCacheExists(call, result)
             else -> result.notImplemented()
         }
     }
@@ -927,6 +929,27 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 3
             }
             mainHandler.post { result.success(code) }
+        }
+    }
+
+    // 快甩「盘缓存直通」前置门：full 盘缓存轻量探测（存在 + dm 失效，
+    // 不读不解）。极轻，ioExecutor 即回。
+    private fun handleFullCacheExists(call: MethodCall, result: Result) {
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        val id = call.argument<String>("id")
+        if (id.isNullOrBlank()) {
+            result.error(MsError.InvalidArg("id 缺失").code, null, null); return
+        }
+        val targetWidth = call.argument<Int>("targetWidth") ?: 1152
+        ioExecutor.execute {
+            val hit = try {
+                repo.fullCacheExists(id, targetWidth)
+            } catch (e: Exception) {
+                false
+            }
+            mainHandler.post { result.success(hit) }
         }
     }
 

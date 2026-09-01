@@ -653,6 +653,21 @@ class MediaStoreChannel {
     }
   }
 
+  /// full 盘缓存轻量探测（快甩「盘缓存直通」前置门）：存在 + dm 失效校验，
+  /// 不读不解。校验与真读路径（readSampledImage→readFullCache）完全对齐，
+  /// 探测命中 ⇒ 真读命中。失败一律 false（回落延迟窗原路径，零副作用）。
+  Future<bool> fullCacheExists(String id, {required int targetWidth}) async {
+    try {
+      return await _channel.invokeMethod<bool>('fullCacheExists', {
+            'id': id,
+            'targetWidth': targetWidth,
+          }) ??
+          false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
   /// 设置全图缓存配额（字节）并立即 LRU 收紧。64MB~2GB。
   Future<void> setFullCacheQuota(int bytes) async {
     try {
