@@ -80,7 +80,7 @@ class SearchScreen extends ConsumerStatefulWidget {
 }
 
 class _SearchScreenState extends ConsumerState<SearchScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final TextEditingController _queryCtrl = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
   final MediaStoreChannel _channel = const MediaStoreChannel();
@@ -92,6 +92,23 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     duration: const Duration(milliseconds: 300),
     value: 0,
   );
+
+  // ── 胶囊飞行动画（[用户定稿] 点胶囊从建议区原位飞到顶栏搜索框落位，
+  // 类比点相册时封面飞行）──
+  /// 顶栏已选胶囊的 GlobalKey（飞行目标坐标测量）。
+  final Map<String, GlobalKey> _barChipKeys = {};
+
+  /// 飞行中的胶囊 key（顶栏真实胶囊透明占位，落位后显现）。
+  final Set<String> _flying = {};
+
+  OverlayEntry? _flyOverlay;
+  late final AnimationController _flyCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 260),
+  );
+
+  /// 顶栏 TextField 的树位 key（reparent 保 State/focus 跨布局切换）。
+  final GlobalKey _searchFieldTreeKey = GlobalKey();
 
   /// 多选状态恒传（非选择模式恒空）：Gallery 依赖 SelectionState 包裹
   /// 结构恒定（album_screen 同款，见其 610 行注释）。
@@ -165,6 +182,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   @override
   void dispose() {
     currentRouteName.removeListener(_onRouteChanged);
+    _flyOverlay?.remove();
+    _flyCtrl.dispose();
     _queryCtrl.dispose();
     _searchFocus.dispose();
     _menuBackCtrl.dispose();
@@ -634,38 +653,74 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           onPressed: () => Navigator.maybePop(context),
         ),
         titleSpacing: 0,
-        // [aves 对齐] 无大标题，搜索框直接集成进顶栏：无边框，hint
-        // 「搜索相片」，自动聚焦呼出键盘（initState）。
-        title: Padding(
-          padding: const EdgeInsets.only(right: 4),
-          child: TextField(
-            controller: _queryCtrl,
-            focusNode: _searchFocus,
-            textInputAction: TextInputAction.search,
-            onSubmitted: (_) => _searchFocus.unfocus(),
-            onChanged: (_) => setState(() {}),
-            style: const TextStyle(
-              fontFamily: 'Space Mono',
-              fontFamilyFallback: AppFonts.cjkFallback,
-              color: AppColors.text,
-              fontSize: 15,
-            ),
-            // 无边框须三态显式置 none：focusedBorder 缺省回落主题，聚焦
-            // 时会亮出主题高亮描边（用户反馈"不需要聚焦的高亮边框"）。
-            decoration: InputDecoration(
-              hintText: t(ref, 'search_hint'),
-              hintStyle: const TextStyle(
-                color: AppColors.muted,
+        // 顶栏即搜索框集合（[用户定稿]）：已选胶囊在搜索框内 + 后跟
+        // 内联输入区（胶囊与文字可组合二次查找）。TextField 同一实例经
+        // GlobalKey reparent——无选中时 Expanded 占满 title，有选中时
+        // 收窄到 120dp 跟在胶囊后，State/focus 跨布局切换不丢。
+        title: Builder(builder: (context) {
+          final field = KeyedSubtree(
+            key: _searchFieldTreeKey,
+            child: TextField(
+              controller: _queryCtrl,
+              focusNode: _searchFocus,
+              textInputAction: TextInputAction.search,
+              onSubmitted: (_) => _searchFocus.unfocus(),
+              onChanged: (_) => setState(() {}),
+              style: const TextStyle(
+                fontFamily: 'Space Mono',
+                fontFamilyFallback: AppFonts.cjkFallback,
+                color: AppColors.text,
                 fontSize: 15,
               ),
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              isDense: true,
-              filled: false,
+              // 无边框须三态显式置 none：focusedBorder 缺省回落主题，
+              // 聚焦时会亮出主题高亮描边（用户反馈）。
+              decoration: InputDecoration(
+                hintText: t(ref, 'search_hint'),
+                hintStyle: const TextStyle(
+                  color: AppColors.muted,
+                  fontSize: 15,
+                ),
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                isDense: true,
+                filled: false,
+              ),
             ),
-          ),
-        ),
+          );
+          if (_selected.isEmpty) {
+            return Row(children: [Expanded(child: field)]);
+          }
+          return Row(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final k in _selected.toList())
+                        if (_filters.containsKey(k))
+                          Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: Opacity(
+                              opacity: _flying.contains(k) ? 0 : 1,
+                              child: FilterChipWidget(
+                                key: _barChipKeys.putIfAbsent(
+                                    k, () => GlobalKey()),
+                                filter: _filters[k]!,
+                                selected: true,
+                                onTap: () => _toggleFilter(k),
+                              ),
+                            ),
+                          ),
+                    ],
+                  ),
+                ),
+              ),
+              SizedBox(width: 120, child: field),
+            ],
+          );
+        }),
         // [aves 对齐] buildActions：有输入时给清除按钮。清空后仅当回到
         // 建议态（无选中 chips）才回焦——结果网格中清文本不该弹键盘。
         actions: [
@@ -691,15 +746,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           child: Builder(
             builder: (context) {
               // 组合结果 = 文本过滤 ∩ 已选 chips（任一存在即出网格）。
+              // 已选胶囊/计数文字不上 body（[用户定稿] 胶囊进顶栏搜索框，
+              // 匹配数与清除筛选文字删除；清除走返回键分层/点胶囊移除）。
               final results = _applyQueryAndFilters(query);
               final showResults = query.isNotEmpty || _selected.isNotEmpty;
               if (!showResults) return _buildSuggestions(query);
-              return Column(
-                children: [
-                  _buildSelectedRow(results),
-                  Expanded(child: _buildResults(results)),
-                ],
-              );
+              return _buildResults(results);
             },
           ),
         ),
@@ -716,14 +768,77 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   /// 点 chip：toggle 选中集合（同页实时过滤，不跳页）。
   /// 「日期选择器」是特殊入口 chip（不进选中集合，点了弹日期面板）。
   /// 选 chip 即进结果网格——同时收键盘（结果页不该有输入法）。
-  void _toggleFilter(String key) {
+  /// [source] = 点击源 chip 的 context（新增选中时取屏幕坐标做飞行动画）。
+  void _toggleFilter(String key, [BuildContext? source]) {
     _searchFocus.unfocus();
     if (key == 'date:picker') {
       _pickDate();
       return;
     }
+    final adding = !_selected.contains(key);
+    Rect? from;
+    if (adding && source != null) {
+      final box = source.findRenderObject();
+      if (box is RenderBox && box.attached) {
+        final o = box.localToGlobal(Offset.zero);
+        from = Rect.fromLTWH(o.dx, o.dy, box.size.width, box.size.height);
+      }
+    }
     setState(() {
-      if (!_selected.remove(key)) _selected.add(key);
+      if (!_selected.remove(key)) {
+        _selected.add(key);
+        // 飞行中的胶囊在顶栏透明占位（坐标可测），落位后显现。
+        if (from != null) _flying.add(key);
+      }
+    });
+    if (from != null) _flyChipToBar(key, from);
+  }
+
+  /// 胶囊飞行：布局稳定后测顶栏落位坐标，Overlay 飞行层从源矩形插值
+  /// 飞过去（easeOutCubic 260ms），结束移除飞行层并显现真实胶囊。
+  void _flyChipToBar(String key, Rect from) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final box =
+          _barChipKeys[key]?.currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.attached) {
+        setState(() => _flying.remove(key));
+        return;
+      }
+      final o = box.localToGlobal(Offset.zero);
+      final to = Rect.fromLTWH(o.dx, o.dy, box.size.width, box.size.height);
+      final filter = _filters[key];
+      if (filter == null) return;
+      _flyOverlay?.remove();
+      late final OverlayEntry entry;
+      entry = OverlayEntry(
+        builder: (ctx) => AnimatedBuilder(
+          animation: _flyCtrl,
+          builder: (ctx, _) {
+            final t = Curves.easeOutCubic.transform(_flyCtrl.value);
+            return Positioned.fromRect(
+              rect: Rect.lerp(from, to, t)!,
+              child: Material(
+                type: MaterialType.transparency,
+                child: FilterChipWidget(
+                  filter: filter,
+                  selected: true,
+                  onTap: () {},
+                ),
+              ),
+            );
+          },
+        ),
+      );
+      _flyOverlay = entry;
+      Overlay.of(context, rootOverlay: true).insert(entry);
+      _flyCtrl
+        ..reset()
+        ..forward().whenComplete(() {
+          entry.remove();
+          if (_flyOverlay == entry) _flyOverlay = null;
+          if (mounted) setState(() => _flying.remove(key));
+        });
     });
   }
 
@@ -742,68 +857,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     return chips.where((f) => f.label.toLowerCase().contains(lq)).toList();
   }
 
-  /// 已选过滤 chip 行（可逐个移除）+ 结果数与清空入口。
-  Widget _buildSelectedRow(List<MsImageInfo> results) {
-    if (_selected.isEmpty) return const SizedBox.shrink();
-    final chips = [
-      for (final k in _selected)
-        if (_filters.containsKey(k)) _filters[k]!,
-    ];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // 已选药丸行三段节奏（用户定稿）：顶栏→药丸 12 / 药丸→计数
-        // 文字 6 / 计数文字→图片网格 8。
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-          child: Row(
-            children: [
-              for (var i = 0; i < chips.length; i++)
-                Padding(
-                  padding: EdgeInsets.only(right: i == chips.length - 1 ? 0 : 8),
-                  child: FilterChipWidget(
-                    filter: chips[i],
-                    selected: true,
-                    onTap: () => _toggleFilter(chips[i].key),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: Row(
-            children: [
-              Text(
-                t(ref, 'search_match_count').replaceFirst(
-                    '{n}', '${results.length}'),
-                style: const TextStyle(
-                  fontFamily: 'Space Mono',
-                  fontFamilyFallback: AppFonts.cjkFallback,
-                  color: AppColors.muted,
-                  fontSize: 11,
-                ),
-              ),
-              const Spacer(),
-              GestureDetector(
-                onTap: () => setState(() => _selected.clear()),
-                child: Text(
-                  t(ref, 'search_clear_filters'),
-                  style: const TextStyle(
-                    fontFamily: 'Space Mono',
-                    fontFamilyFallback: AppFonts.cjkFallback,
-                    color: AppColors.accent,
-                    fontSize: 11,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
 
   /// 维度建议列表。有输入时各维度 chips 按词过滤（跨维度联动检索）。
   /// 每栏标题右侧折叠/展开（[aves 对齐] ExpandableFilterRow）：
@@ -1052,10 +1105,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 runSpacing: 8,
                 children: [
                   for (final c in visible)
-                    FilterChipWidget(
-                      filter: c,
-                      selected: _selected.contains(c.key),
-                      onTap: () => _toggleFilter(c.key),
+                    Builder(
+                      builder: (chipCtx) => FilterChipWidget(
+                        filter: c,
+                        selected: _selected.contains(c.key),
+                        onTap: () => _toggleFilter(c.key, chipCtx),
+                      ),
                     ),
                   if (expanded && hiddenCount > 0)
                     GestureDetector(
