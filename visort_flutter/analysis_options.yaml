@@ -16,6 +16,11 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+    - packages/**
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
 include: package:flutter_lints/flutter.yaml
 
 linter:
@@ -30,8 +35,15 @@ linter:
   # `// ignore_for_file: name_of_lint` syntax on the line or in the file
   # producing the lint.
   rules:
-    # avoid_print: false  # Uncomment to disable the `avoid_print` rule
-    # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
+    unawaited_futures: true
+    always_declare_return_types: true
+    prefer_final_locals: true
+    # 暂不开（2026-09 审查 F21 评估）：
+    # avoid_catches_without_on_clauses —— DB/channel 层大量 catch(_) 是
+    #   「失败静默降级」红线设计（见 database_service.dart 文件头），逐处
+    #   收窄需个案评审，不适合 lint 一刀切。
+    # always_use_package_imports —— ente 移植文件的同目录相对导入是既有
+    #   风格（79 处），跨目录统一已做（F22），同目录留待后续单独轮。
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

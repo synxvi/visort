@@ -187,7 +187,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           await _loadBuckets();
           if (!mounted) return;
         }
-        _recheckManageMedia();
+        unawaited(_recheckManageMedia());
       });
     }
   }

@@ -271,9 +271,11 @@ class GalleryGroups {
     final allFilesLength = allFiles.length;
 
     if (groupType.showGroupHeader()) {
+      // 预计算分组键（审查 F18）：一趟键提取，相邻比较纯 int（原每对
+      // 构造 2 个 DateTime）。
+      final keys = [for (final f in allFiles) groupType.groupKeyOf(f)];
       for (int index = 0; index < allFilesLength; index++) {
-        if (index > 0 &&
-            !groupType.areFromSameGroup(allFiles[index - 1], allFiles[index])) {
+        if (index > 0 && keys[index - 1] != keys[index]) {
           _createNewGroup(groupFiles, yearsInGroups);
           groupFiles = [];
         }

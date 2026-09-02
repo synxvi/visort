@@ -29,7 +29,7 @@ import 'package:visort_flutter/core/fs/image_ref.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/fs/service_policy.dart';
 
-import '../screens/album_common.dart' show extOf;
+import 'package:visort_flutter/ui/screens/album_common.dart' show extOf;
 import 'detail_page_state.dart';
 import 'gallery_groups.dart' show GalleryGroups;
 
@@ -52,7 +52,7 @@ class ZoomableImage extends StatefulWidget {
 
   /// 页索引（顶层双击路由注册键；null 时不参与顶层分发）。
   final int? pageIndex;
-  final Function(bool)? shouldDisableScroll;
+  final void Function(bool)? shouldDisableScroll;
   final String? tagPrefix;
   final Decoration? backgroundDecoration;
 

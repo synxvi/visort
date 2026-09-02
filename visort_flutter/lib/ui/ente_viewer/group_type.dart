@@ -62,20 +62,23 @@ extension GroupTypeExtension on GroupType {
     }
   }
 
-  bool areFromSameGroup(MsImageInfo first, MsImageInfo second) {
-    final f = DateTime.fromMicrosecondsSinceEpoch(first.dateAddedMs * 1000);
-    final s = DateTime.fromMicrosecondsSinceEpoch(second.dateAddedMs * 1000);
+  /// 分组键（审查 F18）：一趟 DateTime 构造导出整数键，相邻项比较纯 int
+  /// ——原逐对比较（areFromSameGroup，已并入本键方案）每对相邻项构造
+  /// 2 个 DateTime，万级列表一次分组 = ~2 万次对象分配。键相等 ⇔ 同组
+  /// （本地时区的年/月/日/周语义不变；week 键 = 所在周的周一 yyyymmdd）。
+  int groupKeyOf(MsImageInfo file) {
+    final d = DateTime.fromMillisecondsSinceEpoch(file.dateAddedMs);
     switch (this) {
       case GroupType.day:
-        return f.year == s.year && f.month == s.month && f.day == s.day;
+        return d.year * 10000 + d.month * 100 + d.day;
       case GroupType.month:
-        return f.year == s.year && f.month == s.month;
+        return d.year * 100 + d.month;
       case GroupType.year:
-        return f.year == s.year;
+        return d.year;
       case GroupType.week:
-        final fw = f.subtract(Duration(days: f.weekday - 1));
-        final sw = s.subtract(Duration(days: s.weekday - 1));
-        return fw.year == sw.year && fw.month == sw.month && fw.day == sw.day;
+        final s = DateTime(d.year, d.month, d.day)
+            .subtract(Duration(days: d.weekday - 1));
+        return s.year * 10000 + s.month * 100 + s.day;
       default:
         throw UnimplementedError("not implemented for $this");
     }

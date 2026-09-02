@@ -143,16 +143,24 @@ class RunController {
     // 提交（超限多弹几次窗），桌面端逐文件 move 分片无副作用。
     const kConsentBatchSize = 400;
 
+    // id→ImageRef 一次建表（审查 F17）：主循环与下面两段结果对账共 3 处
+    // firstWhere 线性扫，O(d×n)~O(d×n²)——5000 张 ≈ 数亿次比较阻塞 UI。
+    final imgById = {
+      for (final img in session.images) img.id: img,
+    };
+    ImageRef refOf(String fileId) =>
+        imgById[fileId] ??
+        // 旧 orElse 语义：找不到时以 id 兜底成相对路径引用
+        ImageRef(
+            root: session.sourceDir, relativePath: fileId, extension: '');
+
     for (var i = 0; i < entries.length; i++) {
       final entry = entries[i];
       final fileId = entry.key;
       final decision = entry.value;
 
       // 查找图片引用
-      final imgRef = session.images.firstWhere(
-        (img) => img.id == fileId,
-        orElse: () => ImageRef(root: session.sourceDir, relativePath: fileId, extension: ''),
-      );
+      final imgRef = refOf(fileId);
 
       // 发送进度（处理前）
       yield RunProgress(
@@ -209,15 +217,14 @@ class RunController {
             ids.sublist(i, math.min(i + kConsentBatchSize, ids.length));
         movedIds.addAll(await _fs.moveBatch(chunk, destPath, session.sourceDir));
       }
-      // 找回 fileId 记入结果
+      // 找回 fileId 记入结果（ids 转 Set：组内 contains 从 O(n) 降 O(1)，
+      // 审查 F17）
+      final idsSet = ids.toSet();
       for (final entry2 in entries) {
         if (entry2.value.action == DecisionAction.move) {
           final fileId = entry2.key;
-          final imgRef = session.images.firstWhere(
-            (img) => img.id == fileId,
-            orElse: () => ImageRef(root: session.sourceDir, relativePath: fileId, extension: ''),
-          );
-          if (ids.contains(imgRef.relativePath)) {
+          final imgRef = refOf(fileId);
+          if (idsSet.contains(imgRef.relativePath)) {
             if (movedIds.contains(imgRef.relativePath)) {
               moved.add((file: fileId, to: entry2.value.destLabel ?? ''));
             } else {
@@ -240,10 +247,7 @@ class RunController {
         if (entry.value.action == DecisionAction.delete) {
           final fileId = entry.key;
           // 用 ImageRef.relativePath 匹配（与 pendingDeleteIds 同语义）
-          final imgRef = session.images.firstWhere(
-            (img) => img.id == fileId,
-            orElse: () => ImageRef(root: session.sourceDir, relativePath: fileId, extension: ''),
-          );
+          final imgRef = refOf(fileId);
           if (deletedIds.contains(imgRef.relativePath)) {
             deleted.add(fileId);
           } else {

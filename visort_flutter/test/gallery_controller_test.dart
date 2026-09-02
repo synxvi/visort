@@ -223,7 +223,7 @@ void main() {
     test('enterBucket 取第一页，loadMore 用游标逐页推进至耗尽', () async {
       // 第一页 limit=60，5 张全部返回，无下一页游标
       await controller.enterBucket('b1');
-      var state = container.read(galleryControllerProvider);
+      final state = container.read(galleryControllerProvider);
       expect(state.photos.length, 5);
       expect(state.hasMore, false, reason: '不足一页应无更多');
       // 首屏完成标记：UI 据此切换「灰格占位 → 真实网格」
@@ -247,7 +247,7 @@ void main() {
       final ctrl = c.read(galleryControllerProvider.notifier);
 
       await ctrl.enterBucket('b2');
-      var st = c.read(galleryControllerProvider);
+      final st = c.read(galleryControllerProvider);
       expect(st.photos.length, 130); // 全量一次查完
       expect(st.hasMore, false);
       expect(st.firstPageLoaded, true);

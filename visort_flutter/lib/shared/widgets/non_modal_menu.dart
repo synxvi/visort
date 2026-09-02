@@ -18,7 +18,7 @@
 import 'package:flutter/material.dart';
 import 'package:visort_flutter/shared/widgets/root_overlay_registry.dart';
 
-import '../../core/theme/app_animations.dart';
+import 'package:visort_flutter/core/theme/app_animations.dart';
 
 /// 显示一个非模态浮层菜单。
 ///

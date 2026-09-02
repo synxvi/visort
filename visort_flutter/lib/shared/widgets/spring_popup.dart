@@ -10,7 +10,9 @@
 
 import 'package:flutter/material.dart';
 
-import '../../core/theme/app_animations.dart';
+import 'package:visort_flutter/core/theme/app_colors.dart';
+
+import 'package:visort_flutter/core/theme/app_animations.dart';
 
 /// 居中弹窗（一加 coui_center_dialog 风格）。
 ///
@@ -23,7 +25,7 @@ Future<T?> showCenterDialog<T>({
   required BuildContext context,
   required WidgetBuilder builder,
   bool dismissible = true,
-  Color barrierColor = const Color(0x80000000),
+  Color barrierColor = AppColors.scrim,
 }) {
   return showGeneralDialog<T>(
     context: context,

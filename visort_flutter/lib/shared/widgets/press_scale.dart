@@ -8,7 +8,7 @@
 
 import 'package:flutter/material.dart';
 
-import '../../core/theme/app_animations.dart';
+import 'package:visort_flutter/core/theme/app_animations.dart';
 
 /// 包裹子 widget，按下时 scale 回缩到 [pressedScale]（默认 0.97），松开弹回。
 ///

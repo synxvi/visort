@@ -13,6 +13,8 @@
 // 从相册内/看图器 pop 回 `/`（currentRouteName 监听）——三处都静默重查
 // buckets，保证封面与数量在移动/删除后不失真。
 
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart' show HomeLayout;
@@ -55,13 +57,13 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     // 从相册内/看图器返回 `/`：重查 buckets（数量/封面可能已变）。
     currentRouteName.addListener(_onRouteChanged);
     widget.shellHandle?.onActivated = () {
-      ref.read(galleryControllerProvider.notifier).loadBuckets(silent: true);
+      ref.read(galleryControllerProvider.notifier).loadBuckets();
     };
   }
 
   void _onRouteChanged() {
     if (currentRouteName.value == AppRoutes.home) {
-      ref.read(galleryControllerProvider.notifier).loadBuckets(silent: true);
+      ref.read(galleryControllerProvider.notifier).loadBuckets();
     }
   }
 
@@ -76,7 +78,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
       if (!mounted) return;
       if (!ref.read(galleryControllerProvider).permissionDenied) return;
       if (await const MediaStoreChannel().hasPermission()) {
-        ref.read(galleryControllerProvider.notifier).loadBuckets();
+        unawaited(ref.read(galleryControllerProvider.notifier).loadBuckets());
       }
     });
   }
@@ -251,12 +253,19 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     return RefreshIndicator(
       color: AppColors.accent,
       onRefresh: () =>
-          ref.read(galleryControllerProvider.notifier).loadBuckets(silent: true),
+          ref.read(galleryControllerProvider.notifier).loadBuckets(),
       child: isGrid ? _buildGridBody(buckets, bottomInset) : _buildListBody(buckets, bottomInset),
     );
   }
 
-  /// 网格布局：与快速整理页网格同构（Wrap + 固定列宽），列数独立配置。
+  /// 网格布局：与快速整理页网格同构（固定列宽，列数独立配置）。
+  /// 行式惰性网格（审查 F16）：原 SingleChildScrollView+Wrap 全量 inflate
+  /// 全部 tile → 封面解码同时发起（首帧洪泛）。现按行切分 +
+  /// SliverList.builder 行级惰性——固定列宽语义不变（GridView 的
+  /// childAspectRatio 会锁死 cell 高度留白，见 home_screen_android 同款
+  /// 注释，故不走 SliverGrid）；「内容最小高度撑满视口」由
+  /// SliverFillRemaining 等价实现（不满一屏时填充剩余，下拉回弹不露底，
+  /// 满屏时零高度）。
   Widget _buildGridBody(List<MsBucket> buckets, double bottomInset) {
     final cols = ref.watch(configProvider).galleryGridColumns;
     // spacing 4 + tile 内水平 padding 4×2 = 相邻封面间隙 12dp（用户定稿，
@@ -267,33 +276,58 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     return LayoutBuilder(
       builder: (ctx, c) {
         final cellW = (c.maxWidth - hpad * 2 - spacing * (cols - 1)) / cols;
-        return SingleChildScrollView(
+        final rowCount = (buckets.length + cols - 1) ~/ cols;
+        return CustomScrollView(
           // 动画对齐 ente：iOS 式回弹滚动物理（AlwaysScrollable 保下拉刷新）。
           physics: const BouncingScrollPhysics(
             parent: AlwaysScrollableScrollPhysics(),
           ),
-          padding: EdgeInsets.fromLTRB(hpad, 10, hpad, 16 + bottomInset),
-          // 内容最小高度 = 视口：相册不满一屏时撑满，下拉刷新/回弹时
-          // 底部不再露出大片黑（真机实测下拉时底部 1/4 黑屏）。
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: c.maxHeight),
-            child: Wrap(
-              spacing: spacing,
-              runSpacing: spacing,
-              children: [
-                for (final bucket in buckets)
-                  SizedBox(
-                    width: cellW,
-                    child: _AlbumTile(
-                      grid: true,
-                      bucket: bucket,
-                      flightTag: _flightTag,
-                      onFlightStart: (tag) => setState(() => _flightTag = tag),
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(hpad, 10, hpad, 0),
+              sliver: SliverList.builder(
+                itemCount: rowCount,
+                itemBuilder: (ctx, r) {
+                  final start = r * cols;
+                  final end =
+                      start + cols < buckets.length ? start + cols : buckets.length;
+                  return Padding(
+                    // 首行不加顶距（SliverPadding 已有 10dp 顶距）
+                    padding: EdgeInsets.only(top: r == 0 ? 0 : spacing),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (var i = start; i < end; i++)
+                          Padding(
+                            padding: EdgeInsets.only(
+                                left: i > start ? spacing : 0),
+                            child: SizedBox(
+                              width: cellW,
+                              child: _AlbumTile(
+                                grid: true,
+                                bucket: buckets[i],
+                                flightTag: _flightTag,
+                                onFlightStart: (tag) =>
+                                    setState(() => _flightTag = tag),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
-                  ),
-              ],
+                  );
+                },
+              ),
             ),
-          ),
+            // 撑满剩余视口（原 ConstrainedBox minHeight 语义）+ 尾部 inset
+            //（末行封面不被手势条压住）。
+            SliverPadding(
+              padding: EdgeInsets.only(bottom: 16 + bottomInset),
+              sliver: const SliverFillRemaining(
+                hasScrollBody: false,
+                child: SizedBox.expand(),
+              ),
+            ),
+          ],
         );
       },
     );

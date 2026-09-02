@@ -1241,13 +1241,16 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       const spacing = GalleryGroups.spacing;
       var groupTop = 0.0; // 目标组的组头起始 offset（滚动到此时组头贴视口顶）
       var photosInGroup = 0;
+      // 整数分组键（审查 F18 同款）：相邻比较免每对构造 2 个 DateTime。
+      var prevKey = 0;
       for (var i = 0; i <= index && i < photos.length; i++) {
-        if (i > 0 &&
-            !GroupType.day.areFromSameGroup(photos[i - 1], photos[i])) {
+        final key = GroupType.day.groupKeyOf(photos[i]);
+        if (i > 0 && key != prevKey) {
           final rows = (photosInGroup + cols - 1) ~/ cols;
           groupTop += 32 + rows * cellH - spacing;
           photosInGroup = 0;
         }
+        prevKey = key;
         photosInGroup++;
       }
       // index 所在行：组头 + 组内前序行的偏移。
@@ -1316,7 +1319,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       buildImageProvider(imgRef, targetWidth: openTw),
       context,
     );
-    final route = PageRouteBuilder(
+    final route = PageRouteBuilder<void>(
       // [ente 移植] 完全复刻 ente routeToPage（navigation_util _buildPageRoute）：
       // Align + FadeTransition 200ms + opaque:false。无黑遮罩、无门控——
       // viewer（含 PageView 预渲染 ±1 页）随 fade 一起淡入 = 中间图淡入淡出、

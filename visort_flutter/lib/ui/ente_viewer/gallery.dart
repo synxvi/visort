@@ -10,7 +10,8 @@
 //     Christmas 临时 physics（ExponentialBouncingScrollPhysics → BouncingScrollPhysics）。
 //   - 保留（核心价值）：CustomScrollView + SectionedListSliver + PinnedGroupHeader 吸附头
 //     （AnimatedScale 1.0→1.2 拖动放大 200ms easeInOutSine + 尾部图标 fadeIn 200ms）+
-//     CustomScrollBar 滚动条联动 + GalleryFileWidget + BouncingScrollPhysics + loading/empty。
+//     CustomScrollBar 滚动条联动（该类已删——visort 实际用 scroll_drag_handle，
+//     2026-09 审查 F22 死代码清理）+ GalleryFileWidget + BouncingScrollPhysics + loading/empty。
 //   - 状态包装：GalleryContextState/SelectionState 内层包；GalleryFilesState/
 //     GalleryBoundariesProvider 由外层提供（Gallery 只读取/写入）。
 //   - groupHeaderExtent 默认 32（GroupHeaderWidget 默认高；ente 用 getIntrinsicSizeOfWidget
@@ -26,7 +27,7 @@ import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 
 import 'boundary_reporter_mixin.dart';
-import '../../shared/widgets/scroll_drag_handle.dart';
+import 'package:visort_flutter/shared/widgets/scroll_drag_handle.dart';
 import 'gallery_boundaries_provider.dart';
 import 'gallery_context_state.dart';
 import 'gallery_files_inherited_widget.dart';
@@ -40,7 +41,8 @@ import 'selection_state.dart';
 /// 相册网格主组件（ente Gallery 移植）。
 ///
 /// 外层直接提供全量 [allFiles]（已排序），内部按 [groupType] 分组渲染为
-/// 吸附头的分组网格；长画廊带 [CustomScrollBar] 滚动条联动与拖动分区标题。
+/// 吸附头的分组网格；长画廊的滚动条联动用 ScrollDragHandle（原
+/// CustomScrollBar 已删，2026-09 审查 F22 死代码清理）。
 /// 选中态由 [selectedFiles] 驱动（多选模式见 [inSelectionMode]），
 /// 点击/长按经 [onFileTap]/[onFileLongPress] 交回外层处理（选中切换/路由）。
 class Gallery extends StatefulWidget {
@@ -184,11 +186,32 @@ class GalleryState extends State<Gallery> {
     }
     if (!identical(oldWidget.allFiles, widget.allFiles)) {
       _allGalleryFiles = widget.allFiles;
-      needsRegroup = true;
+      // 内容指纹短路（审查 F18）：HDR 回填/收藏切换 copyWith 生成新 List
+      // 实例，identical 必失效 → 整表重算（万级 = 万次键提取 + 全部行
+      // 布局）。指纹白名单 = id + dateAddedMs（分组键）+ isHdr/isFavorite/
+      // name（cell 徽标与显示名）——序列未变则跳过重算。⚠️ 未来 cell
+      // 新增展示字段时须同步扩白名单，否则会被此短路吞掉刷新。
+      needsRegroup = !_sameFileSequence(oldWidget.allFiles, widget.allFiles);
     }
     if (needsRegroup && mounted) {
       _updateGalleryGroups();
     }
+  }
+
+  /// 指纹比较（didUpdateWidget 专用，见上方注释）。
+  static bool _sameFileSequence(List<MsImageInfo> a, List<MsImageInfo> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      final x = a[i], y = b[i];
+      if (x.id != y.id ||
+          x.dateAddedMs != y.dateAddedMs ||
+          x.isHdr != y.isHdr ||
+          x.isFavorite != y.isFavorite ||
+          x.name != y.name) {
+        return false;
+      }
+    }
+    return true;
   }
 
   @override
@@ -296,7 +319,7 @@ class GalleryState extends State<Gallery> {
                   physics: const BouncingScrollPhysics(),
                   controller: _scrollController,
                   slivers: [
-                    SectionedListSliver(sectionLayouts: groups.groupLayouts),
+                    SectionedListSliver<dynamic>(sectionLayouts: groups.groupLayouts),
                     // [visort 追加] edge-to-edge：尾部补手势条 inset 占位——
                     // 配合外层 SafeArea(bottom:false)，末行可滚进手势条区
                     // （照片穿过手势条，系统相册/ente 行为），停稳时不被遮挡。
@@ -609,7 +632,7 @@ class _PinnedGroupHeaderState extends State<PinnedGroupHeader>
                           decoration: BoxDecoration(
                             boxShadow: [
                               BoxShadow(
-                                color: Color(0x14000000),
+                                color: AppColors.headerShadow,
                                 blurRadius: 4,
                                 offset: Offset(0, 1),
                               ),

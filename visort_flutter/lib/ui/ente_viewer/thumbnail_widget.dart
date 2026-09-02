@@ -72,7 +72,7 @@ class _ThumbnailWidgetState extends State<ThumbnailWidget> {
         const Positioned(
           top: 4,
           right: 4,
-          child: Icon(Icons.favorite, size: 14, color: Color(0xFFE53935)),
+          child: Icon(Icons.favorite, size: 14, color: AppColors.favorite),
         ),
       );
     }
@@ -153,7 +153,7 @@ class _TypeBadge extends StatelessWidget {
       width: 18,
       height: 18,
       decoration: const BoxDecoration(
-        color: Color(0xAA000000),
+        color: AppColors.badgeScrim,
         shape: BoxShape.circle,
       ),
       child: Padding(

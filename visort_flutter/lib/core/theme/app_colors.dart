@@ -25,6 +25,13 @@ class AppColors {
   static const danger = Color(0xFFFF3B3B);
   static const success = Color(0xFF3BFF8A);
   static const softYellow = Color(0xFFFFE066); // 淡黄（review"继续分类"图标）
+  static const favorite = Color(0xFFE53935); // 收藏红心（thumbnail 徽标）
+
+  // ── 半透明黑档位（2026-09 审查 F22 收编散落魔法色）──
+  static const scrim = Color(0x80000000); // 弹窗 barrier（50%）
+  static const shadowScrim = Color(0x66000000); // toast 投影（40%）
+  static const badgeScrim = Color(0xAA000000); // 视频时长徽标底（67%）
+  static const headerShadow = Color(0x14000000); // 吸附头底部投影（8%）
 
   // 派生（hover 色，源 index.html:259,279,281）
   static const accentHover = Color(0xFFFFFFFF);

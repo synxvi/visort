@@ -69,6 +69,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
 
   final ScrollController _scrollCtrl = ScrollController();
 
+  /// 输入防抖（审查 F14）。
+  Timer? _queryDebounce;
+
   /// leading morph：进页时抽屉三线过渡为返回箭头（[aves 对齐]
   /// AnimatedIcons.menu_arrow；用户定稿「原抽屉按钮位置过渡为返回」）。
   late final AnimationController _menuBackCtrl = AnimationController(
@@ -193,6 +196,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     }
     _flies.clear();
     _queryCtrl.dispose();
+    _queryDebounce?.cancel();
     _searchFocus.dispose();
     _menuBackCtrl.dispose();
     super.dispose();
@@ -295,7 +299,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
             focusNode: _searchFocus,
             textInputAction: TextInputAction.search,
             onSubmitted: (_) => _searchFocus.unfocus(),
-            onChanged: (_) => setState(() {}),
+            // 防抖 120ms（审查 F14）：原每键整页 setState（含 chip 测宽），
+            // 万张库连续键入时每键全量过滤+重建。结果与清除按钮至多
+            // 滞后一拍，输入回显不受影响（TextField 自绘）。
+            onChanged: (_) {
+              _queryDebounce?.cancel();
+              _queryDebounce = Timer(const Duration(milliseconds: 120), () {
+                if (mounted) setState(() {});
+              });
+            },
             style: const TextStyle(
               fontFamily: 'Space Mono',
               fontFamilyFallback: AppFonts.cjkFallback,
@@ -352,6 +364,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
               tooltip: t(ref, 'search_clear'),
               onPressed: () {
                 _queryCtrl.clear();
+                _queryDebounce?.cancel(); // 立即生效，防防抖迟到的旧态重建
                 if (_selected.isEmpty) _searchFocus.requestFocus();
                 setState(() {});
               },
@@ -368,12 +381,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
           child: Builder(
             builder: (context) {
               // 组合结果 = 文本过滤 ∩ 已选 chips（任一存在即出网格）。
-              // 已选胶囊/计数文字不上 body（[用户定稿] 胶囊进顶栏搜索框，
-              // 匹配数与清除筛选文字删除；清除走返回键分层/点胶囊移除）。
-              final results = _applyQueryAndFilters(query);
+              // 过滤在分支内（审查 F14）：建议态（空查询无选中）不再每键
+              // 白扫全表。已选胶囊/计数文字不上 body（[用户定稿] 胶囊进
+              // 顶栏搜索框，匹配数与清除筛选文字删除；清除走返回键分层/
+              // 点胶囊移除）。
               final showResults = query.isNotEmpty || _selected.isNotEmpty;
               if (!showResults) return _buildSuggestions(query, filters);
-              return _buildResults(results);
+              return _buildResults(_applyQueryAndFilters(query));
             },
           ),
         ),
@@ -937,9 +951,6 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   List<MsImageInfo> _applyQueryAndFilters(String query) {
     final q = query.toLowerCase();
     final metas = ref.read(searchIndexServiceProvider.notifier).metas;
-    // bucketNames 取一次复用（getter 每次访问重建整个 Map——循环内访问
-    // 即 O(N×B)：万张库每按键百万次 Map 插入全在 UI isolate，审查 H1）。
-    final bucketNames = _data.bucketNames;
     final byCat = <String, List<SearchFilterData>>{};
     for (final k in _selected) {
       final f = _allFilters[k];
@@ -948,23 +959,59 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     }
     bool matchSelected(String id) =>
         byCat.isEmpty || byCat.values.every((fs) => fs.any((f) => f.contains(id)));
+    if (q.isEmpty) {
+      // 空查询零文本成本（审查 F14：原每键对全表做 6 次 toLowerCase）。
+      return _data.photos.where((p) => matchSelected(p.id)).toList();
+    }
+    // 预计算小写索引（审查 F14）：id → 全字段拼接小写串。键入时每张
+    // 6 次 toLowerCase+contains（每次分配新串）→ 1 次 contains。
+    // 分隔防跨字段拼接假命中（正常输入不可能含 NUL）。photos/buckets/
+    // metas 任一换实例即重建（identical 校验，零钩子成本）。
+    final lowerIdx = _ensureLowerIndex(_data.photos, _data.buckets, metas);
     return _data.photos.where((p) {
       if (!matchSelected(p.id)) return false;
-      if (q.isEmpty) return true;
-      if (p.name.toLowerCase().contains(q)) return true;
-      if ((bucketNames[p.bucketId] ?? '').toLowerCase().contains(q)) {
-        return true;
-      }
-      final m = metas[p.id];
-      if (m == null) return false;
       // 地名匹配含省/国：placeLabel = locality ?? adminArea ?? country 是
       // 短路兜底链，搜「浙江」要能命中 placeLabel=「杭州市」的照片
       //（审查 P2 文本搜索不命中省份）。
-      return m.placeLabel.toLowerCase().contains(q) ||
-          (m.adminArea?.toLowerCase().contains(q) ?? false) ||
-          (m.country?.toLowerCase().contains(q) ?? false) ||
-          (m.camera?.toLowerCase().contains(q) ?? false);
+      return lowerIdx[p.id]!.contains(q);
     }).toList();
+  }
+
+  Map<String, String>? _lowerIndex;
+  List<MsImageInfo>? _lowerIndexPhotos;
+  List<MsBucket>? _lowerIndexBuckets;
+  Map<String, MsSearchMeta>? _lowerIndexMetas;
+
+  Map<String, String> _ensureLowerIndex(
+    List<MsImageInfo> photos,
+    List<MsBucket> buckets,
+    Map<String, MsSearchMeta> metas,
+  ) {
+    final cached = _lowerIndex;
+    if (cached != null &&
+        identical(_lowerIndexPhotos, photos) &&
+        identical(_lowerIndexBuckets, buckets) &&
+        identical(_lowerIndexMetas, metas)) {
+      return cached;
+    }
+    final nameById = {for (final b in buckets) b.id: b.name};
+    final idx = <String, String>{};
+    for (final p in photos) {
+      final m = metas[p.id];
+      idx[p.id] = [
+        p.name,
+        nameById[p.bucketId] ?? '',
+        m?.placeLabel ?? '',
+        m?.adminArea ?? '',
+        m?.country ?? '',
+        m?.camera ?? '',
+      ].join('\u0000').toLowerCase();
+    }
+    _lowerIndex = idx;
+    _lowerIndexPhotos = photos;
+    _lowerIndexBuckets = buckets;
+    _lowerIndexMetas = metas;
+    return idx;
   }
 
   Widget _buildResults(List<MsImageInfo> filtered) {
@@ -1017,7 +1064,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     _searchFocus.unfocus(); // 进看图页收起输入法（用户反馈）
     final index = files.indexWhere((f) => f.id == info.id);
     if (index < 0) return;
-    Navigator.of(context).push(enteFadeRoute(
+    Navigator.of(context).push(enteFadeRoute<void>(
       builder: (_) => DetailPage(
         files: files,
         initialIndex: index,
