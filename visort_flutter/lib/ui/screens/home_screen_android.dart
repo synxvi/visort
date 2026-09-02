@@ -2043,29 +2043,18 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
     widget.onCheckToggle();
   }
   /// 导航防重入【static 全局共享】：enterBucket→读 state→push 是一长串
-  /// async——双指同时点【两个不同 tile】时，per-tile 锁各锁各的拦不住
-  /// （真机实证 2026-09：两路由 ~20ms 内先后 push，首路由 Hero flight
-  /// 未落定第二路由转场叠加，release 静默渲染黑占位网格/黑 tile）。
-  /// static 字段跨全部 tile 实例互斥：只认第一次点击，第二击忽略。
+  /// async——双指同时点【两个不同 tile】时并发执行，两边都会从【同一个
+  /// 共享 state】读 photos[0] 设 Hero tag 互踩。static 字段跨全部 tile
+  /// 实例互斥：只认第一次点击。（相册页 tile 的同款根治见 gallery_screen
+  /// _open——2026-09 双指黑屏系列，此处为整理流程源相册入口的同型防线。）
   static bool _navInFlight = false;
 
   Future<void> _openAlbum() async {
-    if (_navInFlight) {
-      debugPrint('[GAL] nav-blocked(static) bucket=${widget.bucket.id}');
-      return;
-    }
+    if (_navInFlight) return;
     if (_interceptIfEditing()) return;
     // 选择模式（本组已有相册勾选）：点击改为勾选/取消本相册，不进入浏览
     if (widget.selectionMode) {
       widget.onCheckToggle();
-      return;
-    }
-    // 入口路由互斥（用户定稿 2026-09：此界面无多指场景，第一次命中后
-    // 阻止再开另一相册）：第一击的 pushNamed 是【同步入栈】——其后任何
-    // tap（哪怕同帧）canPop 已为 true，判定不依赖字段时序，必生效。
-    // 主页是根路由，正常态 canPop 恒 false。
-    if (Navigator.of(context).canPop()) {
-      debugPrint('[GAL] nav-blocked(canPop) bucket=${widget.bucket.id}');
       return;
     }
     _navInFlight = true;
@@ -2081,14 +2070,13 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
       final s = container.read(galleryControllerProvider);
       // 终局裁决（await 之后、push 之前——state 与路由栈此刻都是真实
       // 落定的，判定不依赖 tap 时序）：
-      // ① state 归属：双指时两桶 enter 并发，channel 慢的大桶先发起却
-      //   后完成——赢家通吃 state，输家在此放弃导航；
-      // ② 路由栈：push 是 UI 线程同步原子操作，两个并发 tap 只可能有
-      //   一个在 push 前观测到 canPop==false——即使守卫全被绕过（
-      //   2026-09 真机实证：static 锁同毫秒双通过之谜未解），此处也
+      // ① state 归属：await 窗口内 state 可能已被其他入口切走——非本桶
+      //   放弃导航，且不拿他桶首张做 Hero（跨桶 tag 与真实终点对不上）；
+      // ② 路由栈：push 是 UI 线程同步原子操作，两个并发流只可能有一个
+      //   在 push 前观测到 canPop==false——锁被绕过的任何残余场景在此
       //   必然只放行一个。
-      // 输家不 push = 不打断赢家的 Hero flight（飞行被吃/黑 tile 残影
-      // /tile 不可点击的根源全是第二路由的 push+pop 打断飞行所致）。
+      // 输家不 push = 不打断赢家的 Hero flight（双路由 push+pop 打断
+      // 飞行 = 黑 tile 残影/吞点击，2026-09 真机实证）。
       if (s.bucketId != widget.bucket.id) {
         debugPrint('[GAL] nav-abort(own) bucket=${widget.bucket.id} '
             'state=${s.bucketId}');
