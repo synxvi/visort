@@ -124,6 +124,7 @@ const Map<String, String> stringsZh = {
   'no_subdir': '请至少添加一个子目录。',
   'too_many_targets': '目标数超过上限（最多 {0} 个）',
   'scan_failed': '扫描失败：无法读取所选目录（权限或网络存储问题）',
+  'scan_busy': '正在扫描中，请稍候',
   'load_failed': '加载失败，请重试',
   'open_settings': '去系统设置',
   'key_conflict_action': '撤销 / 删除 / 跳过三个快捷键存在冲突',

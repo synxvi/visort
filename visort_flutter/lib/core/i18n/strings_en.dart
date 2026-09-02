@@ -128,6 +128,7 @@ const Map<String, String> stringsEn = {
   'no_subdir': 'Please add at least one sub directory.',
   'too_many_targets': 'Too many targets (max {0})',
   'scan_failed': 'Scan failed: cannot read the selected directory (permission or storage issue)',
+  'scan_busy': 'Scan already in progress, please wait',
   'load_failed': 'Load failed, please retry',
   'open_settings': 'Open system settings',
   'key_conflict_action': 'Conflict between undo / delete / skip shortcut keys',

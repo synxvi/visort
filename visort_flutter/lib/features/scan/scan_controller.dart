@@ -8,6 +8,7 @@
 //
 // UI 通过此 Provider 触发扫描，观察扫描状态（idle/scanning/error/done）
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/config/profiles_service.dart';
@@ -62,7 +63,9 @@ class ScanController extends StateNotifier<ScanState> {
     required AppConfig config,
     List<FolderDescriptor>? prebuiltFolders,
   }) async {
-    if (_scanning) return null; // 重入：第二次点击不重复扫描（首扫进行中）
+    // 重入：返回专用 key。null 是成功哨兵——返回 null 会诱使 UI 把「没
+    // 扫描」当「成功」，带着旧 session 进 sort 页（审查 F12）。
+    if (_scanning) return 'scan_busy';
     _scanning = true;
     try {
       state = const ScanState(status: ScanStatus.scanning);
@@ -103,6 +106,14 @@ class ScanController extends StateNotifier<ScanState> {
         imageCount: result.images.length,
       );
       return null;
+    } catch (e, s) {
+      // scanImages/initFromScan 异常（IO/权限/编程错误）不 rethrow（调用
+      // 方无 catch），置 error 态复位状态机——否则 finally 只复位
+      // _scanning，state 卡死在 scanning（Start 永久禁用，审查 F12）。
+      debugPrint('[scan] exception: $e\n$s');
+      state =
+          const ScanState(status: ScanStatus.error, errorKey: 'scan_failed');
+      return 'scan_failed';
     } finally {
       _scanning = false;
     }

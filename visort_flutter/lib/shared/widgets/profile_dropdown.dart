@@ -13,6 +13,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
+import 'package:visort_flutter/shared/widgets/root_overlay_registry.dart';
 
 class ProfileDropdown extends StatefulWidget {
   const ProfileDropdown({
@@ -35,6 +36,15 @@ class _ProfileDropdownState extends State<ProfileDropdown> {
   final LayerLink _link = LayerLink();
   OverlayEntry? _overlayEntry;
   bool _isOpen = false;
+
+  // 路由生命周期（2026-09 审查 F8，与 confirm_sheet 同款）：本页被新页
+  // push 覆盖（secondary > 0）或自身被 pop（animation reverse）时，裸
+  // OverlayEntry 会残留上层——监听宿主路由进出场动画，偏离前台即随路由
+  // 一起关。tab 页无路由动画，由 shell 经 root_overlay_registry 收口。
+  // _close 幂等，动画期间重复触发无副作用。
+  Animation<double>? _routeAnim;
+  Animation<double>? _routeSecondary;
+  void Function()? _unregisterRef;
 
   void _toggle() {
     if (_isOpen) {
@@ -62,11 +72,31 @@ class _ProfileDropdownState extends State<ProfileDropdown> {
         onDismiss: _close,
       ),
     );
+    final route = ModalRoute.of(context);
+    _routeAnim = route?.animation;
+    _routeSecondary = route?.secondaryAnimation;
+    _routeAnim?.addListener(_onRouteLeaving);
+    _routeSecondary?.addListener(_onRouteLeaving);
+    void dropdownCloser() => _close();
+    registerRootOverlayCloser(dropdownCloser);
+    _unregisterRef = () => unregisterRootOverlayCloser(dropdownCloser);
     overlay.insert(_overlayEntry!);
     setState(() => _isOpen = true);
   }
 
+  void _onRouteLeaving() {
+    final leaving = _routeAnim?.status == AnimationStatus.reverse ||
+        (_routeSecondary?.value ?? 0) > 0;
+    if (leaving) _close();
+  }
+
   void _close() {
+    _routeAnim?.removeListener(_onRouteLeaving);
+    _routeSecondary?.removeListener(_onRouteLeaving);
+    _routeAnim = null;
+    _routeSecondary = null;
+    _unregisterRef?.call();
+    _unregisterRef = null;
     _overlayEntry?.remove();
     _overlayEntry = null;
     if (mounted) setState(() => _isOpen = false);

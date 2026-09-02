@@ -94,8 +94,11 @@ Future<void> main() async {
       await service.save(config);
     }
     container.read(configProvider.notifier).state = config;
-  } catch (_) {
-    // 加载失败用默认配置
+  } catch (e, s) {
+    // 加载失败用默认配置（降级红线：不阻断启动；此前裸 catch(_) 零输出，
+    // 配置损坏完全不可观测——审查 F12）。Error 也吞：此处抛出即 runApp
+    // 永不执行，比丢配置更糟，故仅输出不收窄。
+    debugPrint('[main] 配置加载失败，使用默认配置: $e\n$s');
   }
 
   // ──────────── SQLite 预热(P0) ────────────
@@ -113,7 +116,13 @@ Future<void> main() async {
     // 渲染好，进搜索页零加载——根治入场帧布局跳动）。首屏稳了再跑
     //（2s），快照缓存下 ~50ms 无感；幂等，进页 warmUp 只是兜底。
     unawaited(Future.delayed(const Duration(seconds: 2), () async {
-      await container.read(searchDataProvider.notifier).warmUp();
+      try {
+        await container.read(searchDataProvider.notifier).warmUp();
+      } catch (e, s) {
+        // 预热失败不致命（进搜索页 warmUp 兜底），不逃逸成 unhandled
+        // async exception（审查 F12）。
+        debugPrint('[main] 搜索预热失败: $e\n$s');
+      }
     }));
   }
 
@@ -205,7 +214,11 @@ void _enableEdgeToEdge() {
   // 3.47 engine 的 edgeToEdge 会把 legacy systemUiVisibility 清零，而 ColorOS
   // 靠 LAYOUT_* bits 判定「沉浸式窗口→手势条无背景悬浮」（不认新 API）。
   // 通知 Android 侧在 engine 覆写后补设（详见 MainActivity.reassert…注释）。
-  MethodChannel('visort/app').invokeMethod('reassertSystemUiFlags');
+  // 失败不致命（channel 缺失/无 handler）：catchError 吞掉避免 unhandled
+  // async exception（审查 F12）。
+  unawaited(MethodChannel('visort/app')
+      .invokeMethod('reassertSystemUiFlags')
+      .catchError((_) {}));
 }
 
 Future<void> _setupAndroid() async {
@@ -229,8 +242,9 @@ Future<void> _purgeLegacySnapKeys() async {
     for (final k in legacy) {
       await prefs.remove(k);
     }
-  } catch (_) {
-    // 清理失败无碍(残留 key 只占几 KB,不影响功能)。
+  } catch (e) {
+    // 清理失败无碍(残留 key 只占几 KB,不影响功能)，留输出可观测。
+    debugPrint('[_purgeLegacySnapKeys] 清理失败: $e');
   }
 }
 

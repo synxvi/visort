@@ -43,7 +43,7 @@ class DesktopFileSystem implements FileSystemRepository {
     final images = <ImageRef>[];
     for (final root in roots) {
       final dir = Directory(root);
-      if (!dir.existsSync()) {
+      if (!await dir.exists()) {
         return ScanResult(images: const [], error: 'dir_not_exist');
       }
       // 递归 vs 同层级
@@ -79,7 +79,7 @@ class DesktopFileSystem implements FileSystemRepository {
   @override
   Future<List<String>> listSubdirs(String parent) async {
     final dir = Directory(parent);
-    if (!dir.existsSync()) return const [];
+    if (!await dir.exists()) return const [];
     final names = <String>[];
     await for (final entry in dir.list(recursive: false, followLinks: false)) {
       if (entry is Directory) {
@@ -94,7 +94,9 @@ class DesktopFileSystem implements FileSystemRepository {
   @override
   Future<ImageMeta> readMeta(ImageRef ref) async {
     final file = File(p.join(ref.root, ref.relativePath));
-    final stat = file.statSync();
+    // 异步 stat（2026-09 审查 F10）：NAS/慢盘/冷缓存上同步 stat 单调用
+    // 几十 ms~秒级，冻结 UI isolate。
+    final stat = await file.stat();
     final sizeKb = stat.size / 1024;
     return ImageMeta(
       absolutePath: file.absolute.path,
@@ -107,33 +109,28 @@ class DesktopFileSystem implements FileSystemRepository {
   @override
   Future<MoveResult> move(ImageRef src, String destDir) async {
     final srcFile = File(p.join(src.root, src.relativePath));
-    if (!srcFile.existsSync()) {
+    if (!await srcFile.exists()) {
       return const MoveResult(success: false, error: 'source_missing');
     }
     try {
       // 创建目标目录
       await Directory(destDir).create(recursive: true);
 
-      // 同名冲突改名：base_1.ext, base_2.ext, ...
-      final baseName = p.basename(srcFile.path);
-      var destPath = p.join(destDir, baseName);
-      if (File(destPath).existsSync()) {
-        final ext = p.extension(baseName);
-        final baseNoExt = p.basenameWithoutExtension(baseName);
-        var counter = 1;
-        while (File(destPath).existsSync()) {
-          destPath = p.join(destDir, '${baseNoExt}_$counter$ext');
-          counter++;
-        }
-      }
+      // 同名冲突改名：base_1.ext, base_2.ext, ...（一次 readdir 探测）
+      final destPath =
+          await _freeDestPath(destDir, p.basename(srcFile.path));
 
       // 移动：同盘 rename（原子），跨盘 rename 抛异常 → copy+delete 回退
       try {
         await srcFile.rename(destPath);
       } on FileSystemException {
-        // 跨设备：复制后删除
+        // 跨设备：复制后删除。copy 成功即算成功——delete 失败留源副本
+        // 但目标已就位，报失败会诱导用户重试、因重名走改名分支产生
+        // 重复文件（审查 P2），故 delete 独立兜底吞错。
         await srcFile.copy(destPath);
-        await srcFile.delete();
+        try {
+          await srcFile.delete();
+        } catch (_) {}
       }
       return MoveResult(success: true, finalPath: destPath);
     } catch (e) {
@@ -141,10 +138,31 @@ class DesktopFileSystem implements FileSystemRepository {
     }
   }
 
+  /// 目标目录内为 [baseName] 找一个不冲突的落点名：快路径直接 exists 探
+  /// 测原名的空位（多数场景一次往返即返回）；冲突才一次 readdir 建已有
+  /// 名集，空闲名（base_1.ext、base_2.ext…）在内存推算——NAS/慢盘上逐
+  /// 候选名逐次 exists 每步一次往返（审查 F10）。
+  Future<String> _freeDestPath(String destDir, String baseName) async {
+    final direct = p.join(destDir, baseName);
+    if (!await File(direct).exists()) return direct;
+    final taken = <String>{};
+    await for (final e in Directory(destDir).list(followLinks: false)) {
+      taken.add(p.basename(e.path));
+    }
+    if (!taken.contains(baseName)) return direct;
+    final ext = p.extension(baseName);
+    final baseNoExt = p.basenameWithoutExtension(baseName);
+    var counter = 1;
+    while (taken.contains('${baseNoExt}_$counter$ext')) {
+      counter++;
+    }
+    return p.join(destDir, '${baseNoExt}_$counter$ext');
+  }
+
   @override
   Future<bool> delete(ImageRef ref) async {
     final file = File(p.join(ref.root, ref.relativePath));
-    if (!file.existsSync()) return false;
+    if (!await file.exists()) return false;
     try {
       await file.delete();
       return true;
@@ -160,7 +178,7 @@ class DesktopFileSystem implements FileSystemRepository {
     for (final id in ids) {
       final file = File(p.join(root, id));
       try {
-        if (file.existsSync()) {
+        if (await file.exists()) {
           await file.delete();
           ok.add(id);
         }
@@ -178,28 +196,23 @@ class DesktopFileSystem implements FileSystemRepository {
     // 桌面端逐个移动：ids 是相对 root 的路径，拼成绝对路径再移。
     // （历史 bug：旧签名无 root，调用方传相对路径而实现当绝对路径用 → existsSync 恒 false → 全部 move_failed）
     final ok = <String>{};
+    // 建目标目录移出循环（原每 id 一次 create，纯重复开销）。
+    await Directory(destPath).create(recursive: true);
     for (final id in ids) {
       try {
-        await Directory(destPath).create(recursive: true);
         final srcFile = File(p.join(root, id));
-        if (srcFile.existsSync()) {
-          // 同名冲突改名：base_1.ext, base_2.ext, ...
-          var finalPath = p.join(destPath, p.basename(id));
-          if (File(finalPath).existsSync()) {
-            final ext = p.extension(id);
-            final baseNoExt = p.basenameWithoutExtension(id);
-            var counter = 1;
-            while (File(finalPath).existsSync()) {
-              finalPath = p.join(destPath, '${baseNoExt}_$counter$ext');
-              counter++;
-            }
-          }
+        if (await srcFile.exists()) {
+          // 同名冲突改名（同批次同名文件也已落盘，readdir 能看到）
+          final finalPath =
+              await _freeDestPath(destPath, p.basename(id));
           try {
             await srcFile.rename(finalPath);
           } on FileSystemException {
-            // 跨设备：复制后删除
+            // 跨设备：复制后删除（delete 失败不判败，见 move 同款注释）
             await srcFile.copy(finalPath);
-            await srcFile.delete();
+            try {
+              await srcFile.delete();
+            } catch (_) {}
           }
           ok.add(id);
         }
@@ -211,7 +224,7 @@ class DesktopFileSystem implements FileSystemRepository {
   @override
   Future<bool> exists(ImageRef ref) async {
     final file = File(p.join(ref.root, ref.relativePath));
-    return file.existsSync();
+    return file.exists();
   }
 
   @override

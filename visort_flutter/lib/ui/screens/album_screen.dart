@@ -235,7 +235,14 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     // 相册路由深度守卫：双指双桶时第二个相册页在此被发现并静默自退
     // （initState 顺序严格等于入栈顺序，判定不依赖 tap 时序）。
     // 重复页不 enter、不清 state，pop 转场从透明开始几乎无感。
-    _isDuplicateRoute = !AlbumRouteGuard.registerAndCheckFirst();
+    // ⚠️ 仅 push 路由版参与：收藏/回收站 tab（_embedded）不在路由栈，
+    // 却也走本 initState——若 register，IndexedStack 保活不 dispose 的
+    // 常驻页会把坑位永久占住，之后 push 的一切真相册页都被误判重复
+    // 静默自退（真机实证：进过收藏/回收站返回后，相册/sort 缩略图
+    // 点击"无反应" = push 即自退，2026-09-02 logcat 定类）。
+    _isDuplicateRoute = widget._embedded
+        ? false
+        : !AlbumRouteGuard.registerAndCheckFirst();
     if (_isDuplicateRoute) {
       debugPrint('[GAL] duplicate album route, self-pop bucket=${widget.bucketId}');
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -315,7 +322,9 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
 
   @override
   void dispose() {
-    AlbumRouteGuard.unregister();
+    // 对应 initState：embedded 页从未 register，不能反减坑位（会把
+    // push 路由页的守卫计数减掉，防线失效）。
+    if (!widget._embedded) AlbumRouteGuard.unregister();
     // 菜单浮层挂 rootOverlay（不随本页 dispose），主动收回防残留。
     _menuCtl?.close();
     widget.shellHandle?.onBack = null;

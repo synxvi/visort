@@ -45,6 +45,14 @@ class _WindowsKeyboardHandlerState
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
+    // 焦点守卫（审查 F12）：输入框聚焦时放行给 TextField——文件头「由
+    // FocusScope 自动处理」不成立（本 onKeyEvent 挂在 Focus 上层，子节点
+    // 未消费的键会到达这里，ESC 会同时清输入并 popUntil 清场；sort 屏
+    // 未来加输入框即踩雷）。
+    if (FocusManager.instance.primaryFocus?.context?.widget is EditableText) {
+      return KeyEventResult.ignored;
+    }
+
     // 0. ESC → 中断整理返回移动前一级页(与 AppBar 返回箭头同语义,pop
     //    保留 shell/HomeScreen 状态;会话已持久化,Home 顶部「继续」可恢复)
     if (event.logicalKey == LogicalKeyboardKey.escape) {
@@ -57,8 +65,13 @@ class _WindowsKeyboardHandlerState
     final config = ref.read(configProvider);
     final actionKeys = config.activeProfileData.actionKeys;
 
-    // 从 logicalKey 取字符
-    final keyLabel = event.logicalKey.keyLabel;
+    // 从 logicalKey 取字符。小键盘数字归一（审查 F12）：'Numpad 1' 等标签
+    // 匹配不到文件夹 key '1'；空标签键直接忽略（用户误配空 key 时不会被
+    // 无标签键意外命中）。
+    var keyLabel = event.logicalKey.keyLabel;
+    final numpad = RegExp(r'^Numpad (\d)$').firstMatch(keyLabel);
+    if (numpad != null) keyLabel = numpad.group(1)!;
+    if (keyLabel.isEmpty) return KeyEventResult.ignored;
     final key = keyLabel.toLowerCase();
 
     // 1. 文件夹 key 优先

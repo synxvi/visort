@@ -152,12 +152,11 @@ class _GalleryFileWidgetState extends State<GalleryFileWidget> {
   }
 
   void _selectedFilesListener() {
-    late bool latestSelectionState;
-    if (widget.selectedFiles?.files.contains(widget.file) ?? false) {
-      latestSelectionState = true;
-    } else {
-      latestSelectionState = false;
-    }
+    // id 口径（2026-09 审查 F7）：HDR 回填 copyWith 换新实例后，恒等
+    // contains 对新实例恒 false → 勾选圈/黑罩不显示（计数却是对的）。
+    // isFileSelected 与 SelectedFiles 真源同一 id 匹配，实例无关。
+    final latestSelectionState =
+        widget.selectedFiles?.isFileSelected(widget.file) ?? false;
     if (latestSelectionState != _isFileSelected && mounted) {
       setState(() {
         _isFileSelected = latestSelectionState;

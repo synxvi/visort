@@ -454,8 +454,17 @@ class _AndroidThumbnailProvider
       bytes = Uint8List(0);
     }
     if (bytes.isEmpty) {
-      // 回退：全图字节 + targetWidth 下采样
-      final raw = await _fs.readBytes(key.ref);
+      // 回退：全图字节 + targetWidth 下采样。同样走 ServicePolicy 限流
+      // （审查 F12）：兜底读是整图 IO，量级远大于缩略图通道，裸跑绕过
+      // 并发门会与正常管线抢带宽；优先级沿用本请求档位（滚动中清晰层
+      // 仍可被挂起，语义不变）。
+      final raw = await ServicePolicy.instance.run(
+        key.size <= kThumbnailPlaceholderSize
+            ? RequestPriority.fastThumbnail
+            : RequestPriority.sizedThumbnail,
+        () => _fs.readBytes(key.ref),
+        tag: 'thumbFallback:${key.ref.id}',
+      );
       bytes = raw is Uint8List ? raw : Uint8List.fromList(raw);
     }
     final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
