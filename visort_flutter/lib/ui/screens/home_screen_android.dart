@@ -2079,11 +2079,26 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
       await notifier.enterBucket(widget.bucket.id);
       if (!mounted) return;
       final s = container.read(galleryControllerProvider);
-      // 归属校验：await 期间 state 可能已被其他入口（Shell 切页/另一
-      // enter*）覆写——photos 已不是本桶的，取它的首张做 Hero 会与真实
-      // 终点对不上。非本桶就不起飞（直接 fade 进入，无 Hero）。
-      final photos =
-          s.bucketId == widget.bucket.id ? s.photos : const <MsImageInfo>[];
+      // 终局裁决（await 之后、push 之前——state 与路由栈此刻都是真实
+      // 落定的，判定不依赖 tap 时序）：
+      // ① state 归属：双指时两桶 enter 并发，channel 慢的大桶先发起却
+      //   后完成——赢家通吃 state，输家在此放弃导航；
+      // ② 路由栈：push 是 UI 线程同步原子操作，两个并发 tap 只可能有
+      //   一个在 push 前观测到 canPop==false——即使守卫全被绕过（
+      //   2026-09 真机实证：static 锁同毫秒双通过之谜未解），此处也
+      //   必然只放行一个。
+      // 输家不 push = 不打断赢家的 Hero flight（飞行被吃/黑 tile 残影
+      // /tile 不可点击的根源全是第二路由的 push+pop 打断飞行所致）。
+      if (s.bucketId != widget.bucket.id) {
+        debugPrint('[GAL] nav-abort(own) bucket=${widget.bucket.id} '
+            'state=${s.bucketId}');
+        return;
+      }
+      if (Navigator.of(context).canPop()) {
+        debugPrint('[GAL] nav-abort(canPop) bucket=${widget.bucket.id}');
+        return;
+      }
+      final photos = s.photos;
       if (photos.isNotEmpty) {
         final tag = 'photo_${photos[0].id}';
         setState(() => _heroTag = tag);
