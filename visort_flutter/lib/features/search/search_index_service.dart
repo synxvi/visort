@@ -193,8 +193,8 @@ class SearchIndexService extends Notifier<SearchIndexState> {
     // 断点续跑：跑批中杀进程→重开，SP 进度恢复了一半但无人再触发
     // start()（原来只有设置页手动开开关才启动）——进度卡死，必须手动
     // 关-开一次才恢复（2026-09 用户实证）。开关开着且首轮未完成时自动
-    // 重启跑批：start() 全量重跑，putAll 覆盖幂等，进度从头收敛到 done
-    // 后守闸不再触发。running 时跳过（load 保留 running 态防双循环）。
+    // 拉起 start()（差集续跑：跳过已索引 id，进度从断点继续）。running
+    // 时跳过（load 保留 running 态防双循环）。
     if (ref.read(configProvider).mlIndexEnabled &&
         !state.running &&
         !state.done) {
@@ -206,12 +206,23 @@ class SearchIndexService extends Notifier<SearchIndexState> {
 
   /// 开启索引：全量扫描提取 EXIF + 地名解析（随总开关恒开）。
   /// 已完整跑过一轮且表非空时直接复用（增量重建留待后续版本）。
+  /// 断点续跑（2026-09）：load 恢复的 [_metas] 是权威副本——已索引 id
+  /// 直接跳过，进度从断点继续而非重头（跑批中杀进程→重开的场景，
+  /// 用户实证期望续跑而非全量重跑）。mtime 变化的重提取不在此处理
+  /// （属 [syncNewPhotos] 对账职责），已删残留 id 同样由对账反向收敛。
   Future<void> start() async {
     debugPrint('[SIDX] start enter: running=${state.running} '
         'done=${state.done} metas=${_metas.length} cancel=$_cancel');
     if (state.running) return;
     if (state.done && _metas.isNotEmpty) return;
-    state = const SearchIndexState(running: true);
+    // 保留断点进度显示（扫描期间不闪回 0），扫描完成后按交集校正。
+    state = SearchIndexState(
+      running: true,
+      processed: state.processed,
+      total: state.total,
+      metaCount: _metas.length,
+      ranOnce: state.ranOnce,
+    );
     _runSeq++;
     final mySeq = _runSeq;
     _cancel = false;
@@ -232,14 +243,18 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       final mtimeById = {
         for (final p in photos) p.id: p.dateModifiedMs,
       };
+      // 差集 = 未索引的照片；已索引数即进度起点。
+      final known = _metas.keys.toSet();
+      final pending =
+          photos.where((p) => !known.contains(p.id)).map((p) => p.id).toList();
+      var done = total - pending.length;
+      debugPrint('[SIDX] resume: skip=$done pending=${pending.length}');
       final metas = <String, MsSearchMeta>{};
-      var done = 0;
-      for (var i = 0; i < total; i += _kBatchSize) {
+      for (var i = 0; i < pending.length; i += _kBatchSize) {
         if (_isStale(mySeq)) return;
-        final batch =
-            photos.skip(i).take(_kBatchSize).map((p) => p.id).toList();
+        final batch = pending.skip(i).take(_kBatchSize).toList();
         final r = await _channel.indexSearchMeta(batch);
-        debugPrint('[SIDX] batch $i: meta=${r.length}');
+        debugPrint('[SIDX] batch $i/${pending.length}: meta=${r.length}');
         if (_isStale(mySeq)) return; // 清库竞态：关开关后不再写
         var batchOut = r.values.toList();
         // 地名解析随索引恒开（用户定稿：地点识别开关已并入总开关）。
@@ -270,9 +285,14 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         );
         await _saveProgress(done, total);
       }
-      _metas = metas;
+      // 合并非覆盖：差集模式下 metas 只含本轮新增，存量来自 _metas。
+      // 全量首轮时 _metas 为空，合并结果与原覆盖语义一致。
+      _metas = {..._metas, ...metas};
       _mtimes = mtimeById;
-      debugPrint('[SIDX] finished: rows=${metas.length}');
+      // 收敛 SP（pending 为空时循环零次，此处是唯一收敛点——否则每次
+      // 冷启都会因 SP 进度未满而空转一轮全量扫描）。
+      await _saveProgress(done, total);
+      debugPrint('[SIDX] finished: rows=${_metas.length} (+${metas.length})');
     } catch (e, s) {
       // 不 rethrow：调用方（设置页 unawaited / 搜索页 .then）均无 catch，
       // rethrow 会成 unhandled async exception（子代理审查 P3）。
