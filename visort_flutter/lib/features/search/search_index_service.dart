@@ -103,6 +103,14 @@ class SearchIndexService extends Notifier<SearchIndexState> {
   final MediaStoreChannel _channel = const MediaStoreChannel();
   Map<String, MsSearchMeta> _metas = const {};
 
+  /// 复活守卫（2026-09 审查 F11）：forgetIds 命中的 id。跑批是「putAll
+  /// 先落库、落地循环再写回 _metas」，async gap 中到来的 forgetIds（应用
+  /// 内删除）会被写回复活——DB 行虽已删，内存复活后张数虚高、后续全量
+  /// 写回又把行带回 DB。写回侧跳过集合内 id 并从集合移除（一次性语义：
+  /// 此后照片重新出现属新提取，走正常写回）。规模 = 会话内删除数，无
+  /// 需主动清理；clear() 清库时一并清空。
+  final Set<String> _forgotten = {};
+
   /// 提取时各图 DATE_MODIFIED(id → ms)。增量对账第二判据：id 已知但
   /// mtime 变 → 照片被外部编辑（EXIF 可能已变）→ 重提取（审查 P1-3）。
   /// 与 `_metas` 分开存——meta 行可能是「无 EXIF 空行」（tombstone，
@@ -289,6 +297,8 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       }
       // 合并非覆盖：差集模式下 metas 只含本轮新增，存量来自 _metas。
       // 全量首轮时 _metas 为空，合并结果与原覆盖语义一致。
+      // 复活守卫：合并前滤掉跑批期间被 forgetIds 删掉的 id（F11）。
+      metas.removeWhere((id, _) => _forgotten.remove(id));
       _metas = {..._metas, ...metas};
       _mtimes = mtimeById;
       // 收敛 SP（pending 为空时循环零次，此处是唯一收敛点——否则每次
@@ -398,6 +408,8 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       out.addAll(batchOut);
     }
     for (final m in out) {
+      // 复活守卫（F11）：跑批期间被 forgetIds 删掉的 id 跳过写回。
+      if (_forgotten.remove(m.id)) continue;
       _metas[m.id] = m;
       final mt = mtimeById[m.id];
       if (mt != null) _mtimes[m.id] = mt;
@@ -452,6 +464,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         return;
       }
       for (final m in resolved) {
+        if (_forgotten.remove(m.id)) continue; // 复活守卫（F11）
         _metas[m.id] = m;
       }
       wrote = wrote || resolved.isNotEmpty;
@@ -522,12 +535,15 @@ class SearchIndexService extends Notifier<SearchIndexState> {
 
   /// 照片被删除后的索引级联清理（内存 `_metas` + DB 行 + 张数 state）。
   /// 坐标/地名属位置数据，照片删除后不应留库（安全审查：此前唯一清除
-  /// 路径是关开关）。跑批中调用也安全：正在写的批只含当时仍存在的 id，
-  /// 且各循环检查点会在下一 async gap 退出。
+  /// 路径是关开关）。跑批中调用：各循环检查点在 async gap 退出，但已
+  /// 落库批次的写回仍在后面——写回侧按 [_forgotten] 守卫跳过（F11；
+  /// 原注释称「正在写的批只含当时仍存在的 id」不成立：putAll 先落库、
+  /// 写回在循环后，中途 forget 会被写回复活）。
   Future<void> forgetIds(Set<String> ids) async {
     if (ids.isEmpty || _metas.isEmpty) return;
     final hit = _metas.keys.where(ids.contains).toSet();
     if (hit.isEmpty) return;
+    _forgotten.addAll(hit);
     for (final id in hit) {
       _metas.remove(id);
       _mtimes.remove(id);
@@ -549,6 +565,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
     _cancel = true;
     _metas = const {};
     _mtimes = {};
+    _forgotten.clear();
     await _store.clear();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kProgressKey);

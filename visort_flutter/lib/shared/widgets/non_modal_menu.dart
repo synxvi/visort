@@ -245,9 +245,13 @@ class _NonModalMenuBodyState extends State<_NonModalMenuBody>
       final box = btnCtx.findRenderObject() as RenderBox;
       btnW = box.size.width;
       final pos = box.localToGlobal(Offset.zero);
-      // 菜单右对齐按钮右缘 -8dp
+      // 菜单右对齐按钮右缘 -8dp（上限先钳非负：menuWidth 可超屏宽
+      // （大字号/窄屏），负上限进 clamp 即 ArgumentError，菜单打不开。
+      // 审查 F12）
+      final maxLeft =
+          (screen.width - widget.menuWidth).clamp(0.0, double.infinity);
       left = (pos.dx + box.size.width - widget.menuWidth - 8 + widget.offsetX)
-          .clamp(0.0, screen.width - widget.menuWidth);
+          .clamp(0.0, maxLeft);
       if (widget.upward) {
         // 向上展开：菜单底 = 按钮顶 - 4dp（Positioned.bottom 相对屏幕底）。
         // 底栏按钮下方是屏幕外，只能向上长（如大图浏览页底栏 ⋮）。

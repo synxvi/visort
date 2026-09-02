@@ -300,8 +300,10 @@ class MediaStoreChannel {
   Future<bool> hasPermission() async {
     try {
       return await _channel.invokeMethod<bool>('hasPermission') ?? false;
-    } catch (_) {
+    } on PlatformException {
       return false;
+    } on MissingPluginException {
+      return false; // 非安卓端无 channel handler（降级为无权限）
     }
   }
 
@@ -309,8 +311,10 @@ class MediaStoreChannel {
   Future<bool> requestPermission() async {
     try {
       return await _channel.invokeMethod<bool>('requestPermission') ?? false;
-    } catch (_) {
+    } on PlatformException {
       return false;
+    } on MissingPluginException {
+      return false; // 非安卓端无 channel handler
     }
   }
 
@@ -319,8 +323,10 @@ class MediaStoreChannel {
   Future<void> openAppSettings() async {
     try {
       await _channel.invokeMethod<bool>('openAppSettings');
-    } catch (_) {
+    } on PlatformException {
       // 跳转失败静默（无 Activity 等极端场景）
+    } on MissingPluginException {
+      // 非安卓端无 channel handler
     }
   }
 
@@ -331,8 +337,10 @@ class MediaStoreChannel {
     try {
       return await _channel.invokeMethod<bool>('requestAccessMediaLocation') ??
           false;
-    } catch (_) {
+    } on PlatformException {
       return false;
+    } on MissingPluginException {
+      return false; // 非安卓端无 channel handler
     }
   }
 
@@ -451,7 +459,10 @@ class MediaStoreChannel {
   Future<MsMetaInfo> readMeta(String id) async {
     try {
       final raw = await _channel.invokeMethod<Map>('readMeta', {'id': id});
-      if (raw == null) throw Exception('readMeta 返回 null');
+      // 裸 Exception 换 MsException（审查 F12）：调用方 on MsException 接不住
+      if (raw == null) {
+        throw const MsException(MsErrorCode.unknown, 'readMeta 返回 null');
+      }
       return MsMetaInfo(
         name: raw['name'] as String,
         size: (raw['size'] as num).toInt(),
@@ -527,7 +538,7 @@ class MediaStoreChannel {
             MapEntry(k2.toString(), v2.toString()));
         return MapEntry(g.toString(), inner);
       });
-    } on PlatformException catch (_) {
+    } on PlatformException {
       return const {};
     }
   }
@@ -539,7 +550,12 @@ class MediaStoreChannel {
       return await _channel
           .invokeMethod<bool>(
               'requestFavorite', {'ids': ids, 'favorite': favorite})
-          .timeout(_kConsentTimeout) ?? false;
+          .timeout(_kConsentTimeout,
+              // 超时转 MsException（审查 F12）：调用方 on MsException 接
+              // 不住裸 TimeoutException。
+              onTimeout: () => throw const MsException(
+                  MsErrorCode.unknown, '系统弹窗确认超时')) ??
+          false;
     } on PlatformException catch (e) {
       throw _convertError(e);
     }
@@ -550,7 +566,12 @@ class MediaStoreChannel {
     try {
       return await _channel
           .invokeMethod<bool>('requestTrash', {'ids': ids})
-          .timeout(_kConsentTimeout) ?? false;
+          .timeout(_kConsentTimeout,
+              // 超时转 MsException（审查 F12）：调用方 on MsException 接
+              // 不住裸 TimeoutException。
+              onTimeout: () => throw const MsException(
+                  MsErrorCode.unknown, '系统弹窗确认超时')) ??
+          false;
     } on PlatformException catch (e) {
       throw _convertError(e);
     }
@@ -561,7 +582,12 @@ class MediaStoreChannel {
     try {
       return await _channel
           .invokeMethod<bool>('requestRestore', {'ids': ids})
-          .timeout(_kConsentTimeout) ?? false;
+          .timeout(_kConsentTimeout,
+              // 超时转 MsException（审查 F12）：调用方 on MsException 接
+              // 不住裸 TimeoutException。
+              onTimeout: () => throw const MsException(
+                  MsErrorCode.unknown, '系统弹窗确认超时')) ??
+          false;
     } on PlatformException catch (e) {
       throw _convertError(e);
     }
@@ -572,7 +598,10 @@ class MediaStoreChannel {
     try {
       final raw = await _channel.invokeMethod<Uint8List>(
           'readBytes', {'id': id, 'maxBytes': maxBytes});
-      if (raw == null) throw Exception('readBytes 返回 null');
+      // 裸 Exception 换 MsException（审查 F12）
+      if (raw == null) {
+        throw const MsException(MsErrorCode.unknown, 'readBytes 返回 null');
+      }
       return raw;
     } on PlatformException catch (e) {
       throw _convertError(e);
@@ -611,7 +640,11 @@ class MediaStoreChannel {
     try {
       final raw = await _channel.invokeMethod<Map<dynamic, dynamic>>(
           'readSampledImage', {'id': id, 'targetWidth': targetWidth});
-      if (raw == null) throw Exception('readSampledImage 返回 null');
+      // 裸 Exception 换 MsException（审查 F12）
+      if (raw == null) {
+        throw const MsException(
+            MsErrorCode.unknown, 'readSampledImage 返回 null');
+      }
       return (
         pixels: raw['pixels'] as Uint8List,
         width: (raw['width'] as num).toInt(),
@@ -775,7 +808,9 @@ class MediaStoreChannel {
   Future<bool> exists(String id) async {
     try {
       return await existsStatus(id) == MsExistsStatus.found;
-    } catch (_) {
+    } on MsException {
+      // 契约：「失败按不存在处理」仅限查询失败（MsException），编程错误
+      // 不吞（审查 F12 收窄）。
       return false;
     }
   }
@@ -786,7 +821,12 @@ class MediaStoreChannel {
     try {
       return await _channel
           .invokeMethod<int>('requestDelete', {'ids': ids})
-          .timeout(_kConsentTimeout) ?? 0;
+          .timeout(_kConsentTimeout,
+              // 超时转 MsException（审查 F12）：调用方 on MsException 接
+              // 不住裸 TimeoutException。
+              onTimeout: () => throw const MsException(
+                  MsErrorCode.unknown, '系统弹窗确认超时')) ??
+          0;
     } on PlatformException catch (e) {
       if (e.code == 'DELETE_CANCELLED') {
         throw const MsDeleteCancelledException();
@@ -809,8 +849,10 @@ class MediaStoreChannel {
   Future<bool> hasManageMedia() async {
     try {
       return await _channel.invokeMethod<bool>('hasManageMedia') ?? false;
-    } catch (_) {
+    } on PlatformException {
       return false;
+    } on MissingPluginException {
+      return false; // 非安卓端无 channel handler
     }
   }
 
@@ -818,8 +860,10 @@ class MediaStoreChannel {
   Future<bool> requestManageMedia() async {
     try {
       return await _channel.invokeMethod<bool>('requestManageMedia') ?? false;
-    } catch (_) {
+    } on PlatformException {
       return false;
+    } on MissingPluginException {
+      return false; // 非安卓端无 channel handler
     }
   }
 
@@ -831,10 +875,15 @@ class MediaStoreChannel {
   /// Android 11+ 对其他 app 的文件会弹系统确认窗。
   Future<List<String>> requestMove(List<String> ids, String relativePath) async {
     try {
+      // 超时结果未知（审查 F12 注记）：超时只代表「弹窗未在时限内确认」，
+      // native 侧可能仍在执行且部分文件已物理移动——调用方按全败回滚
+      // 会与磁盘脱节，须知情处理。
       final raw = await _channel
           .invokeMethod<List<dynamic>>(
               'requestMove', {'ids': ids, 'relativePath': relativePath})
-          .timeout(_kConsentTimeout);
+          .timeout(_kConsentTimeout,
+              onTimeout: () => throw const MsException(MsErrorCode.unknown,
+                  '移动系统弹窗确认超时（结果未知，可能已部分移动）'));
       return raw?.cast<String>() ?? const [];
     } on PlatformException catch (e) {
       throw _convertError(e);
@@ -848,7 +897,12 @@ class MediaStoreChannel {
     try {
       return await _channel
           .invokeMethod<int>('requestRename', {'id': id, 'newName': newName})
-          .timeout(_kConsentTimeout) ?? 0;
+          .timeout(_kConsentTimeout,
+              // 超时转 MsException（审查 F12）：调用方 on MsException 接
+              // 不住裸 TimeoutException。
+              onTimeout: () => throw const MsException(
+                  MsErrorCode.unknown, '系统弹窗确认超时')) ??
+          0;
     } on PlatformException catch (e) {
       throw _convertError(e);
     }
@@ -860,8 +914,10 @@ class MediaStoreChannel {
       return await _channel.invokeMethod<bool>(
               'nameExists', {'id': id, 'newName': newName}) ??
           false;
-    } catch (_) {
+    } on PlatformException {
       return false;
+    } on MissingPluginException {
+      return false; // 非安卓端无 channel handler
     }
   }
 

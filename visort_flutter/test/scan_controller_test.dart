@@ -144,7 +144,7 @@ void main() {
   });
 
   group('重入保护', () {
-    test('首扫进行中第二次 scan 直接返回 null 且不重复扫描', () async {
+    test('首扫进行中第二次 scan 返回 scan_busy 且不重复扫描', () async {
       final slow = _FakeFs(
         images: [_img('a.jpg')],
         scanDelay: const Duration(milliseconds: 100),
@@ -162,7 +162,8 @@ void main() {
       );
       // 等扫描真正启动（_scanning 已置位）
       await slow._scanStarted.future;
-      // 第二次：应立即返回 null（重入拦截，不重复扫描）
+      // 第二次：立即返回专用 key（审查 F12：null=成功哨兵，会让 UI 误判
+      // 成功带旧 session 进 sort 页）
       final r2 = await ctrl.scan(
         source: const [r'D:\src'],
         sourceRoot: r'D:\src',
@@ -170,7 +171,7 @@ void main() {
         recursive: true,
         config: _config(),
       );
-      expect(r2, isNull);
+      expect(r2, 'scan_busy');
       expect(slow.scanCalls, 1); // 只扫了一次
       await f1; // 首扫完成
       expect(slow.scanCompleted, 1);

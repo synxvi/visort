@@ -477,37 +477,52 @@ class AppConfig {
       albumSortBy: _parseSortBy(json['album_sort_by'] ?? json['albumSortBy'],
           SortBy.name),
       albumSortAsc:
-          (json['album_sort_asc'] ?? json['albumSortAsc'] as bool?) ?? true,
+          _jsonBool(json['album_sort_asc'], json['albumSortAsc'], true),
       photoSortBy: _parseSortBy(json['photo_sort_by'] ?? json['photoSortBy'],
           SortBy.dateCreated),
       photoSortAsc:
-          (json['photo_sort_asc'] ?? json['photoSortAsc'] as bool?) ?? false,
-      photoTimelineView: (json['photo_timeline_view'] as bool?) ?? false,
+          _jsonBool(json['photo_sort_asc'], json['photoSortAsc'], false),
+      photoTimelineView: _jsonBool(json['photo_timeline_view'], null, false),
       homeLayout: _parseHomeLayout(
           json['home_layout'] ?? json['homeLayout'], HomeLayout.grid),
       homeGridColumns:
-          (json['home_grid_columns'] ?? json['homeGridColumns'] as int?) ?? 3,
+          _jsonInt(json['home_grid_columns'], json['homeGridColumns'], 3),
       photoGridColumns:
-          (json['photo_grid_columns'] ?? json['photoGridColumns'] as int?) ??
-              4,
-      favoritesGridColumns:
-          (json['favorites_grid_columns'] as int?) ?? 4,
-      trashGridColumns: (json['trash_grid_columns'] as int?) ?? 4,
-      precacheEnabled: (json['precache_enabled'] as bool?) ?? true,
-      precacheQuotaMb: (json['precache_quota_mb'] as int?) ?? 1024,
-      mlIndexEnabled: (json['ml_index_enabled'] as bool?) ?? false,
-      mlFaceEnabled: (json['ml_face_enabled'] as bool?) ?? false,
+          _jsonInt(json['photo_grid_columns'], json['photoGridColumns'], 4),
+      favoritesGridColumns: _jsonInt(json['favorites_grid_columns'], null, 4),
+      trashGridColumns: _jsonInt(json['trash_grid_columns'], null, 4),
+      precacheEnabled: _jsonBool(json['precache_enabled'], null, true),
+      precacheQuotaMb: _jsonInt(json['precache_quota_mb'], null, 1024),
+      mlIndexEnabled: _jsonBool(json['ml_index_enabled'], null, false),
+      mlFaceEnabled: _jsonBool(json['ml_face_enabled'], null, false),
       drawerAnimSpeed: _parseDrawerAnimSpeed(
           json['drawer_anim_speed'], DrawerAnimSpeed.fast),
       defaultHomePage: _parseDefaultHomePage(
           json['default_home_page'], DefaultHomePage.gallery),
       galleryLayout: _parseHomeLayout(
           json['gallery_layout'], HomeLayout.grid),
-      galleryGridColumns:
-          (json['gallery_grid_columns'] as int?) ?? 3,
+      galleryGridColumns: _jsonInt(json['gallery_grid_columns'], null, 3),
     );
   }
 }
+
+/// JSON 标量容错取值（2026-09 审查 F12）：SP JSON 手工编辑/旧格式下类型
+/// 漂移（如 bool 存成 0/1）时，原 `a ?? b as bool?` / `as int?` 硬 cast
+/// 形态的 `as` 对非 null 错类型直接抛 TypeError → 整个 fromJson 失败 →
+/// 全部 profiles 回退默认（单标量损坏放大成全量丢配置）。此处按实际
+/// 类型收敛，认不出的回退 [fallback]。
+bool _jsonBool(Object? a, Object? b, bool fallback) => switch (a ?? b) {
+      final bool v => v,
+      final int v => v != 0,
+      final String v => v == 'true' || v == '1',
+      _ => fallback,
+    };
+
+int _jsonInt(Object? a, Object? b, int fallback) => switch (a ?? b) {
+      final int v => v,
+      final String v => int.tryParse(v) ?? fallback,
+      _ => fallback,
+    };
 
 DrawerAnimSpeed _parseDrawerAnimSpeed(
     Object? value, DrawerAnimSpeed fallback) {

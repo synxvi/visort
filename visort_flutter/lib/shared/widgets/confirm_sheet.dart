@@ -35,15 +35,43 @@ ConfirmSheetSession showConfirmSheet(
   final target = ValueNotifier<double>(1);
   final completer = Completer<bool>();
   late final OverlayEntry entry;
+
+  // 路由生命周期（2026-09 审查 F8）：裸 OverlayEntry 挂 root Overlay 不
+  // 感知路由——本页被新页 push 覆盖（secondary > 0）或自身被 pop（animation
+  // reverse；settings 无 PopScope，安卓返回直退）时 sheet 残留上层。
+  // 监听调用方路由的进出场动画，偏离前台即随路由一起关（搬 non_modal_menu
+  // 范式并补 pop 分支）。close 幂等，动画期间重复触发无副作用。
+  //
+  // close 与路由监听互引（close 移除监听 / onRouteChanged 触发 close），
+  // 经 detach 槽解开声明顺序：close 内经槽调用，槽在 onRouteChanged/
+  // detachRoute 声明后填充（close 首次调用是事件驱动，届时已填充）。
+  final route = ModalRoute.of(context);
+  final routeAnim = route?.animation;
+  final routeSecondary = route?.secondaryAnimation;
+  void Function()? detachRouteRef;
+
   void close(bool confirmed) {
     if (completer.isCompleted) return;
     completer.complete(confirmed);
+    detachRouteRef?.call();
     target.value = 0;
     Future.delayed(const Duration(milliseconds: 220), () {
       entry.remove();
       target.dispose();
     });
   }
+
+  void onRouteChanged() {
+    final leaving = routeAnim?.status == AnimationStatus.reverse ||
+        (routeSecondary?.value ?? 0) > 0;
+    if (leaving) close(false);
+  }
+
+  void detachRoute() {
+    routeAnim?.removeListener(onRouteChanged);
+    routeSecondary?.removeListener(onRouteChanged);
+  }
+  detachRouteRef = detachRoute;
 
   entry = OverlayEntry(
     builder: (_) => ValueListenableBuilder<double>(
@@ -65,6 +93,8 @@ ConfirmSheetSession showConfirmSheet(
       ),
     ),
   );
+  routeAnim?.addListener(onRouteChanged);
+  routeSecondary?.addListener(onRouteChanged);
   Overlay.of(context).insert(entry);
   return ConfirmSheetSession(
     confirmed: completer.future,

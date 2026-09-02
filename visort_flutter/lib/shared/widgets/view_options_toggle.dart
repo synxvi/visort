@@ -126,10 +126,11 @@ class _ViewOptionsToggleState extends ConsumerState<ViewOptionsToggle>
       // 弹簧起点 = 按钮中心 × 面板顶边（与首页 ⋮ / 设置 ▾ 一致）
       anchorGlobalDx: pos.dx + box.size.width / 2,
       anchorGlobalDy: pos.dy + box.size.height + 4,
-      // 面板右缘离按钮右缘 8dp（不贴屏幕右边）
+      // 面板右缘离按钮右缘 8dp（不贴屏幕右边；上限先钳非负——menuWidth
+      // 可超屏宽（大字号/窄屏），负上限进 clamp 即 ArgumentError，审查 F12）
       menuLeft: (pos.dx + box.size.width - menuWidth - 8).clamp(
         0.0,
-        screen.width - menuWidth,
+        (screen.width - menuWidth).clamp(0.0, double.infinity),
       ),
       menuTop: pos.dy + box.size.height + 4,
       menuWidth: menuWidth,

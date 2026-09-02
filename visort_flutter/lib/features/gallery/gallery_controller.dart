@@ -195,10 +195,20 @@ class GalleryController extends Notifier<GalleryState> {
 
   /// 桶快照磁盘 store(P1:SQLite bucket_snapshot/bucket_photo 表)。
   /// 旧方案(SharedPreferences 整桶 JSON)已废弃,见 gallery_snapshot_store.dart。
-  late final GallerySnapshotStore _snapshotStore;
+  /// (F13) 惰性 getter 而非 late final+build() 内赋值：Notifier.build()
+  /// 每次 invalidate 重跑，late final 二次赋值即 LateInitializationError；
+  /// store 与 state 无关（薄封装 database Future），首用时建一次、跨
+  /// build 复用。
+  GallerySnapshotStore? _snapshotStoreInst;
+  GallerySnapshotStore get _snapshotStore =>
+      _snapshotStoreInst ??= GallerySnapshotStore(
+          ref.read(databaseServiceProvider).database);
 
   /// HDR 检测磁盘 store(v2:hdr_cache 表,Kotlin 进程内缓存的落盘层)。
-  late final HdrCacheStore _hdrStore;
+  HdrCacheStore? _hdrStoreInst;
+  HdrCacheStore get _hdrStore =>
+      _hdrStoreInst ??=
+          HdrCacheStore(ref.read(databaseServiceProvider).database);
 
   /// HDR 补测分批大小:一批 ≈ 数十 ms(60 张 × 64KB 头读),到货即回填——
   /// 首屏徽标不等全桶长尾(对齐 Kotlin detectHdrs 注释的分页语义)。
@@ -217,9 +227,6 @@ class GalleryController extends Notifier<GalleryState> {
   @override
   GalleryState build() {
     final config = ref.read(configProvider);
-    _snapshotStore = GallerySnapshotStore(
-        ref.read(databaseServiceProvider).database);
-    _hdrStore = HdrCacheStore(ref.read(databaseServiceProvider).database);
     // 订阅 MediaStore 变更：图库增删时静默刷新当前视图。
     // 通过 provider 取流，便于测试 override（绕过 EventChannel）。
     // 非安卓端 EventChannel 无 handler，订阅 onError 静默忽略。

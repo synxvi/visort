@@ -7,12 +7,13 @@
 //     拿到 null 后 noop,app 行为回到无持久化现状,永不因 DB 故障崩溃。
 //   - 时序: main() 以 unawaited 预热 init();store 一律经 [database] getter
 //     (幂等,未初始化会自行 await init),与预热双保险,无竞态。
-//   - 版本策略(2026-08 简化): 无存量用户,每次构建 DB 均为初始状态,
-//     不维护迁移路径——schema 变更直接改 [createAll] 全量 DDL 并升
-//     kDbVersion;老版本库由 sqflite 默认 onDowngrade(删库重建)兜底。
+//   - 版本策略(2026-08 简化, 2026-09 修订): schema 变更直接改 [createAll]
+//     全量 DDL 并升 kDbVersion;升版库走 onUpgrade 重放全表 IF NOT EXISTS
+//     DDL(幂等,只补缺失表不动旧数据),列级变更仍用 ALTER+try-catch;
+//     高版本老库降级由 sqflite 默认 onDowngrade(删库重建)兜底。
 //     (历史教训: v5 曾把新列写进 _createSortTables 又在 onUpgrade 里
-//     ALTER 同名列, v1/v2 库升级必炸 duplicate column——迁移路径整体
-//     废弃后此类问题不复存在。)
+//     ALTER 同名列, v1/v2 库升级必炸 duplicate column——故 DDL 与 ALTER
+//     职责分离,ALTER 只做加列且容忍 duplicate。)
 
 import 'dart:io' show Platform;
 
@@ -87,17 +88,21 @@ class DatabaseService {
     await createAll(db);
   }
 
-  /// 逐版补建(onUpgrade):每版只建自己新增的表/索引,IF NOT EXISTS
-  /// 幂等——与 createAll 中该版 DDL 保持同一份语句。
+  /// 升级补建(onUpgrade)：对全部表重放 createAll 的 IF NOT EXISTS DDL——
+  /// 幂等，缺失表补齐、已有表（含旧 schema）原样不动。
+  ///
+  /// (2026-09 审查 F9) 原逐版补建只覆盖 search_index：v1/v2 装机
+  /// （onUpgrade 尚未存在或只建 search_index 的年代）直升当前版后
+  /// sort_session/hdr_cache/run_log 等表缺失，被 store 裸 catch(_) 吞成
+  /// 「会话持久化/Run 历史静默失效」。全表重放一并兜住。
   static Future<void> _onUpgrade(
       sqflite.Database db, int oldVersion, int newVersion) async {
-    if (oldVersion < 2) {
-      await createSearchIndexTable(db);
-    }
+    await createAll(db);
     if (oldVersion < 3) {
       // v3: 索引行加提取时的 DATE_MODIFIED——增量对账据它检测「照片
-      // 被外部编辑(EXIF 变更)后重提取」。ALTER 无 IF NOT EXISTS,v2 库
-      // 必无此列;try-catch 防 duplicate column 意外(历史教训)。
+      // 被外部编辑(EXIF 变更)后重提取」。ALTER 无 IF NOT EXISTS；列已
+      // 存在（上一步 createSearchIndexTable 新建即含此列）时 duplicate
+      // column 意外由 try-catch 吞掉(历史教训)。
       try {
         await db.execute(
             'ALTER TABLE search_index ADD COLUMN date_modified_ms INTEGER');
@@ -113,7 +118,7 @@ class DatabaseService {
     // snapshot 行携带分页游标与排序(快照总是某排序下的列表前缀);
     // photo 行复用 MsImageInfo 字段,seq 保列表序(恢复顺序)。
     await db.execute('''
-      CREATE TABLE bucket_snapshot (
+      CREATE TABLE IF NOT EXISTS bucket_snapshot (
         bucket_id   TEXT PRIMARY KEY,
         sort_by     TEXT NOT NULL,
         asc         INTEGER NOT NULL,
@@ -122,7 +127,7 @@ class DatabaseService {
       )
     ''');
     await db.execute('''
-      CREATE TABLE bucket_photo (
+      CREATE TABLE IF NOT EXISTS bucket_photo (
         bucket_id       TEXT NOT NULL,
         id              TEXT NOT NULL,
         seq             INTEGER NOT NULL,
@@ -142,7 +147,7 @@ class DatabaseService {
     ''');
     // ── v2: HDR 检测缓存 ──
     await db.execute('''
-      CREATE TABLE hdr_cache (
+      CREATE TABLE IF NOT EXISTS hdr_cache (
         id               TEXT PRIMARY KEY,
         date_modified_ms INTEGER NOT NULL,
         is_hdr           INTEGER NOT NULL
@@ -187,7 +192,7 @@ class DatabaseService {
   /// (恢复时按 seq 重建 LinkedHashMap,undo 弹末位)。
   static Future<void> _createSortTables(sqflite.Database db) async {
     await db.execute('''
-      CREATE TABLE sort_session (
+      CREATE TABLE IF NOT EXISTS sort_session (
         id                INTEGER PRIMARY KEY,
         created_at        INTEGER NOT NULL,
         source_dir        TEXT NOT NULL,
@@ -199,7 +204,7 @@ class DatabaseService {
       )
     ''');
     await db.execute('''
-      CREATE TABLE sort_image (
+      CREATE TABLE IF NOT EXISTS sort_image (
         session_id  INTEGER NOT NULL,
         image_id    TEXT NOT NULL,
         seq         INTEGER NOT NULL,
@@ -210,7 +215,7 @@ class DatabaseService {
       ) WITHOUT ROWID
     ''');
     await db.execute('''
-      CREATE TABLE sort_decision (
+      CREATE TABLE IF NOT EXISTS sort_decision (
         session_id INTEGER NOT NULL,
         image_id   TEXT NOT NULL,
         seq        INTEGER NOT NULL,
@@ -228,7 +233,7 @@ class DatabaseService {
   /// 日志行仅存摘要语义(计数 + errors),不悬挂关联查询。
   static Future<void> _createRunLogTable(sqflite.Database db) async {
     await db.execute('''
-      CREATE TABLE run_log (
+      CREATE TABLE IF NOT EXISTS run_log (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id  INTEGER,
         finished_at INTEGER NOT NULL,
