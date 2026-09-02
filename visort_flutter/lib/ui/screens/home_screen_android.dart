@@ -2042,36 +2042,54 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
     if (_interceptIfEditing()) return;
     widget.onCheckToggle();
   }
+  /// 导航防重入：enterBucket→读 state→push 是一长串 async——双指同时点
+  /// 两个 tile 时两次并发执行，两边都会从【同一个共享 state】读 photos[0]
+  /// 设 Hero tag → 两 tile 同 tag + 与相册页照片网格的 photo_ tag 冲突。
+  /// duplicate-hero 的检查是 assert（release 不拦）→ release 静默渲染成
+  /// 黑占位网格/黑 tile 且不可点（2026-09 真机实证）。只认第一次点击。
+  bool _navInFlight = false;
+
   Future<void> _openAlbum() async {
+    if (_navInFlight) return;
     if (_interceptIfEditing()) return;
     // 选择模式（本组已有相册勾选）：点击改为勾选/取消本相册，不进入浏览
     if (widget.selectionMode) {
       widget.onCheckToggle();
       return;
     }
-    // [ente 对齐] 相册打开 = 200ms fade + 封面 Hero 飞行（封面↔网格第一张图）。
-    // 先 await enterBucket：push 时网格第一张 cell 必须已存在（Hero 终点），
-    // 否则 flight 不启动（异步查询错过动画窗口）。快照命中秒回。
-    // _HomeBucketTileState 非 Consumer，用 containerOf 读 controller。
-    final container = ProviderScope.containerOf(context);
-    final notifier = container.read(galleryControllerProvider.notifier);
-    await notifier.enterBucket(widget.bucket.id);
-    if (!mounted) return;
-    final photos = container.read(galleryControllerProvider).photos;
-    if (photos.isNotEmpty) {
-      final tag = 'photo_${photos[0].id}';
-      setState(() => _heroTag = tag);
-      widget.onFlightStart?.call(tag);
+    _navInFlight = true;
+    try {
+      // [ente 对齐] 相册打开 = 200ms fade + 封面 Hero 飞行（封面↔网格第一张图）。
+      // 先 await enterBucket：push 时网格第一张 cell 必须已存在（Hero 终点），
+      // 否则 flight 不启动（异步查询错过动画窗口）。快照命中秒回。
+      // _HomeBucketTileState 非 Consumer，用 containerOf 读 controller。
+      final container = ProviderScope.containerOf(context);
+      final notifier = container.read(galleryControllerProvider.notifier);
+      await notifier.enterBucket(widget.bucket.id);
+      if (!mounted) return;
+      final s = container.read(galleryControllerProvider);
+      // 归属校验：await 期间 state 可能已被其他入口（Shell 切页/另一
+      // enter*）覆写——photos 已不是本桶的，取它的首张做 Hero 会与真实
+      // 终点对不上。非本桶就不起飞（直接 fade 进入，无 Hero）。
+      final photos =
+          s.bucketId == widget.bucket.id ? s.photos : const <MsImageInfo>[];
+      if (photos.isNotEmpty) {
+        final tag = 'photo_${photos[0].id}';
+        setState(() => _heroTag = tag);
+        widget.onFlightStart?.call(tag);
+      }
+      final args = {
+        'bucketId': widget.bucket.id,
+        'bucketName': widget.bucket.name,
+        'bucketCount': widget.bucket.count,
+      };
+      await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
+      if (mounted) widget.onFlightStart?.call(''); // 清除
+      // 从相册返回：刷新封面/数量（相册内可能删除了图片/改了排序）
+      widget.onAlbumReturned?.call();
+    } finally {
+      _navInFlight = false;
     }
-    final args = {
-      'bucketId': widget.bucket.id,
-      'bucketName': widget.bucket.name,
-      'bucketCount': widget.bucket.count,
-    };
-    await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
-    if (mounted) widget.onFlightStart?.call(''); // 清除
-    // 从相册返回：刷新封面/数量（相册内可能删除了图片/改了排序）
-    widget.onAlbumReturned?.call();
   }
 
   Widget _buildGrid() {

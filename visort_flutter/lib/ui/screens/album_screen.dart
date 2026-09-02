@@ -256,6 +256,8 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       } else if (widget.trashedOnly) {
         ref.read(galleryControllerProvider.notifier).enterTrash();
       } else {
+        // [GAL] 双指双桶黑占位排查打点：每页 postFrame 各自触发一次 enter。
+        debugPrint('[GAL] album-init bucket=${widget.bucketId}');
         ref
             .read(galleryControllerProvider.notifier)
             .enterBucket(widget.bucketId);

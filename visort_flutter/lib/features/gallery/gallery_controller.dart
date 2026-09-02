@@ -325,19 +325,20 @@ class GalleryController extends Notifier<GalleryState> {
   /// 占位灰格（UI 层按 firstPageLoaded=false 渲染），第一页到达后填充。
   Future<void> enterBucket(String bucketId, {bool silent = false}) async {
     final token = ++_loadToken;
+    // [GAL] 双指双桶黑占位排查：全链路打点（进桶低频，日志量可控）。
+    debugPrint('[GAL] enter bucket=$bucketId token=$token silent=$silent');
     var snap = _bucketSnapshots[bucketId];
     if (snap == null) {
       // 内存 miss（杀后台后进程重建）：尝试磁盘快照秒出，对标系统相册 loadFromCache。
       snap = await _loadDiskSnapshot(bucketId);
+      debugPrint('[GAL] snap-disk bucket=$bucketId hit=${snap != null} '
+          'token=$token now=$_loadToken');
       // await（SQLite 读）期间用户可能已切桶/切视图：token 失配则本次
       // enter 整体作废。若继续写旧桶视图，下方 _refreshBucketPage 里
       // `state.bucketId != bucketId` 守卫会把新桶结果也一并丢弃，界面
       // 永久卡在没点过的桶（审查 P1）。
       if (token != _loadToken) {
-        // [GAL] 低频路径打点：双指双桶等并发进桶时的失配取证（2026-09
-        // 黑占位问题排查留观——若黑块与竞态相关，此行即 smoking gun）。
-        debugPrint('[GAL] enterBucket stale-return bucket=$bucketId '
-            'token=$token now=$_loadToken');
+        debugPrint('[GAL] stale-return bucket=$bucketId');
         return;
       }
       if (snap != null) _bucketSnapshots[bucketId] = snap;
@@ -347,6 +348,7 @@ class GalleryController extends Notifier<GalleryState> {
         snap.asc == state.photoSortAsc;
     if (!silent && snapValid) {
       // 快照直出：旧网格立即可见（缩略图仍在 ImageCache，秒开），后台刷新替换。
+      debugPrint('[GAL] snap-apply bucket=$bucketId n=${snap.photos.length}');
       state = state.copyWith(
         view: GalleryView.bucket,
         bucketId: bucketId,
@@ -358,6 +360,7 @@ class GalleryController extends Notifier<GalleryState> {
       await _refreshBucketPage(bucketId, token);
       return;
     }
+    debugPrint('[GAL] query bucket=$bucketId silent=$silent');
     state = state.copyWith(
       view: GalleryView.bucket,
       bucketId: bucketId,
@@ -375,9 +378,14 @@ class GalleryController extends Notifier<GalleryState> {
         sortBy: state.effectivePhotoSortBy,
         asc: state.photoSortAsc,
       );
-      if (token != _loadToken || state.bucketId != bucketId) return;
+      if (token != _loadToken || state.bucketId != bucketId) {
+        debugPrint('[GAL] page-drop bucket=$bucketId n=${page.images.length} '
+            'token=$token now=$_loadToken stateBucket=${state.bucketId}');
+        return;
+      }
       _applyBucketPage(bucketId, token, page);
     } catch (e) {
+      debugPrint('[GAL] error bucket=$bucketId $e');
       if (token != _loadToken) return;
       state = state.copyWith(error: 'load_failed');
     }
@@ -393,9 +401,15 @@ class GalleryController extends Notifier<GalleryState> {
         sortBy: state.effectivePhotoSortBy,
         asc: state.photoSortAsc,
       );
-      if (token != _loadToken || state.bucketId != bucketId) return;
+      if (token != _loadToken || state.bucketId != bucketId) {
+        debugPrint('[GAL] page-drop(refresh) bucket=$bucketId '
+            'n=${page.images.length} token=$token now=$_loadToken '
+            'stateBucket=${state.bucketId}');
+        return;
+      }
       _applyBucketPage(bucketId, token, page);
     } catch (e) {
+      debugPrint('[GAL] error(refresh) bucket=$bucketId $e');
       if (token != _loadToken) return;
       state = state.copyWith(error: 'load_failed');
     }
@@ -403,6 +417,7 @@ class GalleryController extends Notifier<GalleryState> {
 
   /// 应用第一页结果 + 更新桶快照（供下次直出）。
   void _applyBucketPage(String bucketId, int token, MsScanPage page) {
+    debugPrint('[GAL] apply bucket=$bucketId n=${page.images.length}');
     state = state.copyWith(
       photos: page.images,
       nextCursor: page.nextCursor,
