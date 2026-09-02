@@ -93,6 +93,12 @@ class SearchIndexService extends Notifier<SearchIndexState> {
 
   final MediaStoreChannel _channel = const MediaStoreChannel();
   Map<String, MsSearchMeta> _metas = const {};
+
+  /// 提取时各图 DATE_MODIFIED(id → ms)。增量对账第二判据：id 已知但
+  /// mtime 变 → 照片被外部编辑（EXIF 可能已变）→ 重提取（审查 P1-3）。
+  /// 与 `_metas` 分开存——meta 行可能是「无 EXIF 空行」（tombstone，
+  /// P1-4），mtime 对空行同样有效。
+  Map<String, int> _mtimes = {};
   bool _cancel = false;
 
   /// run 世代：每次新跑批（start/syncNewPhotos/resolvePendingPlaces）
@@ -130,7 +136,8 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       await prefs.remove(k);
     }
     _metas = await _store.loadAll();
-    debugPrint('[SIDX] load: metas=${_metas.length}');
+    _mtimes = await _store.loadMtimes();
+    debugPrint('[SIDX] load: metas=${_metas.length} mtimes=${_mtimes.length}');
     final prog = prefs.getString(_kProgressKey);
     if (prog != null) {
       final parts = prog.split('/');
@@ -178,6 +185,9 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       final photos = await scanAllImages(_channel);
       debugPrint('[SIDX] scanned ${photos.length} photos');
       final total = photos.length;
+      final mtimeById = {
+        for (final p in photos) p.id: p.dateModifiedMs,
+      };
       final metas = <String, MsSearchMeta>{};
       var done = 0;
       for (var i = 0; i < total; i += _kBatchSize) {
@@ -197,7 +207,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         for (final m in batchOut) {
           metas[m.id] = m;
         }
-        await _store.putAll(batchOut);
+        await _store.putAll(batchOut, mtimes: mtimeById);
         if (_isStale(mySeq)) return; // putAll 同为 async gap，落地后复查
         done += batch.length;
         state = SearchIndexState(
@@ -209,6 +219,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         await _saveProgress(done, total);
       }
       _metas = metas;
+      _mtimes = mtimeById;
       debugPrint('[SIDX] finished: rows=${metas.length}');
     } catch (e, s) {
       // 不 rethrow：调用方（设置页 unawaited / 搜索页 .then）均无 catch，
@@ -233,22 +244,47 @@ class SearchIndexService extends Notifier<SearchIndexState> {
   bool _isStale(int mySeq) => _cancel || mySeq != _runSeq;
 
   /// 前台增量对账（[precache 对齐] 缩略图缓存「前台增量」同款模式）：
-  /// MediaStore 实时列表与索引表的 id 差集 → 新照片补一轮 EXIF+地名
-  /// 解析 → 落库合并。搜索页每次数据就绪后调用（开关开启时）；空差集
-  /// 一趟 Set 扫描零成本，有新增则分批秒级补录——根治「新增照片不入
-  /// 索引」（此前 start() 首轮 done 后永久早退，唯一出路开关重开）。
+  /// MediaStore 实时列表与索引表比对 → 新照片 / mtime 变化的照片补一轮
+  /// EXIF+地名解析 → 落库合并。搜索页每次数据就绪后调用（开关开启时）；
+  /// 空差集一趟 Set 扫描零成本。
   ///
-  /// 设计边界：首轮全量仍由开关驱动（done/SP 进度语义不动，只表达
-  /// 首轮）；首轮跑批中跳过（循环自身覆盖全库，跑批中新导入的照片由
-  /// 下次进页补）；删除方向不清表——残留行按 id 查不到自然失效（表
-  /// 量级小，惰性失效已足够）。
+  /// 对账三判据（2026-09 审查 P1-3/P1-4）：
+  ///   - id 未知 → 新照片，提取（含「无 EXIF 空行」tombstone——Kotlin
+  ///     返回全部请求项，空数据也落行，差集从此可收敛，截图不再每进页
+  ///     重扫）；
+  ///   - id 已知但 mtime 变 → 照片被外部编辑（EXIF 可能已变）→ 重提取
+  ///     （replace 覆盖；编辑后 EXIF 变空则行被洗成空行，正确）；
+  ///   - id 已知但 mtime 列为 null（schema v3 升级前的存量行）→ 回填
+  ///     当前 mtime 不重扫——接受升级前历史现状，避免一次性全库重提取。
+  ///
+  /// 设计边界：首轮全量仍由开关驱动（done/SP 进度语义不动）；首轮跑批
+  /// 中跳过（循环自身覆盖全库）；删除方向由 forgetIds 级联清理。
   Future<void> syncNewPhotos(List<MsImageInfo> photos) async {
     if (state.running) return;
     final known = _metas.keys.toSet();
-    final fresh =
-        photos.where((p) => !known.contains(p.id)).map((p) => p.id).toList();
+    final fresh = <String>[];
+    final backfill = <String, int>{};
+    final mtimeById = <String, int>{};
+    for (final p in photos) {
+      mtimeById[p.id] = p.dateModifiedMs;
+      if (!known.contains(p.id)) {
+        fresh.add(p.id);
+      } else {
+        final m = _mtimes[p.id];
+        if (m == null) {
+          backfill[p.id] = p.dateModifiedMs;
+        } else if (m != p.dateModifiedMs) {
+          fresh.add(p.id);
+        }
+      }
+    }
+    if (backfill.isNotEmpty) {
+      await _store.updateMtimes(backfill);
+      _mtimes.addAll(backfill);
+      debugPrint('[SIDX] syncNewPhotos: backfill mtimes +${backfill.length}');
+    }
     if (fresh.isEmpty) return;
-    debugPrint('[SIDX] syncNewPhotos: ${fresh.length} new');
+    debugPrint('[SIDX] syncNewPhotos: ${fresh.length} new/changed');
     _runSeq++;
     final mySeq = _runSeq;
     _cancel = false;
@@ -261,12 +297,14 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       var batchOut = r.values.toList();
       batchOut = await _resolvePlaces(batchOut);
       if (_isStale(mySeq)) return;
-      await _store.putAll(batchOut);
+      await _store.putAll(batchOut, mtimes: mtimeById);
       if (_isStale(mySeq)) return;
       out.addAll(batchOut);
     }
     for (final m in out) {
       _metas[m.id] = m;
+      final mt = mtimeById[m.id];
+      if (mt != null) _mtimes[m.id] = mt;
     }
     // 张数进 state：增量落地后设置页进度行立即反映（processed/total 是
     // 首轮进度语义，不动）。
@@ -298,7 +336,9 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       final chunk = pending.skip(i).take(_kBatchSize).toList();
       final resolved = await _resolvePlaces(chunk);
       if (_isStale(mySeq)) return;
-      await _store.putAll(resolved);
+      // 带 _mtimes：REPLACE 会整行覆盖，不带会把已记录的提取时间戳
+      // 洗成 null（下次对账误判为待回填）。
+      await _store.putAll(resolved, mtimes: _mtimes);
       if (_isStale(mySeq)) return;
       for (final m in resolved) {
         _metas[m.id] = m;
@@ -376,6 +416,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
     if (hit.isEmpty) return;
     for (final id in hit) {
       _metas.remove(id);
+      _mtimes.remove(id);
     }
     await _store.deleteByIds(hit);
     state = SearchIndexState(
@@ -391,6 +432,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
   Future<void> clear() async {
     _cancel = true;
     _metas = const {};
+    _mtimes = {};
     await _store.clear();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kProgressKey);

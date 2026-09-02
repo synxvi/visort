@@ -20,6 +20,7 @@ import java.io.File
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.Semaphore
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -462,8 +463,12 @@ class MediaStoreRepository(private val context: Context) {
     /// 「智能识别」区展示）。逐张单次 openInputStream + androidx
     /// ExifInterface——只读文件头 EXIF 区，单张约几 ms，一次 pass 同时
     /// 取拍摄时间（DateTimeOriginal→DateTime 兜底）、GPS、相机制造商/
-    /// 型号（拼 "Make Model"）；PNG/WebP 等无 EXIF 格式各字段为 null。
-    /// 返回 id → { dateTakenMs / lat / lng / camera }（至少一字段非空的项）。
+    /// 型号（拼 "Make Model"）。
+    /// 返回 id → { dateTakenMs / lat / lng / camera }——全部请求项都
+    /// 返回（含各字段全 null 的「无 EXIF 空行」tombstone，2026-09 审查
+    /// P1-4：此前只返回非空项，无 EXIF 照片永不入表 → 每次进页都被判
+    /// 新照片整批重扫，差集永不收敛）。openInputStream 失败（损坏/
+    /// 权限）仍跳过——异常场景允许下轮重试。
     fun indexSearchMeta(ids: List<String>): Map<String, Map<String, Any?>> {
         val out = mutableMapOf<String, Map<String, Any?>>()
         for (id in ids) {
@@ -495,14 +500,13 @@ class MediaStoreRepository(private val context: Context) {
                         if (model != null && make != null && !model.contains(make)) make else null,
                         model ?: make,
                     ).joinToString(" ").ifEmpty { null }
-                    if (dateTakenMs != null || latLng != null || camera != null) {
-                        out[id] = mapOf(
-                            "dateTakenMs" to dateTakenMs,
-                            "lat" to latLng?.get(0),
-                            "lng" to latLng?.get(1),
-                            "camera" to camera,
-                        )
-                    }
+                    // 无条件入表：空 EXIF 也返回（tombstone，见方法注释）。
+                    out[id] = mapOf(
+                        "dateTakenMs" to dateTakenMs,
+                        "lat" to latLng?.get(0),
+                        "lng" to latLng?.get(1),
+                        "camera" to camera,
+                    )
                 }
             } catch (e: Exception) {
                 // 单张失败跳过（损坏/权限），不打断整批索引
@@ -875,8 +879,53 @@ class MediaStoreRepository(private val context: Context) {
     }
 
     /// 全图缓存目录当前字节数（配额满检测用）。
-    fun fullCacheBytes(): Long =
-        fullCacheDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    /// 计数器制（2026-09 审查 M4）：调用高频（Worker 每 16 张配额检测、
+    /// 设置页 3s 轮询、idle 预缓存），每次 walk 全目录 = 万级 stat 系统
+    /// 调用。改为 AtomicLong 增量维护（写点 +len / 删点 -len），读时距
+    /// 上次全量校准超过 [BYTES_CALIBRATE_MS] 才 walk 重算兜底——增量
+    /// 漂移有界且自愈。-1 = 未初始化（首次读触发校准）。
+    fun fullCacheBytes(): Long {
+        calibrateFullBytes()
+        return fullBytesCounter.get()
+    }
+
+    private fun calibrateFullBytes() {
+        val now = SystemClock.elapsedRealtime()
+        if (fullBytesCounter.get() >= 0 &&
+            now - fullBytesCalibratedAt < BYTES_CALIBRATE_MS
+        ) return
+        val total = try {
+            fullCacheDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        } catch (_: Exception) {
+            0L
+        }
+        fullBytesCounter.set(total)
+        fullBytesCalibratedAt = SystemClock.elapsedRealtime()
+    }
+
+    private fun calibrateThumbBytes() {
+        val now = SystemClock.elapsedRealtime()
+        if (thumbBytesCounter.get() >= 0 &&
+            now - thumbBytesCalibratedAt < BYTES_CALIBRATE_MS
+        ) return
+        val total = try {
+            thumbnailCacheDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        } catch (_: Exception) {
+            0L
+        }
+        thumbBytesCounter.set(total)
+        thumbBytesCalibratedAt = SystemClock.elapsedRealtime()
+    }
+
+    /// 已初始化时增量加（未初始化 -1 跳过，交由校准全量）。
+    private fun AtomicLong.addIfReady(delta: Long) {
+        if (get() >= 0) addAndGet(delta)
+    }
+
+    private val fullBytesCounter = AtomicLong(-1L)
+    @Volatile private var fullBytesCalibratedAt = 0L
+    private val thumbBytesCounter = AtomicLong(-1L)
+    @Volatile private var thumbBytesCalibratedAt = 0L
 
     /// 设置全图缓存配额（用户拖档位）并立即收紧——缩档时按 LRU 删最旧到
     /// 新配额内。绕过 trim 节流（用户操作要求即时反馈）。
@@ -906,7 +955,13 @@ class MediaStoreRepository(private val context: Context) {
         }
         try {
             freedFull = wipe(fullCacheDir)
-            if (clearThumb) freedThumb = wipe(thumbnailCacheDir)
+            fullBytesCounter.set(0L)
+            fullBytesCalibratedAt = SystemClock.elapsedRealtime()
+            if (clearThumb) {
+                freedThumb = wipe(thumbnailCacheDir)
+                thumbBytesCounter.set(0L)
+                thumbBytesCalibratedAt = SystemClock.elapsedRealtime()
+            }
         } catch (e: Exception) {
             Log.w(TAG, "clearImageCaches 失败: ${e.message}")
         }
@@ -914,15 +969,14 @@ class MediaStoreRepository(private val context: Context) {
     }
 
     /// 统计图片磁盘缓存占用（设置页显示）。thumb 两个目录分开报。
+    /// 计数器制（见 [fullCacheBytes]）：读时校准，不再每次双目录 walk。
     fun imageCacheBytes(): Map<String, Any> {
-        var full = 0L
-        var thumb = 0L
-        try {
-            fullCacheDir.walkTopDown().filter { it.isFile }.forEach { full += it.length() }
-            thumbnailCacheDir.walkTopDown().filter { it.isFile }.forEach { thumb += it.length() }
-        } catch (_: Exception) {
-        }
-        return mapOf("full" to full, "thumb" to thumb)
+        calibrateFullBytes()
+        calibrateThumbBytes()
+        return mapOf(
+            "full" to fullBytesCounter.get(),
+            "thumb" to thumbBytesCounter.get(),
+        )
     }
 
     /// 当前配额（字节）。Worker / Dart 侧配额满检测用（与 [setFullCacheQuota]
@@ -983,8 +1037,15 @@ class MediaStoreRepository(private val context: Context) {
         try {
             val name = "$longId.jpg"
             for (root in listOf(fullCacheDir, thumbnailCacheDir)) {
+                val counter = if (root == fullCacheDir) fullBytesCounter else thumbBytesCounter
                 root.listFiles()?.forEach { sub ->
-                    sub.listFiles()?.forEach { f -> if (f.name == name) f.delete() }
+                    sub.listFiles()?.forEach { f ->
+                        if (f.name == name) {
+                            // len 必须先取：delete 后 length() 恒 0。
+                            val len = f.length()
+                            if (f.delete()) counter.addIfReady(-len)
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -1004,7 +1065,8 @@ class MediaStoreRepository(private val context: Context) {
         if (!file.exists()) return null // miss：零查询
         val dm = queryDateModifiedMs(id)
         if (dm != null && file.lastModified() < dm) {
-            file.delete() // 源图已编辑：失效重解
+            val len = file.length()
+            if (file.delete()) fullBytesCounter.addIfReady(-len) // 源图已编辑：失效重解
             return null
         }
         return try {
@@ -1049,7 +1111,12 @@ class MediaStoreRepository(private val context: Context) {
             tmp.writeBytes(out.toByteArray())
             // 临时文件原子改名：trim/断电不留半写 JPEG（decodeByteArray 会
             // 当损坏图返回 null，命中变 miss 白付一次 IO）。
-            if (!tmp.renameTo(File(dir, "$id.jpg"))) tmp.delete()
+            val dest = File(dir, "$id.jpg")
+            if (tmp.renameTo(dest)) {
+                fullBytesCounter.addIfReady(dest.length())
+            } else {
+                tmp.delete()
+            }
             trimFullCache()
         } catch (e: Exception) {
             Log.w(TAG, "writeFullCache 失败: ${e.message}")
@@ -1074,6 +1141,8 @@ class MediaStoreRepository(private val context: Context) {
             val len = f.length()
             if (f.delete()) total -= len
         }
+        fullBytesCounter.set(total)
+        fullBytesCalibratedAt = SystemClock.elapsedRealtime()
     }
 
     /// 全图磁盘缓存目录（app cache，系统可清）。
@@ -1484,7 +1553,8 @@ class MediaStoreRepository(private val context: Context) {
         if (dm == null || file.lastModified() >= dm) {
             return try { file.readBytes() } catch (e: Exception) { null }
         }
-        file.delete() // 源图已编辑（dm 前进）：失效重解
+        val len = file.length()
+        if (file.delete()) thumbBytesCounter.addIfReady(-len) // 源图已编辑：失效重解
         return null
     }
 
@@ -1520,7 +1590,10 @@ class MediaStoreRepository(private val context: Context) {
             // 命中校验见 readThumbnailCache）。不查 DB：写路径在滚动高峰是
             // miss 主出口，每张一次 contentResolver 查询放大 IO 延迟。
             val file = File(dir, "$id.jpg")
+            // 计数器：覆盖写先减旧文件长度（同 id 同尺寸重写，罕见）。
+            if (file.exists()) thumbBytesCounter.addIfReady(-file.length())
             file.writeBytes(bytes)
+            thumbBytesCounter.addIfReady(file.length())
             trimThumbnailCache()
         } catch (e: Exception) {
             Log.w(TAG, "writeThumbnailCache 失败: ${e.message}")
@@ -1550,6 +1623,9 @@ class MediaStoreRepository(private val context: Context) {
             val len = f.length()
             if (f.delete()) total -= len
         }
+        // trim 本身就是全量 walk：顺带校准计数器。
+        thumbBytesCounter.set(total)
+        thumbBytesCalibratedAt = SystemClock.elapsedRealtime()
     }
 
     /// 缩略图磁盘缓存目录（app cache，系统可清）。
@@ -1575,6 +1651,10 @@ class MediaStoreRepository(private val context: Context) {
 
         /// trim 全目录扫描最小间隔（ms）：写缓存高峰不每次触发 walkTopDown。
         private const val TRIM_THROTTLE_MS = 5000L
+
+        /// 字节计数器全量校准间隔（ms）：增量计数漂移有界自愈；间隔内的
+        /// 读请求全部走计数器（高频配额检测/轮询不再触发目录 walk）。
+        private const val BYTES_CALIBRATE_MS = 30_000L
 
         /// EXIF 内嵌缩略图适用的最大请求尺寸（px）：≤128 的占位层请求
         /// 优先走 EXIF（~5ms），更大请求直接 loadThumbnail（EXIF 图糊）。

@@ -25,7 +25,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 /// 数据库版本。无存量用户策略(见文件头):schema 变更时直接升此号并
 /// 改 createAll 全量 DDL,不写迁移——高版本老库降级由 sqflite 默认
 /// onDowngrade(删库重建)处理。
-const int kDbVersion = 2;
+const int kDbVersion = 3;
 
 final databaseServiceProvider =
     Provider<DatabaseService>((ref) => DatabaseService());
@@ -85,6 +85,15 @@ class DatabaseService {
       sqflite.Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       await createSearchIndexTable(db);
+    }
+    if (oldVersion < 3) {
+      // v3: 索引行加提取时的 DATE_MODIFIED——增量对账据它检测「照片
+      // 被外部编辑(EXIF 变更)后重提取」。ALTER 无 IF NOT EXISTS,v2 库
+      // 必无此列;try-catch 防 duplicate column 意外(历史教训)。
+      try {
+        await db.execute(
+            'ALTER TABLE search_index ADD COLUMN date_modified_ms INTEGER');
+      } catch (_) {}
     }
   }
 
@@ -155,7 +164,8 @@ class DatabaseService {
         camera        TEXT,
         country       TEXT,
         admin_area    TEXT,
-        locality      TEXT
+        locality      TEXT,
+        date_modified_ms INTEGER
       ) WITHOUT ROWID
     ''');
     await db.execute(
