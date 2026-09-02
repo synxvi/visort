@@ -141,19 +141,40 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
         _syncIndex(photos);
         return;
       }
-      // 对账：id 集与数量都未变则零 setState（进页高频路径）。
+      // 对账：id 集与数量都未变、且收藏态无变化则零 setState（进页高频
+      // 路径）。收藏只改 isFavorite 不改 id（看图器收藏实证），纯 id 集
+      // 比对看不见——quick:fav chip 永久过期（审查 P1-5），补第二判据。
       final photos = await scanAllImages(_channel);
       final oldIds = {for (final p in state.photos) p.id};
       final newIds = {for (final p in photos) p.id};
+      var favChanged = false;
       if (oldIds.length == newIds.length && oldIds.containsAll(newIds)) {
+        final oldFav = {
+          for (final p in state.photos)
+            if (p.isFavorite) p.id,
+        };
+        for (final p in photos) {
+          if (oldFav.contains(p.id) != p.isFavorite) {
+            favChanged = true;
+            break;
+          }
+        }
+      }
+      if (!favChanged &&
+          oldIds.length == newIds.length &&
+          oldIds.containsAll(newIds)) {
         debugPrint('[SDS] warmUp: unchanged');
         _syncIndex(photos);
         return;
       }
       final buckets = await _channel.listBuckets();
+      // filters 保留旧值：绝不 emit 空 filters 中间态——页面 listen 回调
+      // 会按 `_allFilters` 清失效选中，空表瞬间会把已选 chips 全清（审查
+      // P1-6）。下方 rebuildFilters 一次性替换为分组产物。
       state = SearchDataState(
         photos: photos,
         buckets: buckets,
+        filters: state.filters,
         hdrIds: state.hdrIds,
         ready: true,
       );
@@ -171,7 +192,13 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
   Future<void> _syncIndex(List<MsImageInfo> photos) async {
     final notifier = ref.read(searchIndexServiceProvider.notifier);
     await notifier.load();
-    if (!ref.read(configProvider).mlIndexEnabled) return;
+    if (!ref.read(configProvider).mlIndexEnabled) {
+      // 关开关也要重建分组：clear() 只清 service 层 metas/DB，filters 里
+      // 的地点/相机/元数据 chips 是上次索引的残留快照，不重建会一直展示
+      // 用户刚要求删除的数据（审查 P1-1 幽灵 chips）。
+      rebuildFilters();
+      return;
+    }
     await notifier.syncNewPhotos(photos);
     await notifier.resolvePendingPlaces();
     rebuildFilters();

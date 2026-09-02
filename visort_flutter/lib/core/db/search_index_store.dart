@@ -86,4 +86,25 @@ class SearchIndexStore {
       // 清失败 = 残留旧索引,数据无敏感内容,可接受。
     }
   }
+
+  /// 按 id 批量删除(照片被用户删除后的索引级联清理——坐标/地名是超出
+  /// 「删照片即删数据」预期的位置数据留存,安全审查建议;分块 500 防
+  /// SQLite 999 变量上限)。失败静默:残留行按 id 查不到自然失效。
+  Future<void> deleteByIds(Set<String> ids) async {
+    if (ids.isEmpty) return;
+    try {
+      final db = await _db;
+      if (db == null) return;
+      final list = ids.toList();
+      for (var i = 0; i < list.length; i += 500) {
+        final chunk = list.skip(i).take(500).toList();
+        await db.delete(
+          'search_index',
+          where:
+              'id IN (${List.filled(chunk.length, '?').join(',')})',
+          whereArgs: chunk,
+        );
+      }
+    } catch (_) {}
+  }
 }

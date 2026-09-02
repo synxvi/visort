@@ -25,6 +25,7 @@ import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/fs/mediastore_events.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
+import 'package:visort_flutter/features/search/search_index_service.dart';
 
 /// MediaStore channel Provider（可被测试 override 以注入 fake channel）。
 final mediaStoreChannelProvider = Provider<MediaStoreChannel>((ref) {
@@ -782,6 +783,12 @@ class GalleryController extends Notifier<GalleryState> {
       // 确认删除成功：清理该图的所有缓存（缩略图 + 全图）
       _markSelfMutation();
       evictImageCache(id);
+      // 索引级联清理：search_index 的坐标/地名属位置数据，照片删除后
+      // 不应留库（安全审查——此前唯一清除路径是关索引开关）。DB 毫秒级，
+      // 不阻塞删除主链。
+      unawaited(ref
+          .read(searchIndexServiceProvider.notifier)
+          .forgetIds({id}));
       // 本地同步首页相册列表（count-1 + 封面推进）——删除可发生在回收站
       // 视图（bucketId 为 null），用 state.photos 里该照片定位相册。
       _applyBucketDelta(id, countDelta: -1);
@@ -894,6 +901,10 @@ class GalleryController extends Notifier<GalleryState> {
         evictImageCache(id);
       }
       final goneSet = gone.toSet();
+      // 同 deletePhoto：批量删除的索引级联清理（位置数据不留库）。
+      unawaited(ref
+          .read(searchIndexServiceProvider.notifier)
+          .forgetIds(goneSet));
       _applyBucketDeltaBatch(gone, countDelta: -1);
       state = state.copyWith(
         photos: state.photos.where((p) => !goneSet.contains(p.id)).toList(),
