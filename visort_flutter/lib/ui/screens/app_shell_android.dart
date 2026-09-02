@@ -45,6 +45,7 @@ import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
+import 'package:visort_flutter/shared/widgets/root_overlay_registry.dart';
 import 'package:visort_flutter/shared/widgets/visort_logo.dart';
 import 'package:visort_flutter/ui/screens/album_screen.dart';
 import 'package:visort_flutter/ui/screens/gallery_screen.dart';
@@ -261,6 +262,10 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
   /// 再切 IndexedStack 下标；收藏/回收站静默重查（silent 保留旧数据直到
   /// 新数据到达，无占位灰格闪烁），最后通知目标页激活。
   void _selectPage(int index) {
+    // 挂 root Overlay 的模态浮层（确认小窗等）不感知 IndexedStack 切页
+    //（一级页无路由动画），随旧视图一起关——残留的模态 scrim 会吞掉
+    // 新页全部点击（F8 真机反馈）。
+    dismissTopRootOverlay();
     _closeDrawer();
     if (index == _currentPage) return;
     setState(() {
@@ -286,6 +291,11 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
       _closeDrawer();
       return;
     }
+    // 模态浮层（确认小窗等）挡在前台时，返回先关浮层（安卓模态标准行
+    // 为）——浮层挂 root Overlay 不感知本 shell 的 IndexedStack 切页
+    //（一级页无路由动画），不收口则残留的模态 scrim 吞全屏点击（F8
+    // 真机反馈：设置页弹窗返回后首页相册点不动）。
+    if (dismissTopRootOverlay()) return;
     final handler = _handles[_currentPage].onBack;
     if (handler != null && handler()) return;
     final homeIndex = _homeIndexOf(ref.read(configProvider).defaultHomePage);

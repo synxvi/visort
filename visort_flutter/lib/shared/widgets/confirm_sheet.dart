@@ -14,6 +14,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart'
     show AppColors, AppFonts;
+import 'package:visort_flutter/shared/widgets/root_overlay_registry.dart';
 
 /// 一次确认小窗会话：[confirmed] 完成于用户选择（scrim/取消 = false）；
 /// [close] 供外部主动关闭（如系统返回拦截），等效取消。
@@ -50,10 +51,16 @@ ConfirmSheetSession showConfirmSheet(
   final routeSecondary = route?.secondaryAnimation;
   void Function()? detachRouteRef;
 
+  // shell 返回/切页收口（root_overlay_registry）：一级页都在根路由内
+  // 无路由动画可监听，浮层须由 shell 主动关（否则模态 scrim 吞全屏点击）。
+  // closer 闭包在 close 声明后才建，注销经槽回填。
+  void Function()? unregisterRef;
+
   void close(bool confirmed) {
     if (completer.isCompleted) return;
     completer.complete(confirmed);
     detachRouteRef?.call();
+    unregisterRef?.call();
     target.value = 0;
     Future.delayed(const Duration(milliseconds: 220), () {
       entry.remove();
@@ -72,6 +79,10 @@ ConfirmSheetSession showConfirmSheet(
     routeSecondary?.removeListener(onRouteChanged);
   }
   detachRouteRef = detachRoute;
+
+  void sheetCloser() => close(false);
+  registerRootOverlayCloser(sheetCloser);
+  unregisterRef = () => unregisterRootOverlayCloser(sheetCloser);
 
   entry = OverlayEntry(
     builder: (_) => ValueListenableBuilder<double>(
