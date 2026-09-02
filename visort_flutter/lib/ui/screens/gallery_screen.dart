@@ -466,6 +466,11 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
   static bool _navInFlight = false;
 
   Future<void> _open() async {
+    // [GAL] 入口打点（排查"返回后点击无反应"，2026-09）：区分三类——
+    // locked（锁被占，上一轮导航未结束）/ 全程无 enter 日志（onTap 被
+    // 浮层屏障吞）/ enter 后 abort（state 竞态）。
+    debugPrint('[GAL] open tap bucket=${widget.bucket.id} '
+        'locked=$_navInFlight view=${ref.read(galleryControllerProvider).view}');
     if (_navInFlight) return;
     _navInFlight = true;
     try {

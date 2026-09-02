@@ -2050,6 +2050,9 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
   static bool _navInFlight = false;
 
   Future<void> _openAlbum() async {
+    // [GAL] 入口打点（排查"返回后点击无反应"，2026-09），同 gallery_screen。
+    debugPrint('[GAL] sort-open tap bucket=${widget.bucket.id} '
+        'locked=$_navInFlight');
     if (_navInFlight) return;
     if (_interceptIfEditing()) return;
     // 选择模式（本组已有相册勾选）：点击改为勾选/取消本相册，不进入浏览
