@@ -232,6 +232,21 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   @override
   void initState() {
     super.initState();
+    // 相册路由深度守卫：双指双桶时第二个相册页在此被发现并静默自退
+    // （initState 顺序严格等于入栈顺序，判定不依赖 tap 时序）。
+    // 重复页不 enter、不清 state，pop 转场从透明开始几乎无感。
+    _isDuplicateRoute = !AlbumRouteGuard.registerAndCheckFirst();
+    if (_isDuplicateRoute) {
+      debugPrint('[GAL] duplicate album route, self-pop bucket=${widget.bucketId}');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final nav = Navigator.of(context);
+        if (nav.canPop()) nav.pop();
+      });
+      // 重复页即弃：不挂监听、不触发任何数据加载（initState 顺序严格等于
+      // 入栈顺序，先入栈的页保有数据与 Hero，后入栈者静默退出）。
+      return;
+    }
     // 恢复上次相册内视图偏好（沉浸网格 / 日期分组）。
     _timelineView = ref.read(configProvider).photoTimelineView;
     _scrollCtrl.addListener(_onScroll);
@@ -303,6 +318,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
 
   @override
   void dispose() {
+    AlbumRouteGuard.unregister();
     // 菜单浮层挂 rootOverlay（不随本页 dispose），主动收回防残留。
     _menuCtl?.close();
     widget.shellHandle?.onBack = null;
@@ -364,7 +380,11 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           // 退出相册：保存桶快照（同桶重进秒出）+ 重查相册列表（返回首页
           // 刷新 count/封面）。不能在 dispose 里 ref.read——riverpod 断言
           // "Cannot use ref after the widget was disposed"（debug 红屏）。
-          ref.read(galleryControllerProvider.notifier).exitBucket();
+          // 双指重复页（静默自退）没有自己的数据，不清全局 state——否则
+          // 会抽走栈中幸存相册页的数据（2026-09 黑屏根因）。
+          if (!_isDuplicateRoute) {
+            ref.read(galleryControllerProvider.notifier).exitBucket();
+          }
         }
       },
       child: child,
@@ -373,6 +393,9 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
 
   /// 自愈防重入排程标志。
   bool _reenterQueued = false;
+
+  /// 双指双桶守卫：本页是否为栈中重复的相册页（静默自退，见 initState）。
+  bool _isDuplicateRoute = false;
 
   /// state 归属自愈：本页成为顶层（isCurrent）但全局 state 已不归自己时，
   /// 重新 enterBucket 拉回数据（内存快照命中，秒回）。
