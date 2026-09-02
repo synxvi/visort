@@ -145,6 +145,13 @@ class SearchIndexService extends Notifier<SearchIndexState> {
   ///
   /// 全进程只真正执行一次（`_restored` 门禁）：此后 `_metas` 即权威副本，
   /// 重读整表是纯浪费；SP 遗留键清理同样只跑一次。
+  ///
+  /// 恢复完成必须触发 [onDataChanged]：warmUp 首载的 rebuildFilters 先于
+  /// 本 load 执行（此刻 _metas 还是空——地点/相机/元数据维度缺席），恢复
+  /// 后靠本通知补一次重建；增量对账空差集不触发，所以这是冷启动/直接
+  /// 进搜索页唯一让索引维度 chips 出现的路径（2026-09 回归修复：删
+  /// _syncIndex 末尾 rebuildFilters 改 onDataChanged 时漏了「纯恢复」
+  /// 这条路径，导致必须重索引一遍才出现）。
   Future<void> load() async {
     if (_restored) return;
     _restored = true;
@@ -179,6 +186,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         ranOnce: true,
       );
     }
+    onDataChanged?.call();
   }
 
   /// 开启索引：全量扫描提取 EXIF + 地名解析（随总开关恒开）。
