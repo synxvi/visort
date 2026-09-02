@@ -62,7 +62,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   final FocusNode _searchFocus = FocusNode();
 
   // [KBD] 闪烁排查打点（临时）：键盘弹出窗口内 window metrics / ListView
-  // 滚动与视口 的时序，logcat 采集。
+  // 滚动与视口的时序，logcat 采集。const false = 编译期剔除（打点在
+  // 滚动/布局热路径上，release 残留是每帧字符串插值 + logcat 写入，
+  // 审查 M2；取证时临时置 true）。
+  static const bool _kKbdLog = false;
+
   final ScrollController _scrollCtrl = ScrollController();
 
   /// leading morph：进页时抽屉三线过渡为返回箭头（[aves 对齐]
@@ -124,13 +128,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _scrollCtrl.addListener(() {
-      debugPrint('[KBD] scroll: offset=${_scrollCtrl.position.pixels} '
-          'viewport=${_scrollCtrl.position.viewportDimension}');
-    });
-    _searchFocus.addListener(() {
-      debugPrint('[KBD] focus: ${_searchFocus.hasFocus}');
-    });
+    if (_kKbdLog) {
+      _scrollCtrl.addListener(() {
+        debugPrint('[KBD] scroll: offset=${_scrollCtrl.position.pixels} '
+            'viewport=${_scrollCtrl.position.viewportDimension}');
+      });
+      _searchFocus.addListener(() {
+        debugPrint('[KBD] focus: ${_searchFocus.hasFocus}');
+      });
+    }
     // leading morph 进页播放：抽屉三线 → 返回箭头（下一帧启动，等首帧
     // 布局就绪，避免与路由转场同帧竞争）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -167,11 +173,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   void didChangeMetrics() {
     super.didChangeMetrics();
     final view = View.of(context);
-    debugPrint('[KBD] metrics: '
-        'size=${view.physicalSize.width ~/ view.devicePixelRatio}x'
-        '${view.physicalSize.height ~/ view.devicePixelRatio}dp '
-        'insets=${view.viewInsets.bottom ~/ view.devicePixelRatio}dp '
-        'padding=${view.padding.bottom ~/ view.devicePixelRatio}dp');
+    if (_kKbdLog) {
+      debugPrint('[KBD] metrics: '
+          'size=${view.physicalSize.width ~/ view.devicePixelRatio}x'
+          '${view.physicalSize.height ~/ view.devicePixelRatio}dp '
+          'insets=${view.viewInsets.bottom ~/ view.devicePixelRatio}dp '
+          'padding=${view.padding.bottom ~/ view.devicePixelRatio}dp');
+    }
   }
 
   @override
@@ -929,6 +937,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
   List<MsImageInfo> _applyQueryAndFilters(String query) {
     final q = query.toLowerCase();
     final metas = ref.read(searchIndexServiceProvider.notifier).metas;
+    // bucketNames 取一次复用（getter 每次访问重建整个 Map——循环内访问
+    // 即 O(N×B)：万张库每按键百万次 Map 插入全在 UI isolate，审查 H1）。
+    final bucketNames = _data.bucketNames;
     final byCat = <String, List<SearchFilterData>>{};
     for (final k in _selected) {
       final f = _allFilters[k];
@@ -941,7 +952,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       if (!matchSelected(p.id)) return false;
       if (q.isEmpty) return true;
       if (p.name.toLowerCase().contains(q)) return true;
-      if ((_data.bucketNames[p.bucketId] ?? '').toLowerCase().contains(q)) {
+      if ((bucketNames[p.bucketId] ?? '').toLowerCase().contains(q)) {
         return true;
       }
       final m = metas[p.id];

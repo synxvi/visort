@@ -95,6 +95,17 @@ class SearchIndexService extends Notifier<SearchIndexState> {
   Map<String, MsSearchMeta> _metas = const {};
   bool _cancel = false;
 
+  /// run 世代：每次新跑批（start/syncNewPhotos/resolvePendingPlaces）
+  /// 自增并在循环开始时快照，检查点同时校验 `_cancel` 与世代——快速
+  /// 「关→开」时新 run 复位 `_cancel` 也不会让旧循环复活（旧世代 ≠
+  /// 当前世代即退出，审查 P1-2 双循环并发）。
+  int _runSeq = 0;
+
+  /// 本进程已完成一次 DB 恢复。此后 `_metas` 是唯一写方（service 自身）
+  /// 的内存权威副本，load() 秒回——进搜索页/设置页不再每次全表重读
+  /// （审查 H2：对账路径叠加路由转场的隐性成本）。
+  bool _restored = false;
+
   /// id → 索引元数据（启动时 [load] 恢复；索引完成后更新）。
   Map<String, MsSearchMeta> get metas => _metas;
 
@@ -107,7 +118,12 @@ class SearchIndexService extends Notifier<SearchIndexState> {
   /// 保留 running 态：索引循环跑批中进搜索页会触发 load，若把 running
   /// 覆写为 false，搜索页自愈逻辑会并发拉起第二个 start()（双循环并发，
   /// 子代理审查 P1）。
+  ///
+  /// 全进程只真正执行一次（`_restored` 门禁）：此后 `_metas` 即权威副本，
+  /// 重读整表是纯浪费；SP 遗留键清理同样只跑一次。
   Future<void> load() async {
+    if (_restored) return;
+    _restored = true;
     final prefs = await SharedPreferences.getInstance();
     // v1 SP 数据迁移清理:数据不可比(EXIF pass 会产出更全字段),直接弃。
     for (final k in _kLegacyKeys) {
@@ -145,6 +161,8 @@ class SearchIndexService extends Notifier<SearchIndexState> {
     if (state.running) return;
     if (state.done && _metas.isNotEmpty) return;
     state = const SearchIndexState(running: true);
+    _runSeq++;
+    final mySeq = _runSeq;
     _cancel = false;
     try {
       // ACCESS_MEDIA_LOCATION（Android 10+ 未授权时系统剥离 MediaStore
@@ -163,24 +181,24 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       final metas = <String, MsSearchMeta>{};
       var done = 0;
       for (var i = 0; i < total; i += _kBatchSize) {
-        if (_cancel) return;
+        if (_isStale(mySeq)) return;
         final batch =
             photos.skip(i).take(_kBatchSize).map((p) => p.id).toList();
         final r = await _channel.indexSearchMeta(batch);
         debugPrint('[SIDX] batch $i: meta=${r.length}');
-        if (_cancel) return; // 清库竞态：关开关后不再写
+        if (_isStale(mySeq)) return; // 清库竞态：关开关后不再写
         var batchOut = r.values.toList();
         // 地名解析随索引恒开（用户定稿：地点识别开关已并入总开关）。
         batchOut = await _resolvePlaces(batchOut);
         // _resolvePlaces 是长 await（Kotlin 串行 geocode，首批可达数十秒），
-        // 其后必须复查 cancel：关开关已 clear() 时继续执行会把该批写回
-        // 已清空的表并覆写 state/进度 SP（清库复活，子代理审查 P1）。
-        if (_cancel) return;
+        // 其后必须复查：关开关已 clear() 时继续执行会把该批写回已清空的
+        // 表并覆写 state/进度 SP（清库复活，子代理审查 P1）。
+        if (_isStale(mySeq)) return;
         for (final m in batchOut) {
           metas[m.id] = m;
         }
         await _store.putAll(batchOut);
-        if (_cancel) return; // putAll 同为 async gap，落地后复查
+        if (_isStale(mySeq)) return; // putAll 同为 async gap，落地后复查
         done += batch.length;
         state = SearchIndexState(
           running: true,
@@ -197,16 +215,22 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       // rethrow 会成 unhandled async exception（子代理审查 P3）。
       debugPrint('[SIDX] FAILED: $e\n$s');
     } finally {
-      if (!_cancel) {
-        state = SearchIndexState(
-          processed: state.processed,
-          total: state.total,
-          metaCount: _metas.length,
-        );
-      }
+      // 无条件复位 running（原先 cancel 时跳过——单独 cancel() 会把
+      // running 永久卡 true 阻塞后续 start，脆弱不变量，审查 P2）。
+      // cancel/clear 场景进度置零：clear() 已清 _metas，本处即便与
+      // clear 的 state 置零竞态，两种先后顺序最终态一致。
+      state = SearchIndexState(
+        running: false,
+        processed: _cancel ? 0 : state.processed,
+        total: _cancel ? 0 : state.total,
+        metaCount: _metas.length,
+      );
       debugPrint('[SIDX] finally: $_cancel state=${state.processed}/${state.total}');
     }
   }
+
+  /// 检查点：被取消，或已被更新世代取代（新 run 已起，本循环必须退出）。
+  bool _isStale(int mySeq) => _cancel || mySeq != _runSeq;
 
   /// 前台增量对账（[precache 对齐] 缩略图缓存「前台增量」同款模式）：
   /// MediaStore 实时列表与索引表的 id 差集 → 新照片补一轮 EXIF+地名
@@ -225,18 +249,20 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         photos.where((p) => !known.contains(p.id)).map((p) => p.id).toList();
     if (fresh.isEmpty) return;
     debugPrint('[SIDX] syncNewPhotos: ${fresh.length} new');
+    _runSeq++;
+    final mySeq = _runSeq;
     _cancel = false;
     final out = <MsSearchMeta>[];
     for (var i = 0; i < fresh.length; i += _kBatchSize) {
-      if (_cancel) return;
+      if (_isStale(mySeq)) return;
       final batch = fresh.skip(i).take(_kBatchSize).toList();
       final r = await _channel.indexSearchMeta(batch);
-      if (_cancel) return;
+      if (_isStale(mySeq)) return;
       var batchOut = r.values.toList();
       batchOut = await _resolvePlaces(batchOut);
-      if (_cancel) return;
+      if (_isStale(mySeq)) return;
       await _store.putAll(batchOut);
-      if (_cancel) return;
+      if (_isStale(mySeq)) return;
       out.addAll(batchOut);
     }
     for (final m in out) {
@@ -264,14 +290,16 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         .toList();
     if (pending.isEmpty) return;
     debugPrint('[SIDX] resolvePendingPlaces: ${pending.length}');
+    _runSeq++;
+    final mySeq = _runSeq;
     _cancel = false;
     for (var i = 0; i < pending.length; i += _kBatchSize) {
-      if (_cancel) return;
+      if (_isStale(mySeq)) return;
       final chunk = pending.skip(i).take(_kBatchSize).toList();
       final resolved = await _resolvePlaces(chunk);
-      if (_cancel) return;
+      if (_isStale(mySeq)) return;
       await _store.putAll(resolved);
-      if (_cancel) return;
+      if (_isStale(mySeq)) return;
       for (final m in resolved) {
         _metas[m.id] = m;
       }
@@ -337,6 +365,27 @@ class SearchIndexService extends Notifier<SearchIndexState> {
 
   /// 取消当前索引（开关关闭时先 cancel 再 clear，避免清完又被写回）。
   void cancel() => _cancel = true;
+
+  /// 照片被删除后的索引级联清理（内存 `_metas` + DB 行 + 张数 state）。
+  /// 坐标/地名属位置数据，照片删除后不应留库（安全审查：此前唯一清除
+  /// 路径是关开关）。跑批中调用也安全：正在写的批只含当时仍存在的 id，
+  /// 且各循环检查点会在下一 async gap 退出。
+  Future<void> forgetIds(Set<String> ids) async {
+    if (ids.isEmpty || _metas.isEmpty) return;
+    final hit = _metas.keys.where(ids.contains).toSet();
+    if (hit.isEmpty) return;
+    for (final id in hit) {
+      _metas.remove(id);
+    }
+    await _store.deleteByIds(hit);
+    state = SearchIndexState(
+      running: state.running,
+      processed: state.processed,
+      total: state.total,
+      metaCount: _metas.length,
+    );
+    debugPrint('[SIDX] forgetIds: -${hit.length}');
+  }
 
   /// 关闭索引：清空索引表与进度（[ente 对齐] 关 ML 清库语义）。
   Future<void> clear() async {

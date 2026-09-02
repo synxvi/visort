@@ -12,6 +12,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:visort_flutter/core/config/folder_name_validator.dart'
+    show folderNameIllegalRe;
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart' show t;
 import 'package:visort_flutter/core/theme/app_colors.dart'
@@ -61,6 +63,14 @@ class _RenameDialogState extends ConsumerState<_RenameDialog> {
   String get _newName =>
       _controller.text.trimLeft().replaceAll('\n', '');
 
+  /// 非法文件名（路径分隔符 / Windows 保留字符 / null / `.`、`..`）。
+  /// 与目录名同一套正则（安全审查：重命名此前零校验，`/` 可经桌面端
+  /// p.join 变真实路径穿越；Kotlin DISPLAY_NAME 也不收这类字符）。
+  bool get _hasIllegalChar =>
+      folderNameIllegalRe.hasMatch(_newName) ||
+      _newName == '.' ||
+      _newName == '..';
+
   @override
   void initState() {
     super.initState();
@@ -80,7 +90,7 @@ class _RenameDialogState extends ConsumerState<_RenameDialog> {
   void _onChanged() {
     // 非空本地立即校验；同名远程查询防抖 300ms（每键一次查询太重）。
     final name = _newName;
-    if (name.isEmpty) {
+    if (name.isEmpty || _hasIllegalChar) {
       _debounce?.cancel();
       _isValid.value = false;
       return;
@@ -97,7 +107,7 @@ class _RenameDialogState extends ConsumerState<_RenameDialog> {
 
   Future<void> _validate() async {
     final name = _newName;
-    if (name.isEmpty || name == _baseName) {
+    if (name.isEmpty || name == _baseName || _hasIllegalChar) {
       _isValid.value = false;
       return;
     }

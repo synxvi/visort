@@ -14,6 +14,7 @@ import 'package:visort_flutter/core/fs/idle_precache.dart';
 
 import 'dart:ui' show PlatformDispatcher;
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/gestures.dart' show debugPrintGestureArenaDiagnostics, debugPrintRecognizerCallbacksTrace;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -30,9 +31,11 @@ import 'core/window/window_state.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // [SDH 取证] 手势诊断（临时，排查手柄第一次拖不动）：
-  // arena 裁决序列 + recognizer 回调 trace，release 下同样生效。
-  if (Platform.isAndroid) {
+  // [SDH 取证] 手势诊断（临时，排查手柄第一次拖不动）：arena 裁决序列 +
+  // recognizer 回调 trace。kDebugMode 守卫——每个 pointer 事件每 recognizer
+  // 一行字符串插值 + logcat 写入落在交互热路径上，release 构建必须为关
+  // （审查 M2；取证时临时打开）。
+  if (kDebugMode && Platform.isAndroid) {
     debugPrintGestureArenaDiagnostics = true;
     debugPrintRecognizerCallbacksTrace = true;
   }
