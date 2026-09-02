@@ -166,7 +166,7 @@ const Map<String, String> stringsZh = {
   'search_states': '省份',
   'search_weekday_names': '周一,周二,周三,周四,周五,周六,周日',
   'search_metadata': '元数据',
-  'search_missing_date': '未注明日期',
+  'search_missing_date': '无拍摄日期',
   'search_unlocated': '无地址',
   'search_no_camera': '无相机信息',
   'search_more': '更多',
@@ -369,7 +369,7 @@ const Map<String, String> stringsZh = {
   // ── 索引（缓存下方新区块，[ente 对齐] 开关+进度+注释；2026-09 更名）──
   'settings_section_ml': '索引',
   'settings_ml_index': '图片信息索引',
-  'settings_ml_index_note': '扫描照片提取拍摄时间、GPS 坐标、相机型号并解析地名，供搜索页的地点/相机/元数据分类使用；文件类型、相册等其余分类无需索引。开启时会申请访问媒体位置信息。与上方「缓存」（缩略图加速）相互独立。',
+  'settings_ml_index_note': '扫描照片提取拍摄时间、GPS 坐标、相机型号并解析地名，供搜索页的地点/相机/元数据分类使用；文件类型、相册等其余分类无需索引。',
   'settings_ml_progress': '索引进度',
   'settings_ml_count': '{0} 张',
   'settings_ml_running': '正在索引…',

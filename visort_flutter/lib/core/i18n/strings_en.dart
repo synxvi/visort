@@ -171,7 +171,7 @@ const Map<String, String> stringsEn = {
   'search_states': 'States',
   'search_weekday_names': 'Mon,Tue,Wed,Thu,Fri,Sat,Sun',
   'search_metadata': 'Metadata',
-  'search_missing_date': 'No date',
+  'search_missing_date': 'No capture date',
   'search_unlocated': 'No address',
   'search_no_camera': 'No camera',
   'search_more': 'More',
@@ -379,7 +379,7 @@ const Map<String, String> stringsEn = {
   'settings_section_ml': 'Index',
   'settings_ml_index': 'Image Info Index',
   'settings_ml_index_note':
-      'Scans photos for capture date, GPS coordinates and camera model, and resolves place names. The Places / Cameras / Metadata filters in search rely on this index; file types, albums and other filters work without it. Requests access to media location when enabled. Independent from the thumbnail Cache above.',
+      'Scans photos for capture date, GPS coordinates and camera model, and resolves place names. The Places / Cameras / Metadata filters in search rely on this index; file types, albums and other filters work without it.',
   'settings_ml_progress': 'Indexing Progress',
   'settings_ml_count': '{0} photos',
   'settings_ml_running': 'Indexing…',
