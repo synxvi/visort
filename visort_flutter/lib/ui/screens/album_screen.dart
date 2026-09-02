@@ -516,6 +516,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
 
   Widget _buildBody(GalleryState gallery) {
     final cols = _photoColsOf(ref.watch(configProvider));
+    // [GAL] 每次本页 rebuild 的状态快照（占位/网格分支判定直接依据）。
+    debugPrint('[GAL] UI body=${widget.bucketId} state=${gallery.bucketId} '
+        'n=${gallery.photos.length} loaded=${gallery.firstPageLoaded} '
+        'err=${gallery.error}');
     // 日期分组视图（仅普通相册）：按创建日期分组 + sticky 日期头。
     if (_timelineView && !widget.favoritesOnly && !widget.trashedOnly) {
       // 进入动画期间先渲染轻量占位：日期视图多 sliver（每组一个 SliverGrid）
@@ -1303,7 +1307,9 @@ class _ThumbGridPlaceholder extends StatelessWidget {
         mainAxisSpacing: 3,
       ),
       itemCount: cols * 6,
-      itemBuilder: (_, _) => const ColoredBox(color: AppColors.surface),
+      // 排查期辨识色（暗红棕 ≠ surface 深灰）：黑屏复现时截屏即辨
+      // 「占位骨架」（本类）vs「缩略图空 cell 底色」（ente Gallery）。
+      itemBuilder: (_, _) => const ColoredBox(color: Color(0xFF2A1A1A)),
     );
   }
 }

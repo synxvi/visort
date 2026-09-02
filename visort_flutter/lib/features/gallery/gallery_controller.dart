@@ -360,7 +360,8 @@ class GalleryController extends Notifier<GalleryState> {
       await _refreshBucketPage(bucketId, token);
       return;
     }
-    debugPrint('[GAL] query bucket=$bucketId silent=$silent');
+    debugPrint('[GAL] query bucket=$bucketId silent=$silent '
+        '(写占位 photos=[] loaded=false)');
     state = state.copyWith(
       view: GalleryView.bucket,
       bucketId: bucketId,
@@ -568,6 +569,7 @@ class GalleryController extends Notifier<GalleryState> {
     // riverpod notify 已 unmount 的 listener 报 defunct assertion。
     _loadToken++;
     final bucketId = state.bucketId;
+    debugPrint('[GAL] exit bucket=$bucketId token=$_loadToken');
     if (bucketId != null && state.firstPageLoaded) {
       _putSnapshot(
         bucketId,
