@@ -55,6 +55,7 @@ class SearchIndexState {
     this.processed = 0,
     this.total = 0,
     this.metaCount = 0,
+    this.ranOnce = false,
   });
 
   final bool running;
@@ -68,8 +69,13 @@ class SearchIndexState {
   /// 进度行靠它观察增量变化。
   final int metaCount;
 
-  /// 是否已完整跑过一轮（total>0 且全处理）。
-  bool get done => total > 0 && processed >= total;
+  /// 本轮安装生命周期内已完整跑过一轮（start 正常结束，或 SP 进度
+  /// 恢复出 "done/total"）。空库（total=0）跑完也算——否则 done 恒
+  /// false、设置页进度永远「…」（审查 P2）。
+  final bool ranOnce;
+
+  /// 是否已完整跑过一轮。
+  bool get done => ranOnce && processed >= total;
 }
 
 /// 搜索索引 store(单例,服务与测试共用)。
@@ -112,6 +118,18 @@ class SearchIndexService extends Notifier<SearchIndexState> {
   /// （审查 H2：对账路径叠加路由转场的隐性成本）。
   bool _restored = false;
 
+  /// 数据变化回调（searchData store 注册）：首轮完成/增量落地/补地名/
+  /// 清库四条路径统一通知，store 据此 rebuildFilters（用户停在搜索页时
+  /// 索引完成地点/相机 chips 即时出现，审查 P2「索引完成无通知」）。
+  /// 同层方法注入，避免 service ↔ dataStore 循环 import。
+  void Function()? onDataChanged;
+
+  /// 补地名轮冷却：Geocoder 持续离线的设备每次进页对全部 pending 串行
+  /// 重试网络调用——5 分钟冷却 + 每轮限量 100 张渐进收敛（审查 P2）。
+  DateTime? _pendingLastAt;
+  static const _kPendingPerRound = 100;
+  static const _kPendingCooldown = Duration(minutes: 5);
+
   /// id → 索引元数据（启动时 [load] 恢复；索引完成后更新）。
   Map<String, MsSearchMeta> get metas => _metas;
 
@@ -147,6 +165,8 @@ class SearchIndexService extends Notifier<SearchIndexState> {
           processed: int.tryParse(parts[0]) ?? 0,
           total: int.tryParse(parts[1]) ?? 0,
           metaCount: _metas.length,
+          // SP 有进度 = 跑过一轮（含 "0/0" 空库跑完）。
+          ranOnce: true,
         );
       }
     } else if (_metas.isNotEmpty) {
@@ -156,6 +176,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         processed: _metas.length,
         total: _metas.length,
         metaCount: _metas.length,
+        ranOnce: true,
       );
     }
   }
@@ -208,13 +229,21 @@ class SearchIndexService extends Notifier<SearchIndexState> {
           metas[m.id] = m;
         }
         await _store.putAll(batchOut, mtimes: mtimeById);
-        if (_isStale(mySeq)) return; // putAll 同为 async gap，落地后复查
+        if (_isStale(mySeq)) {
+          // 落地后复查的完全体：本批可能在清库（clear）之后才写入——
+          // 补偿删除，堵住「落地后复查只防后续批不防本批」的残留窗
+          //（审查 P2 clear 竞态）。
+          await _store
+              .deleteByIds({for (final m in batchOut) m.id});
+          return;
+        }
         done += batch.length;
         state = SearchIndexState(
           running: true,
           processed: done,
           total: total,
           metaCount: state.metaCount,
+          ranOnce: state.ranOnce,
         );
         await _saveProgress(done, total);
       }
@@ -230,12 +259,15 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       // running 永久卡 true 阻塞后续 start，脆弱不变量，审查 P2）。
       // cancel/clear 场景进度置零：clear() 已清 _metas，本处即便与
       // clear 的 state 置零竞态，两种先后顺序最终态一致。
+      final finished = !_cancel;
       state = SearchIndexState(
         running: false,
         processed: _cancel ? 0 : state.processed,
         total: _cancel ? 0 : state.total,
         metaCount: _metas.length,
+        ranOnce: finished || state.ranOnce,
       );
+      if (finished) onDataChanged?.call();
       debugPrint('[SIDX] finally: $_cancel state=${state.processed}/${state.total}');
     }
   }
@@ -298,7 +330,11 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       batchOut = await _resolvePlaces(batchOut);
       if (_isStale(mySeq)) return;
       await _store.putAll(batchOut, mtimes: mtimeById);
-      if (_isStale(mySeq)) return;
+      if (_isStale(mySeq)) {
+        await _store
+            .deleteByIds({for (final m in batchOut) m.id}); // 清库补偿删除
+        return;
+      }
       out.addAll(batchOut);
     }
     for (final m in out) {
@@ -313,7 +349,9 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       processed: state.processed,
       total: state.total,
       metaCount: _metas.length,
+      ranOnce: state.ranOnce,
     );
+    onDataChanged?.call();
     debugPrint('[SIDX] syncNewPhotos done: +${out.length}');
   }
 
@@ -323,14 +361,23 @@ class SearchIndexService extends Notifier<SearchIndexState> {
   /// 扫描），有则分批补 geocode 落库，通知方刷新分组。
   Future<void> resolvePendingPlaces() async {
     if (state.running) return;
+    // 冷却：Geocoder 持续离线时每轮重试全部 pending 是白付网络调用，
+    // 5 分钟一轮 + 每轮限量 [_kPendingPerRound] 渐进收敛（审查 P2）。
+    final now = DateTime.now();
+    if (_pendingLastAt != null &&
+        now.difference(_pendingLastAt!) < _kPendingCooldown) {
+      return;
+    }
     final pending = _metas.values
         .where((m) => m.lat != null && m.lng != null && m.placeLabel.isEmpty)
+        .take(_kPendingPerRound)
         .toList();
     if (pending.isEmpty) return;
     debugPrint('[SIDX] resolvePendingPlaces: ${pending.length}');
     _runSeq++;
     final mySeq = _runSeq;
     _cancel = false;
+    var wrote = false;
     for (var i = 0; i < pending.length; i += _kBatchSize) {
       if (_isStale(mySeq)) return;
       final chunk = pending.skip(i).take(_kBatchSize).toList();
@@ -339,11 +386,18 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       // 带 _mtimes：REPLACE 会整行覆盖，不带会把已记录的提取时间戳
       // 洗成 null（下次对账误判为待回填）。
       await _store.putAll(resolved, mtimes: _mtimes);
-      if (_isStale(mySeq)) return;
+      if (_isStale(mySeq)) {
+        await _store
+            .deleteByIds({for (final m in resolved) m.id}); // 清库补偿删除
+        return;
+      }
       for (final m in resolved) {
         _metas[m.id] = m;
       }
+      wrote = wrote || resolved.isNotEmpty;
     }
+    _pendingLastAt = DateTime.now();
+    if (wrote) onDataChanged?.call();
     debugPrint('[SIDX] resolvePendingPlaces done');
   }
 
@@ -424,7 +478,9 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       processed: state.processed,
       total: state.total,
       metaCount: _metas.length,
+      ranOnce: state.ranOnce,
     );
+    onDataChanged?.call();
     debugPrint('[SIDX] forgetIds: -${hit.length}');
   }
 
@@ -437,6 +493,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kProgressKey);
     state = const SearchIndexState();
+    onDataChanged?.call();
   }
 
   Future<void> _saveProgress(int done, int total) async {

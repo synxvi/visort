@@ -62,6 +62,14 @@ class DatabaseService {
           onUpgrade: _onUpgrade,
         ),
       );
+      // 幂等清理：v3 曾建的 idx_search_place/camera 两个复合索引——查询
+      // 模式只有 loadAll 全表扫 / upsert / 主键 IN 删除，全不走它们，
+      // 纯写放大（审查 P2）。DDL 已不再创建；每次 open 幂等 DROP 兜住
+      // 已升级过的库（onUpgrade 对同版本库不触发）。
+      try {
+        await _db!.execute('DROP INDEX IF EXISTS idx_search_place');
+        await _db!.execute('DROP INDEX IF EXISTS idx_search_camera');
+      } catch (_) {}
     } catch (_) {
       // 降级红线:保持 _db = null(store 全部 noop)。
     }
@@ -168,10 +176,8 @@ class DatabaseService {
         date_modified_ms INTEGER
       ) WITHOUT ROWID
     ''');
-    await db.execute(
-        'CREATE INDEX IF NOT EXISTS idx_search_place ON search_index (country, admin_area, locality)');
-    await db.execute(
-        'CREATE INDEX IF NOT EXISTS idx_search_camera ON search_index (camera)');
+    // 不建二级索引：查询模式是 loadAll 全表/upsert/主键 IN 删除，
+    // 复合索引只带来写放大（2026-09 审查）。
   }
 
   /// v3 会话三表(createAll 全量建表用,保证 schema 一致)。

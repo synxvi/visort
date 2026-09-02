@@ -957,7 +957,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
       }
       final m = metas[p.id];
       if (m == null) return false;
+      // 地名匹配含省/国：placeLabel = locality ?? adminArea ?? country 是
+      // 短路兜底链，搜「浙江」要能命中 placeLabel=「杭州市」的照片
+      //（审查 P2 文本搜索不命中省份）。
       return m.placeLabel.toLowerCase().contains(q) ||
+          (m.adminArea?.toLowerCase().contains(q) ?? false) ||
+          (m.country?.toLowerCase().contains(q) ?? false) ||
           (m.camera?.toLowerCase().contains(q) ?? false);
     }).toList();
   }

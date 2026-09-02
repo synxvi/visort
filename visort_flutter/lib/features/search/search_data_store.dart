@@ -25,8 +25,8 @@ import 'package:visort_flutter/core/db/database_service.dart';
 import 'package:visort_flutter/core/db/hdr_cache_store.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
+import 'package:visort_flutter/features/search/search_filter_data.dart';
 import 'package:visort_flutter/features/search/search_index_service.dart';
-import 'package:visort_flutter/ui/screens/search_filter_chip.dart';
 
 /// 坐标兜底网格精度（度）：0.01° ≈ 1.1km（与页面 v1 行为一致）。
 const double _kPlaceGrid = 0.01;
@@ -83,6 +83,11 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
   final MediaStoreChannel _channel = const MediaStoreChannel();
   bool _loading = false;
 
+  /// _syncIndex 在途标志：warmUp fire-and-forget 不含 sync 生命周期，
+  /// 快速二次进页会双跑 syncNewPhotos（幂等但重复 EXIF/geocode 工作，
+  /// 审查 P2）。
+  bool _syncing = false;
+
   /// HDR 落盘统一走 hdr_cache 表（与相册网格 _backfillHdr 同一张表，
   /// 2026-09 审查 M3：此前搜索侧 SP 逗号串 / 网格侧表双持久化，两侧
   /// 各自冷恢复、重复检测、互不复用）。表带 mtime 跨进程跨桶共享，
@@ -131,6 +136,12 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
     ref.listen(currentLanguageProvider, (prev, next) {
       if (state.ready && prev != next) rebuildFilters();
     });
+    // 索引数据变化（首轮完成/增量落地/补地名/清库）→ 分组重建：用户
+    // 停在搜索页时地点/相机 chips 即时出现/消失，无需离开重进（审查
+    // P2「索引完成无通知」）。ready 守卫：首载路径 warmUp 自己重建。
+    ref.read(searchIndexServiceProvider.notifier).onDataChanged = () {
+      if (state.ready) rebuildFilters();
+    };
     return const SearchDataState();
   }
 
@@ -205,20 +216,22 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
     }
   }
 
-  /// 索引恢复 + 增量对账 + 惰性补地名，完成后刷新分组。
+  /// 索引恢复 + 增量对账 + 惰性补地名。完成后不再由此处刷新分组——
+  /// service 的 onDataChanged（build() 注册）统一通知：首轮完成/增量
+  /// 落地/补地名/清库四条路径共用，也覆盖「用户停在搜索页」场景。
+  /// （关开关的幽灵 chips 场景由 clear() 的 onDataChanged 兜住。）
   Future<void> _syncIndex(List<MsImageInfo> photos) async {
-    final notifier = ref.read(searchIndexServiceProvider.notifier);
-    await notifier.load();
-    if (!ref.read(configProvider).mlIndexEnabled) {
-      // 关开关也要重建分组：clear() 只清 service 层 metas/DB，filters 里
-      // 的地点/相机/元数据 chips 是上次索引的残留快照，不重建会一直展示
-      // 用户刚要求删除的数据（审查 P1-1 幽灵 chips）。
-      rebuildFilters();
-      return;
+    if (_syncing) return;
+    _syncing = true;
+    try {
+      final notifier = ref.read(searchIndexServiceProvider.notifier);
+      await notifier.load();
+      if (!ref.read(configProvider).mlIndexEnabled) return;
+      await notifier.syncNewPhotos(photos);
+      await notifier.resolvePendingPlaces();
+    } finally {
+      _syncing = false;
     }
-    await notifier.syncNewPhotos(photos);
-    await notifier.resolvePendingPlaces();
-    rebuildFilters();
   }
 
   /// HDR 检测（后台）：先查 hdr_cache 表命中（mtime 匹配零文件 IO，
@@ -330,8 +343,9 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
         coordBuckets.putIfAbsent('$lat,$lng', () => []).add(p);
       }
     }
-    final placeList = places.values.toList()
-      ..sort((a, b) => b.photos.length.compareTo(a.photos.length));
+    // 合并后一次排序即终序（此前命名组先排一遍、追加坐标组再整体重排，
+    // 第一次是白付——审查 L2）。
+    final placeList = places.values.toList();
     for (final e in coordBuckets.entries) {
       final parts = e.key.split(',');
       placeList.add(_Group(
