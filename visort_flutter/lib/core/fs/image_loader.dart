@@ -226,6 +226,15 @@ class _AndroidBytesImageProvider
         // 必须 await：否则 instantiateCodec 的异步错误逃出 catch，
         // 不落 readBytes 兜底（3.47 unawaited_return_in_try_block 揪出）。
         final codec = await desc.instantiateCodec();
+        // ⚠️ 此处不可 dispose desc/sBuffer（真机实证 2026-09-02）：raw
+        // 描述符的 codec 惰性引用像素，解码发生在 io worker 线程——
+        // dispose 后 codec 下一次 getNextFrame 解引用已清零的内部结构
+        // → SIGSEGV(addr 0x20, libflutter.so io.worker)。SDK 的
+        // instantiateImageCodecWithSize 敢在 finally 里 dispose buffer，
+        // 只因那条路是 ImageDescriptor.encoded（数据已被拷贝消费）；
+        // painting.dart:8939 的「保留至所有持有者 dispose」保护网不
+        // 覆盖 codec 对 raw 像素的引用。代价：每张全图多滞留 w×h×4
+        // 原生内存至 GC 终结器回收（审查 P1，两害相权取其轻）。
         cachePerfDecode(cacheLevelFull(tw), key.ref.id, r.width, r.height);
         return codec;
       } catch (_) {

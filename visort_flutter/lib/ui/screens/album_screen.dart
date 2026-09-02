@@ -232,6 +232,21 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   @override
   void initState() {
     super.initState();
+    // 相册路由深度守卫：双指双桶时第二个相册页在此被发现并静默自退
+    // （initState 顺序严格等于入栈顺序，判定不依赖 tap 时序）。
+    // 重复页不 enter、不清 state，pop 转场从透明开始几乎无感。
+    _isDuplicateRoute = !AlbumRouteGuard.registerAndCheckFirst();
+    if (_isDuplicateRoute) {
+      debugPrint('[GAL] duplicate album route, self-pop bucket=${widget.bucketId}');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final nav = Navigator.of(context);
+        if (nav.canPop()) nav.pop();
+      });
+      // 重复页即弃：不挂监听、不触发任何数据加载（initState 顺序严格等于
+      // 入栈顺序，先入栈的页保有数据与 Hero，后入栈者静默退出）。
+      return;
+    }
     // 恢复上次相册内视图偏好（沉浸网格 / 日期分组）。
     _timelineView = ref.read(configProvider).photoTimelineView;
     _scrollCtrl.addListener(_onScroll);
@@ -256,6 +271,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       } else if (widget.trashedOnly) {
         ref.read(galleryControllerProvider.notifier).enterTrash();
       } else {
+        final gallery = ref.read(galleryControllerProvider);
+        // 幂等：tile 侧 _openAlbum 已 await enterBucket 并把 state 切到本桶
+        // （Hero 终点就绪）——postFrame 重复 enter 会在双路由场景互相踩
+        // （refresh page-drop 互丢，2026-09 双指双桶黑占位）。已就绪则跳过。
+        if (gallery.bucketId == widget.bucketId && gallery.firstPageLoaded) {
+          return;
+        }
         ref
             .read(galleryControllerProvider.notifier)
             .enterBucket(widget.bucketId);
@@ -293,6 +315,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
 
   @override
   void dispose() {
+    AlbumRouteGuard.unregister();
     // 菜单浮层挂 rootOverlay（不随本页 dispose），主动收回防残留。
     _menuCtl?.close();
     widget.shellHandle?.onBack = null;
@@ -354,16 +377,60 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           // 退出相册：保存桶快照（同桶重进秒出）+ 重查相册列表（返回首页
           // 刷新 count/封面）。不能在 dispose 里 ref.read——riverpod 断言
           // "Cannot use ref after the widget was disposed"（debug 红屏）。
-          ref.read(galleryControllerProvider.notifier).exitBucket();
+          // 双指重复页（静默自退）没有自己的数据，不清全局 state——否则
+          // 会抽走栈中幸存相册页的数据（2026-09 黑屏根因）。
+          if (!_isDuplicateRoute) {
+            ref.read(galleryControllerProvider.notifier).exitBucket();
+          }
         }
       },
       child: child,
     );
   }
 
+  /// 自愈防重入排程标志。
+  bool _reenterQueued = false;
+
+  /// 双指双桶守卫：本页是否为栈中重复的相册页（静默自退，见 initState）。
+  bool _isDuplicateRoute = false;
+
+  /// state 归属自愈：本页成为顶层（isCurrent）但全局 state 已不归自己时，
+  /// 重新 enterBucket 拉回数据（内存快照命中，秒回）。
+  ///
+  /// 背景（2026-09 双指双桶黑屏实证）：首页 tile 导航无全局互斥，双指同点
+  /// 两个相册会把两个 AlbumScreen 先后压栈；任一页 pop 时 exitBucket 清空
+  /// 全局 state——栈中幸存的另一页 rebuild 成 photos=[] 占位（红棕骨架）
+  /// 且无人再触发 enter → 永久黑屏。页面只对「自己可见时」自愈（栈下不抢
+  /// 顶层页的 state）；isCurrent 变化经 ModalRoute.of 依赖触发 rebuild，
+  /// 自愈后归属成立自然收敛，无循环。
+  void _scheduleReenter() {
+    if (_reenterQueued) return;
+    _reenterQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _reenterQueued = false;
+      if (!mounted) return;
+      final g = ref.read(galleryControllerProvider);
+      if (g.bucketId == widget.bucketId) return;
+      debugPrint('[GAL] self-heal re-enter bucket=${widget.bucketId} '
+          '(state=${g.bucketId})');
+      ref
+          .read(galleryControllerProvider.notifier)
+          .enterBucket(widget.bucketId);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final gallery = ref.watch(galleryControllerProvider);
+    // 顶层归属校验（普通相册页；收藏/回收站/Shell 嵌入页不按 bucketId 归属）。
+    final isCurrent = ModalRoute.of(context)?.isCurrent ?? true;
+    if (isCurrent &&
+        !widget._embedded &&
+        !widget.favoritesOnly &&
+        !widget.trashedOnly &&
+        gallery.bucketId != widget.bucketId) {
+      _scheduleReenter();
+    }
     return _maybePopScope(
       child: Scaffold(
         backgroundColor: AppColors.bg,

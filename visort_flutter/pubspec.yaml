@@ -16,6 +16,8 @@ dependencies:
   path_provider: ^2.1.0
   path: ^1.9.0
   window_manager: ^0.5.0
+  # 窗口恢复的屏内校验用（window_manager 的传递依赖，显式声明以合规 import）。
+  screen_retriever: ^0.2.2
   shared_preferences: ^2.2.0
   flutter_animate: ^4.5.0
   # [SQLite 改造 P0] 数据级持久化底座(见 docs/SQLITE_ROADMAP.md):

@@ -45,6 +45,29 @@ const albumNoiseDisabledRoutes = {
   AlbumRoutes.photoViewer,
 };
 
+/// 相册路由深度守卫（2026-09 双指双桶黑屏的终态修复）。
+///
+/// 首页 tile 导航的 tap 层互斥（static 锁 / canPop）真机实证均不可靠
+/// （同毫秒双通过，机制未明）——改用【不依赖任何时序】的结构性保证：
+/// 相册页 initState 时向此计数器注册，发现自己不是栈中唯一的相册页
+/// 即静默 pop 自己。initState 顺序严格等于入栈顺序（路由栈是严格的），
+/// 第二页注册时 depth 必然 ≥2 → 必然自退。首页 tile 导航语义由此收敛为
+/// 「第一次命中相册后，阻止再开另一相册」。
+abstract final class AlbumRouteGuard {
+  static int _depth = 0;
+
+  /// 页面 initState 调用。返回是否为栈中唯一的相册页。
+  static bool registerAndCheckFirst() {
+    _depth++;
+    return _depth == 1;
+  }
+
+  /// 页面 dispose 调用。
+  static void unregister() {
+    _depth = (_depth - 1).clamp(0, 1 << 30);
+  }
+}
+
 /// 生成安卓相册浏览链的路由。
 ///
 /// 由共享 [onGenerateRoute] 的 default 分支委托调用；桌面端因永不 push 这些路由名，

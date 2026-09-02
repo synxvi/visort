@@ -459,27 +459,54 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
   /// coverId 是 listBuckets 的封面（排序可能与相册内不同）→ 必须用 photos[0]。
   String? _heroTag;
 
+  /// 导航防重入【static 跨全部 tile 实例互斥】：双指同点两个 tile 时
+  /// 两个 _open 并发执行（曾无锁：双路由入栈打断首路由 Hero flight →
+  /// 飞行被吃/黑 tile 残影/残影吞点击，2026-09 真机多轮实证）。锁在
+  /// 首个 await 前同步置位——同 isolate 内后续 tap 必然看到 true。
+  static bool _navInFlight = false;
+
   Future<void> _open() async {
-    // [ente 对齐] 相册打开 = 200ms fade + 封面 Hero 飞行（封面↔网格第一张图）。
-    // 先 await enterBucket：push 时网格第一张 cell 必须已存在（Hero 终点），
-    // 否则 flight 不启动（数据异步查询错过动画窗口）。快照命中秒回；
-    // 首次查 MediaStore ~100-300ms（一次性，之后快照直出）。
-    final notifier = ref.read(galleryControllerProvider.notifier);
-    await notifier.enterBucket(widget.bucket.id);
-    if (!mounted) return;
-    final photos = ref.read(galleryControllerProvider).photos;
-    if (photos.isNotEmpty) {
-      final tag = 'photo_${photos[0].id}';
-      setState(() => _heroTag = tag);
-      widget.onFlightStart?.call(tag);
+    if (_navInFlight) return;
+    _navInFlight = true;
+    try {
+      // [ente 对齐] 相册打开 = 200ms fade + 封面 Hero 飞行（封面↔网格第一张图）。
+      // 先 await enterBucket：push 时网格第一张 cell 必须已存在（Hero 终点），
+      // 否则 flight 不启动（数据异步查询错过动画窗口）。快照命中秒回；
+      // 首次查 MediaStore ~100-300ms（一次性，之后快照直出）。
+      final notifier = ref.read(galleryControllerProvider.notifier);
+      await notifier.enterBucket(widget.bucket.id);
+      if (!mounted) return;
+      final s = ref.read(galleryControllerProvider);
+      // 终局裁决（await 之后、push 之前）：await 窗口内 state 可能已被
+      // 其他入口（Shell 切页/收藏/回收站）切走——非本桶直接放弃导航，
+      // 且不拿他桶首张做 Hero（跨桶 tag 与真实终点对不上）。
+      if (s.bucketId != widget.bucket.id) {
+        debugPrint('[GAL] gallery nav-abort(own) bucket=${widget.bucket.id} '
+            'state=${s.bucketId}');
+        return;
+      }
+      // 已有相册路由在栈（防一切来源的并发导航）：push 是 UI 线程同步
+      // 原子操作，两并发流只可能一个在 push 前观测到 canPop==false。
+      if (Navigator.of(context).canPop()) {
+        debugPrint('[GAL] gallery nav-abort(canPop) bucket=${widget.bucket.id}');
+        return;
+      }
+      final photos = s.photos;
+      if (photos.isNotEmpty) {
+        final tag = 'photo_${photos[0].id}';
+        setState(() => _heroTag = tag);
+        widget.onFlightStart?.call(tag);
+      }
+      final args = {
+        'bucketId': widget.bucket.id,
+        'bucketName': widget.bucket.name,
+        'bucketCount': widget.bucket.count,
+      };
+      await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
+      if (mounted) widget.onFlightStart?.call(''); // 清除
+    } finally {
+      _navInFlight = false;
     }
-    final args = {
-      'bucketId': widget.bucket.id,
-      'bucketName': widget.bucket.name,
-      'bucketCount': widget.bucket.count,
-    };
-    await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
-    if (mounted) widget.onFlightStart?.call(''); // 清除
   }
 
   @override

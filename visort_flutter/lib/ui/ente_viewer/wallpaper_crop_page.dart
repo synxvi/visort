@@ -329,7 +329,9 @@ class _WallpaperCropPageState extends ConsumerState<WallpaperCropPage> {
         child: _GlassPillButton(
           label: t(ref, 'set_wallpaper'),
           loading: _applying,
-          onTap: (_applying || _vw <= 0) ? null : _apply,
+          // _image == null（解码未完成/失败）时 _cw 等仍是 null，
+          // _visibleDecodedRect 的 `!` 断言会炸——必须一并禁用（审查 P1）。
+          onTap: (_applying || _vw <= 0 || _image == null) ? null : _apply,
         ),
       ),
     );
@@ -342,11 +344,12 @@ class _WallpaperCropPageState extends ConsumerState<WallpaperCropPage> {
     if (picked == null || !mounted) return;
     final (target, scroll) = picked;
 
-    var region = _visibleDecodedRect();
-    if (scroll) region = _expandScroll(region);
-
     setState(() => _applying = true);
     try {
+      // region 计算收进 try：门控与执行之间解码态可能变化，坐标换算
+      // 一旦抛错也走统一失败提示，而非无 catch 的异步逃逸（审查 P1）。
+      var region = _visibleDecodedRect();
+      if (scroll) region = _expandScroll(region);
       // 渲染在先（可能失败），channel 在后（异常映射 WallpaperException）。
       final bytes = await _renderBytes(region);
       if (bytes == null) throw const WallpaperException('RENDER_FAILED', '渲染失败');

@@ -696,10 +696,10 @@ class _MlSectionState extends ConsumerState<_MlSection> {
   int? _percent(SearchIndexState ml) =>
       ml.total <= 0 ? null : (ml.processed * 100 / ml.total).round().clamp(0, 100);
 
-  /// 进度主行右侧：百分比 + 索引张数。张数独立于首轮百分比——增量对账
-  /// （syncNewPhotos）只涨张数不动百分比，是观察增量变化的窗口；首轮
-  /// 跑批中张数保持旧值，跑完/增量落地后刷新。空库（total=0 跑完）显示
-  /// 「0 张 · 已完成」而非「…」（ranOnce 语义）。
+  /// 进度主行右侧：百分比 + 索引张数。张数实时反映已落库行数——跑批中
+  /// 随百分比一起涨（2026-09 用户定稿，不再跑完才跳）；增量对账
+  /// （syncNewPhotos）只涨张数不动百分比，是观察增量变化的窗口。空库
+  /// （total=0 跑完）显示「0 张 · 已完成」而非「…」（ranOnce 语义）。
   String? _progressText(SearchIndexState ml) {
     final pct = _percent(ml);
     final parts = <String>[
