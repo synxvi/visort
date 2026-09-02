@@ -15,6 +15,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/config/profiles_service.dart';
@@ -332,7 +333,13 @@ class GalleryController extends Notifier<GalleryState> {
       // enter 整体作废。若继续写旧桶视图，下方 _refreshBucketPage 里
       // `state.bucketId != bucketId` 守卫会把新桶结果也一并丢弃，界面
       // 永久卡在没点过的桶（审查 P1）。
-      if (token != _loadToken) return;
+      if (token != _loadToken) {
+        // [GAL] 低频路径打点：双指双桶等并发进桶时的失配取证（2026-09
+        // 黑占位问题排查留观——若黑块与竞态相关，此行即 smoking gun）。
+        debugPrint('[GAL] enterBucket stale-return bucket=$bucketId '
+            'token=$token now=$_loadToken');
+        return;
+      }
       if (snap != null) _bucketSnapshots[bucketId] = snap;
     }
     final snapValid = snap != null &&
