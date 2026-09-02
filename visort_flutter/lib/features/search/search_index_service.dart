@@ -26,9 +26,12 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async' show unawaited;
+
 import 'package:visort_flutter/core/db/database_service.dart';
 import 'package:visort_flutter/core/db/search_index_store.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
+import 'package:visort_flutter/core/i18n/i18n.dart' show configProvider;
 
 /// 全量照片分页拉取（空 bucketIds = 全部相册；Kotlin 侧查询已显式排除
 /// 回收站项）。搜索页与索引服务共用——全库扫描只做一次。
@@ -187,6 +190,18 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       );
     }
     onDataChanged?.call();
+    // 断点续跑：跑批中杀进程→重开，SP 进度恢复了一半但无人再触发
+    // start()（原来只有设置页手动开开关才启动）——进度卡死，必须手动
+    // 关-开一次才恢复（2026-09 用户实证）。开关开着且首轮未完成时自动
+    // 重启跑批：start() 全量重跑，putAll 覆盖幂等，进度从头收敛到 done
+    // 后守闸不再触发。running 时跳过（load 保留 running 态防双循环）。
+    if (ref.read(configProvider).mlIndexEnabled &&
+        !state.running &&
+        !state.done) {
+      debugPrint('[SIDX] resume after restore: '
+          'processed=${state.processed}/${state.total}');
+      unawaited(start());
+    }
   }
 
   /// 开启索引：全量扫描提取 EXIF + 地名解析（随总开关恒开）。
