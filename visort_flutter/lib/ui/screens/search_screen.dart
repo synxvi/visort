@@ -679,7 +679,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 : t(ref, 'search_places_hint'),
           ),
         ],
-        // 拍摄设备（索引 camera 字段，元数据上面）。
+        // 相机（索引 camera 字段，元数据上面）。
         _buildSection(
             title: t(ref, 'search_cameras'),
             categories: const ['camera'],

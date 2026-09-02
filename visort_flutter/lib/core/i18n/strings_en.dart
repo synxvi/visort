@@ -179,7 +179,7 @@ const Map<String, String> stringsEn = {
   'search_places_empty': 'No location data',
   'search_places_hint': 'Photos have no GPS data, or indexing is in progress.',
   'search_places_hint_index':
-      'Enable Smart Indexing in Settings to group photos by city.',
+      'Enable Image Info Index in Settings to group photos by city.',
   'search_albums': 'Albums',
   'search_types': 'File Types',
   'search_cameras': 'Cameras',
@@ -376,7 +376,7 @@ const Map<String, String> stringsEn = {
   'settings_section_ml': 'Index',
   'settings_ml_index': 'Image Info Index',
   'settings_ml_index_note':
-      'Scans photos for date, location and camera info to power search by date/place/camera. Requests access to media location when enabled. Independent from the thumbnail Cache above.',
+      'Scans photos for capture date, GPS coordinates and camera model, and resolves place names. The Places / Cameras / Metadata filters in search rely on this index; file types, albums and other filters work without it. Requests access to media location when enabled. Independent from the thumbnail Cache above.',
   'settings_ml_progress': 'Indexing Progress',
   'settings_ml_count': '{0} photos',
   'settings_ml_running': 'Indexing…',
