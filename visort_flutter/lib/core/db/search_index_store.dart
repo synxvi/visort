@@ -21,7 +21,13 @@ class SearchIndexStore {
   final Future<sqflite.Database?> _db;
 
   /// 批量写回(INSERT OR REPLACE,upsert 覆盖)。
-  Future<void> putAll(List<MsSearchMeta> metas) async {
+  /// [mtimes] = 提取时各图的 DATE_MODIFIED(ms)——增量对账用它检测
+  /// 「照片被外部编辑后需重提取」;null 行(升级前的旧数据)视为未知,
+  /// 由 service 首见时回填。
+  Future<void> putAll(
+    List<MsSearchMeta> metas, {
+    Map<String, int>? mtimes,
+  }) async {
     if (metas.isEmpty) return;
     try {
       final db = await _db;
@@ -39,6 +45,7 @@ class SearchIndexStore {
             'country': m.country,
             'admin_area': m.adminArea,
             'locality': m.locality,
+            'date_modified_ms': mtimes?[m.id],
           },
           conflictAlgorithm: sqflite.ConflictAlgorithm.replace,
         );
@@ -47,6 +54,45 @@ class SearchIndexStore {
     } catch (_) {
       // 写失败 = 该批索引丢失,下次开启索引重建,无损。
     }
+  }
+
+  /// 读回全部提取时间戳(id → DATE_MODIFIED)。只含已回填/新写入的行
+  /// (旧升级行无值,不在结果里——service 首见回填)。
+  Future<Map<String, int>> loadMtimes() async {
+    try {
+      final db = await _db;
+      if (db == null) return const {};
+      final rows = await db.query(
+        'search_index',
+        columns: ['id', 'date_modified_ms'],
+        where: 'date_modified_ms IS NOT NULL',
+      );
+      return {
+        for (final r in rows) r['id'] as String: r['date_modified_ms'] as int,
+      };
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  /// 批量回填提取时间戳(不动其他列)。升级后首次对账对存量行补记
+  /// 当前 mtime——接受升级前的历史现状,从今往后变更可检测。
+  Future<void> updateMtimes(Map<String, int> mtimes) async {
+    if (mtimes.isEmpty) return;
+    try {
+      final db = await _db;
+      if (db == null) return;
+      final batch = db.batch();
+      for (final e in mtimes.entries) {
+        batch.update(
+          'search_index',
+          {'date_modified_ms': e.value},
+          where: 'id = ?',
+          whereArgs: [e.key],
+        );
+      }
+      await batch.commit(noResult: true);
+    } catch (_) {}
   }
 
   /// 全量读回(id → 元数据)。DB 不可用/空表返回空 Map(调用方按

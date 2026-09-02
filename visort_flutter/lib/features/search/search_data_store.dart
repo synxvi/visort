@@ -21,6 +21,8 @@ import 'package:flutter/material.dart' show IconData, Icons;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:visort_flutter/core/config/models.dart' show SortBy;
+import 'package:visort_flutter/core/db/database_service.dart';
+import 'package:visort_flutter/core/db/hdr_cache_store.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/features/search/search_index_service.dart';
@@ -81,27 +83,42 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
   final MediaStoreChannel _channel = const MediaStoreChannel();
   bool _loading = false;
 
-  /// HDR 持久化 key（id 逗号串）：Kotlin detectHdrs 的 mtime 缓存是进程
-  /// 内存，冷启动清空 → 全量 JPEG 重读文件头数百 ms，HDR chip 迟到
-  /// （用户实测「第一次进搜索页 HDR 不在，过会才出现」）。冷启动先
-  /// 用上次结果秒渲染，后台检测校准（无差异零 setState）。
+  /// HDR 落盘统一走 hdr_cache 表（与相册网格 _backfillHdr 同一张表，
+  /// 2026-09 审查 M3：此前搜索侧 SP 逗号串 / 网格侧表双持久化，两侧
+  /// 各自冷恢复、重复检测、互不复用）。表带 mtime 跨进程跨桶共享，
+  /// 检测命中方写入后另一侧免测。
+  late final HdrCacheStore _hdrStore =
+      HdrCacheStore(ref.read(databaseServiceProvider).database);
+
+  /// 旧 SP 逗号串 key（迁移源）：首载仍有值则秒渲染一次，本轮检测
+  /// 完成后删除——此后表是唯一持久层。
   static const _kHdrPrefsKey = 'search_hdr_ids';
 
-  Future<Set<String>> _loadPersistedHdr() async {
+  /// 首载 HDR 恢复：旧 SP 值优先（迁移期秒渲染，精度靠后台校准），
+  /// 无则查 hdr_cache 表命中（mtime 匹配才复用）。
+  Future<Set<String>> _restoreHdr(List<MsImageInfo> photos) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_kHdrPrefsKey);
-      if (raw == null || raw.isEmpty) return const {};
-      return raw.split(',').toSet();
-    } catch (_) {
-      return const {};
-    }
+      if (raw != null && raw.isNotEmpty) return raw.split(',').toSet();
+    } catch (_) {}
+    final jpegs =
+        photos.where((p) => p.mime == 'image/jpeg').toList(growable: false);
+    if (jpegs.isEmpty) return const {};
+    final hits = await _hdrStore.lookup({
+      for (final p in jpegs) p.id: p.dateModifiedMs,
+    });
+    return {
+      for (final e in hits.entries)
+        if (e.value) e.key,
+    };
   }
 
-  Future<void> _persistHdr(Set<String> ids) async {
+  /// 一次性迁移收尾：检测校准完成后删旧 SP 键（表已写全）。
+  Future<void> _removeLegacyHdrPrefs() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_kHdrPrefsKey, ids.join(','));
+      await prefs.remove(_kHdrPrefsKey);
     } catch (_) {}
   }
 
@@ -127,15 +144,15 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
         final photos = await scanAllImages(_channel);
         final buckets = await _channel.listBuckets();
         // HDR 上次结果先恢复（首帧 HDR chip 即在）；后台真检测校准。
-        final persistedHdr = await _loadPersistedHdr();
+        final restoredHdr = await _restoreHdr(photos);
         state = SearchDataState(
           photos: photos,
           buckets: buckets,
-          hdrIds: persistedHdr,
+          hdrIds: restoredHdr,
           ready: true,
         );
         debugPrint('[SDS] first load: ${photos.length} photos, '
-            'persisted hdr=${persistedHdr.length}');
+            'restored hdr=${restoredHdr.length}');
         rebuildFilters();
         unawaited(_detectHdr());
         _syncIndex(photos);
@@ -204,30 +221,46 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
     rebuildFilters();
   }
 
-  /// HDR 检测（后台，mtime 缓存命中时 8ms）：结果只记 hdrIds 字段——
-  /// 不换 photos 数组实例（整列表重建 = 全 chips 重建风暴，入场闪烁
-  /// 根源之一，实证见 search_screen 历史）。
+  /// HDR 检测（后台）：先查 hdr_cache 表命中（mtime 匹配零文件 IO，
+  /// 网格侧已测过的直接复用——两侧同表，2026-09 审查 M3 合并），仅对
+  /// 未命中项跑 Kotlin detectHdrs，结果连同 false 全量写表（另一侧再
+  /// 免测）。hdrIds 只记 id 集——不换 photos 数组实例（整列表重建 =
+  /// 全 chips 重建风暴，入场闪烁根源之一，实证见 search_screen 历史）。
   Future<void> _detectHdr() async {
     final jpegs =
         state.photos.where((p) => p.mime == 'image/jpeg').toList();
     if (jpegs.isEmpty) return;
     try {
-      final hdrs = await _channel.detectHdrs(
-        jpegs.map((p) => p.id).toList(),
-        jpegs.map((p) => p.dateModifiedMs).toList(),
-        jpegs.map((p) => p.mime).toList(),
-      );
-      final hdrIds = <String>{};
-      for (var i = 0; i < jpegs.length && i < hdrs.length; i++) {
-        if (hdrs[i]) hdrIds.add(jpegs[i].id);
+      final cached = await _hdrStore.lookup({
+        for (final p in jpegs) p.id: p.dateModifiedMs,
+      });
+      final pending =
+          jpegs.where((p) => !cached.containsKey(p.id)).toList();
+      final hdrIds = {
+        for (final e in cached.entries)
+          if (e.value) e.key,
+      };
+      if (pending.isNotEmpty) {
+        final hdrs = await _channel.detectHdrs(
+          pending.map((p) => p.id).toList(),
+          pending.map((p) => p.dateModifiedMs).toList(),
+          pending.map((p) => p.mime).toList(),
+        );
+        final entries = <String, (int, bool)>{};
+        for (var i = 0; i < pending.length && i < hdrs.length; i++) {
+          entries[pending[i].id] = (pending[i].dateModifiedMs, hdrs[i]);
+          if (hdrs[i]) hdrIds.add(pending[i].id);
+        }
+        await _hdrStore.putAll(entries);
       }
-      // 校准结果落盘（下次冷启动秒渲染）；与恢复值相同则零 setState。
-      unawaited(_persistHdr(hdrIds));
+      // 迁移收尾：表已写全，旧 SP 逗号串废弃删除。
+      unawaited(_removeLegacyHdrPrefs());
+      // 与恢复值相同则零 setState。
       if (hdrIds.length == state.hdrIds.length &&
           hdrIds.containsAll(state.hdrIds)) {
         return;
       }
-      debugPrint('[SDS] hdr: ${hdrIds.length}');
+      debugPrint('[SDS] hdr: ${hdrIds.length} (cached ${cached.length})');
       state = SearchDataState(
         photos: state.photos,
         buckets: state.buckets,
