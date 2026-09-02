@@ -2050,11 +2050,22 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
   static bool _navInFlight = false;
 
   Future<void> _openAlbum() async {
-    if (_navInFlight) return;
+    if (_navInFlight) {
+      debugPrint('[GAL] nav-blocked(static) bucket=${widget.bucket.id}');
+      return;
+    }
     if (_interceptIfEditing()) return;
     // 选择模式（本组已有相册勾选）：点击改为勾选/取消本相册，不进入浏览
     if (widget.selectionMode) {
       widget.onCheckToggle();
+      return;
+    }
+    // 入口路由互斥（用户定稿 2026-09：此界面无多指场景，第一次命中后
+    // 阻止再开另一相册）：第一击的 pushNamed 是【同步入栈】——其后任何
+    // tap（哪怕同帧）canPop 已为 true，判定不依赖字段时序，必生效。
+    // 主页是根路由，正常态 canPop 恒 false。
+    if (Navigator.of(context).canPop()) {
+      debugPrint('[GAL] nav-blocked(canPop) bucket=${widget.bucket.id}');
       return;
     }
     _navInFlight = true;
