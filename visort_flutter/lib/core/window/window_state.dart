@@ -7,8 +7,10 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' show Rect;
 
 import 'package:path_provider/path_provider.dart';
+import 'package:screen_retriever/screen_retriever.dart';
 import 'package:window_manager/window_manager.dart';
 
 class WindowBounds {
@@ -65,6 +67,36 @@ class WindowStateService {
       return WindowBounds.fromJson(json);
     } catch (_) {
       return null;
+    }
+  }
+
+  /// 校验已保存窗口与任一显示器的可见区域相交（≥100×100 阈值）。
+  ///
+  /// 换主屏/拔副屏后，保存的 offset 可能落在已不存在的屏幕区域——
+  /// 越界但合法的坐标 setBounds 不报错，表现为「应用启动了却看不见
+  /// 窗口」，且每次启动都会被屏外坐标覆写保存（审查 P1）。返回 false
+  /// 时调用方只恢复尺寸并居中。
+  Future<bool> isBoundsOnScreen(WindowBounds b) async {
+    final win = Rect.fromLTWH(b.offsetX, b.offsetY, b.width, b.height);
+    try {
+      final displays = await screenRetriever.getAllDisplays();
+      for (final d in displays) {
+        final vp = d.visiblePosition;
+        final vs = d.visibleSize ?? d.size;
+        final visible = Rect.fromLTWH(
+          vp?.dx ?? 0,
+          vp?.dy ?? 0,
+          vs.width,
+          vs.height,
+        );
+        final inter = visible.intersect(win);
+        // 至少露出 100×100，肉眼能找到并拖回；完全在屏外才算越界。
+        if (inter.width >= 100 && inter.height >= 100) return true;
+      }
+      return false;
+    } catch (_) {
+      // 探测失败（API 异常/平台差异）不误伤：按可见处理，行为同旧版。
+      return true;
     }
   }
 

@@ -31,6 +31,31 @@ import 'core/window/window_state.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // ──────────── 全局错误兜底（必须先于一切 await 安装） ────────────
+  // 原先装在 config/SQLite/字体等多个 await 之后——窗口期内的异步异常
+  // 会绕过兜底（审查 P1）。统一落 debugPrint（release 为空操作但 zone
+  // 已吞掉，不再有未处理异常警告；debug/profile 可见全栈）。后续如需
+  // 持久化再接本地日志文件。
+  FlutterError.onError = (details) {
+    // 透传标准诊断输出（ErrorSummary/上下文/信息收集器），再附加自有日志。
+    FlutterError.presentError(details);
+    debugPrint('[FlutterError] ${details.exception}\n${details.stack}');
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('[uncaught] $error\n$stack');
+    return true; // 标记已处理，阻止向 zone 冒泡
+  };
+  // release 下 build/layout 异常默认渲染灰底红叉 ErrorWidget（无 i18n、
+  // 无降级 UI）——换成与深色主题一致的静默占位；debug 保留默认排错页。
+  if (!kDebugMode) {
+    ErrorWidget.builder = (details) => const ColoredBox(
+          color: Color(0xFF121212),
+          child: Center(
+            child: Text('⚠', style: TextStyle(fontSize: 40)),
+          ),
+        );
+  }
+
   // [SDH 取证] 手势诊断（临时，排查手柄第一次拖不动）：arena 裁决序列 +
   // recognizer 回调 trace。kDebugMode 守卫——每个 pointer 事件每 recognizer
   // 一行字符串插值 + logcat 写入落在交互热路径上，release 构建必须为关
@@ -100,17 +125,6 @@ Future<void> main() async {
   smLoader.addFont(rootBundle.load('assets/fonts/SpaceMono-Bold.ttf'));
   await smLoader.load();
 
-  // 全局错误兜底：未捕获的异步异常在 release 下无声消失、线上无从排查。
-  // 统一落 debugPrint（release 为空操作但 zone 已吞掉，不再有未处理异常
-  // 警告；debug/profile 可见全栈）。后续如需持久化再接本地日志文件。
-  FlutterError.onError = (details) {
-    debugPrint('[FlutterError] ${details.exception}\n${details.stack}');
-  };
-  PlatformDispatcher.instance.onError = (error, stack) {
-    debugPrint('[uncaught] $error\n$stack');
-    return true; // 标记已处理，阻止向 zone 冒泡
-  };
-
   runApp(UncontrolledProviderScope(
     container: container,
     child: const VisortApp(),
@@ -128,7 +142,10 @@ Future<void> _setupWindows() async {
     // 恢复上次窗口状态（大小 + 位置 + 最大化）
     final windowService = WindowStateService();
     final bounds = await windowService.load();
-    if (bounds != null) {
+    // 屏内校验：拔副屏/换主屏后旧坐标可能落在已消失的区域——越界但合法
+    // 的 offset setBounds 不报错，窗口开到屏外「启动了却看不见」（审查
+    // P1）。越界时只恢复尺寸并居中，避免下次启动继续复现。
+    if (bounds != null && await windowService.isBoundsOnScreen(bounds)) {
       await windowManager.setBounds(Rect.fromLTWH(
         bounds.offsetX,
         bounds.offsetY,
@@ -138,6 +155,9 @@ Future<void> _setupWindows() async {
       if (bounds.isMaximized) {
         await windowManager.maximize();
       }
+    } else if (bounds != null) {
+      await windowManager.setSize(Size(bounds.width, bounds.height));
+      await windowManager.center();
     } else {
       // 首次启动：默认尺寸 + 居中
       await windowManager.setSize(const Size(1280, 800));

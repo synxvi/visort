@@ -263,20 +263,25 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       // rethrow 会成 unhandled async exception（子代理审查 P3）。
       debugPrint('[SIDX] FAILED: $e\n$s');
     } finally {
-      // 无条件复位 running（原先 cancel 时跳过——单独 cancel() 会把
-      // running 永久卡 true 阻塞后续 start，脆弱不变量，审查 P2）。
-      // cancel/clear 场景进度置零：clear() 已清 _metas，本处即便与
-      // clear 的 state 置零竞态，两种先后顺序最终态一致。
-      final finished = !_cancel;
-      state = SearchIndexState(
-        running: false,
-        processed: _cancel ? 0 : state.processed,
-        total: _cancel ? 0 : state.total,
-        metaCount: _metas.length,
-        ranOnce: finished || state.ranOnce,
-      );
-      if (finished) onDataChanged?.call();
-      debugPrint('[SIDX] finally: $_cancel state=${state.processed}/${state.total}');
+      // 世代校验后才能复位 state：跑批中「关→开」时，旧循环的 finally
+      // 会晚于新 start() 执行（新 start 已 ++_runSeq 并置 running:true），
+      // 无条件复位会把新 run 覆写成 running:false + ranOnce:true——设置页
+      // 假「已完成」，running 闸门失效可再拉起并发循环（审查 P1）。
+      // cancel()/clear() 不推进 _runSeq，纯取消场景仍走下方复位（保留
+      // 「cancel 不再把 running 卡 true」的原修复语义）。
+      if (mySeq == _runSeq) {
+        final finished = !_cancel;
+        state = SearchIndexState(
+          running: false,
+          processed: _cancel ? 0 : state.processed,
+          total: _cancel ? 0 : state.total,
+          metaCount: _metas.length,
+          ranOnce: finished || state.ranOnce,
+        );
+        if (finished) onDataChanged?.call();
+      }
+      debugPrint('[SIDX] finally: seq=$mySeq/$_runSeq cancel=$_cancel '
+          'state=${state.processed}/${state.total}');
     }
   }
 

@@ -328,6 +328,11 @@ class GalleryController extends Notifier<GalleryState> {
     if (snap == null) {
       // 内存 miss（杀后台后进程重建）：尝试磁盘快照秒出，对标系统相册 loadFromCache。
       snap = await _loadDiskSnapshot(bucketId);
+      // await（SQLite 读）期间用户可能已切桶/切视图：token 失配则本次
+      // enter 整体作废。若继续写旧桶视图，下方 _refreshBucketPage 里
+      // `state.bucketId != bucketId` 守卫会把新桶结果也一并丢弃，界面
+      // 永久卡在没点过的桶（审查 P1）。
+      if (token != _loadToken) return;
       if (snap != null) _bucketSnapshots[bucketId] = snap;
     }
     final snapValid = snap != null &&

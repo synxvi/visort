@@ -226,6 +226,11 @@ class _AndroidBytesImageProvider
         // 必须 await：否则 instantiateCodec 的异步错误逃出 catch，
         // 不落 readBytes 兜底（3.47 unawaited_return_in_try_block 揪出）。
         final codec = await desc.instantiateCodec();
+        // codec 已持有像素引用，载体此刻可释放（SDK 契约：creator 负责
+        // dispose，instantiateImageCodecWithSize 的 finally 同款）——否则
+        // 每张全图滞留 w×h×4 原生内存且不计入 ImageCache（审查 P1）。
+        desc.dispose();
+        sBuffer.dispose();
         cachePerfDecode(cacheLevelFull(tw), key.ref.id, r.width, r.height);
         return codec;
       } catch (_) {
