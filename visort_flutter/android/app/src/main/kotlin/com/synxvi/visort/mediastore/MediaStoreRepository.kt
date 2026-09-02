@@ -733,7 +733,11 @@ class MediaStoreRepository(private val context: Context) {
             if (maxBytes <= 0) {
                 input.readBytes()
             } else {
-                val buf = ByteArray(maxBytes)
+                // 上限 clamp（64MB）：通道参数误传（字节×1024 之类）会直接
+                // OOM 崩溃——与 targetWidth 的 coerceIn 防御风格对齐
+                //（2026-09 安全审查）。
+                val capped = maxBytes.coerceAtMost(64 * 1024 * 1024)
+                val buf = ByteArray(capped)
                 val read = input.read(buf)
                 if (read <= 0) ByteArray(0) else buf.copyOf(read)
             }
@@ -1855,6 +1859,18 @@ class MediaStoreRepository(private val context: Context) {
     /// 必须对每个图片的单独 content URI（content://media/external/images/media/<id>）逐个 update。
     fun doMoveToRelativePath(ids: List<String>, relativePath: String): List<String> {
         if (ids.isEmpty() || relativePath.isEmpty()) return emptyList()
+
+        // 通道层白名单校验（2026-09 安全审查）：每段只许安全字符、不含
+        // `..`——纵深防御（Dart UI 层已有 folder_name_validator，此处
+        // 挡住绕过 UI 的直通调用与 bucket.name 等未校验来源；MediaStore
+        // 框架的 IllegalArgumentException 兜底不该是唯一防线）。
+        val segRe = Regex("^[^/\\\\:*?\"<>|\\x00]+$")
+        val segments = relativePath.split('/').filter { it.isNotEmpty() }
+        if (segments.isEmpty() ||
+            segments.any { !segRe.matches(it) || it == "." || it == ".." }
+        ) {
+            throw MsError.InvalidArg("非法 RELATIVE_PATH: $relativePath")
+        }
 
         val normalizedPath = if (relativePath.endsWith("/")) relativePath else "$relativePath/"
         val moved = mutableListOf<String>()

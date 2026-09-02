@@ -21,6 +21,15 @@
 # ── Kotlin 元数据 / 注解 / 泛型签名（R8 默认有时会剥离）──
 -keepattributes *Annotation*, InnerClasses, Signature, EnclosingMethod, Exceptions
 
+# ── 日志剥离（2026-09 安全审查）：批量文件 id / 移动目标路径 / rename
+# 新名等 Log.i/w 沉淀在 release logcat 环形缓冲，属行为画像数据。
+# 剥离 v/d/i（保留 w/e 供排障——剥离 w 会丢真实异常轨迹）。
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+    public static int i(...);
+}
+
 # AndroidX 与常见误报警告
 -dontwarn javax.annotation.**
 -dontwarn org.jetbrains.annotations.**

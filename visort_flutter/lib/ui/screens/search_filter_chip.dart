@@ -2,31 +2,15 @@
 //
 // 搜索页维度建议与已选过滤共用的 chip：图标 + 标签 + 数量；
 // 选中态 accent 填充反白，再点取消选中。
-// [SearchFilterData] 是 chip 的数据定义（[aves 对齐] CollectionFilter
-// 的轻量版：category = 维度，同维度多选取并（OR），跨维度取交（AND）；
-// 谓词简化为照片 id 集合包含）。
+// [SearchFilterData]（chip 的数据定义）已下沉 features 层
+//（search_filter_data.dart，2026-09 分层修正）——此处 re-export 保持
+// 既有 import 路径兼容。
 
 import 'package:flutter/material.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
+import 'package:visort_flutter/features/search/search_filter_data.dart';
 
-/// 一个可选过滤项（维度值 → 照片 id 集合）。
-class SearchFilterData {
-  const SearchFilterData({
-    required this.key,
-    required this.label,
-    required this.category,
-    required this.icon,
-    required this.ids,
-  });
-
-  final String key;
-  final String label;
-  final String category;
-  final IconData icon;
-  final Set<String> ids;
-
-  bool contains(String id) => ids.contains(id);
-}
+export 'package:visort_flutter/features/search/search_filter_data.dart';
 
 /// 搜索过滤 chip。
 class FilterChipWidget extends StatelessWidget {
