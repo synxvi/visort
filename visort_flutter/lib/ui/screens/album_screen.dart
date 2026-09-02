@@ -371,9 +371,46 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     );
   }
 
+  /// 自愈防重入排程标志。
+  bool _reenterQueued = false;
+
+  /// state 归属自愈：本页成为顶层（isCurrent）但全局 state 已不归自己时，
+  /// 重新 enterBucket 拉回数据（内存快照命中，秒回）。
+  ///
+  /// 背景（2026-09 双指双桶黑屏实证）：首页 tile 导航无全局互斥，双指同点
+  /// 两个相册会把两个 AlbumScreen 先后压栈；任一页 pop 时 exitBucket 清空
+  /// 全局 state——栈中幸存的另一页 rebuild 成 photos=[] 占位（红棕骨架）
+  /// 且无人再触发 enter → 永久黑屏。页面只对「自己可见时」自愈（栈下不抢
+  /// 顶层页的 state）；isCurrent 变化经 ModalRoute.of 依赖触发 rebuild，
+  /// 自愈后归属成立自然收敛，无循环。
+  void _scheduleReenter() {
+    if (_reenterQueued) return;
+    _reenterQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _reenterQueued = false;
+      if (!mounted) return;
+      final g = ref.read(galleryControllerProvider);
+      if (g.bucketId == widget.bucketId) return;
+      debugPrint('[GAL] self-heal re-enter bucket=${widget.bucketId} '
+          '(state=${g.bucketId})');
+      ref
+          .read(galleryControllerProvider.notifier)
+          .enterBucket(widget.bucketId);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final gallery = ref.watch(galleryControllerProvider);
+    // 顶层归属校验（普通相册页；收藏/回收站/Shell 嵌入页不按 bucketId 归属）。
+    final isCurrent = ModalRoute.of(context)?.isCurrent ?? true;
+    if (isCurrent &&
+        !widget._embedded &&
+        !widget.favoritesOnly &&
+        !widget.trashedOnly &&
+        gallery.bucketId != widget.bucketId) {
+      _scheduleReenter();
+    }
     return _maybePopScope(
       child: Scaffold(
         backgroundColor: AppColors.bg,
