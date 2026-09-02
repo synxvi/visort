@@ -256,6 +256,14 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       } else if (widget.trashedOnly) {
         ref.read(galleryControllerProvider.notifier).enterTrash();
       } else {
+        final gallery = ref.read(galleryControllerProvider);
+        // 幂等：tile 侧 _openAlbum 已 await enterBucket 并把 state 切到本桶
+        // （Hero 终点就绪）——postFrame 重复 enter 会在双路由场景互相踩
+        // （refresh page-drop 互丢，2026-09 双指双桶黑占位）。已就绪则跳过。
+        if (gallery.bucketId == widget.bucketId && gallery.firstPageLoaded) {
+          debugPrint('[GAL] album-init skip bucket=${widget.bucketId}');
+          return;
+        }
         // [GAL] 双指双桶黑占位排查打点：每页 postFrame 各自触发一次 enter。
         debugPrint('[GAL] album-init bucket=${widget.bucketId}');
         ref

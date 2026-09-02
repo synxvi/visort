@@ -2042,12 +2042,12 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
     if (_interceptIfEditing()) return;
     widget.onCheckToggle();
   }
-  /// 导航防重入：enterBucket→读 state→push 是一长串 async——双指同时点
-  /// 两个 tile 时两次并发执行，两边都会从【同一个共享 state】读 photos[0]
-  /// 设 Hero tag → 两 tile 同 tag + 与相册页照片网格的 photo_ tag 冲突。
-  /// duplicate-hero 的检查是 assert（release 不拦）→ release 静默渲染成
-  /// 黑占位网格/黑 tile 且不可点（2026-09 真机实证）。只认第一次点击。
-  bool _navInFlight = false;
+  /// 导航防重入【static 全局共享】：enterBucket→读 state→push 是一长串
+  /// async——双指同时点【两个不同 tile】时，per-tile 锁各锁各的拦不住
+  /// （真机实证 2026-09：两路由 ~20ms 内先后 push，首路由 Hero flight
+  /// 未落定第二路由转场叠加，release 静默渲染黑占位网格/黑 tile）。
+  /// static 字段跨全部 tile 实例互斥：只认第一次点击，第二击忽略。
+  static bool _navInFlight = false;
 
   Future<void> _openAlbum() async {
     if (_navInFlight) return;
