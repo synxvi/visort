@@ -298,7 +298,9 @@ class SearchIndexService extends Notifier<SearchIndexState> {
   ///     当前 mtime 不重扫——接受升级前历史现状，避免一次性全库重提取。
   ///
   /// 设计边界：首轮全量仍由开关驱动（done/SP 进度语义不动）；首轮跑批
-  /// 中跳过（循环自身覆盖全库）；删除方向由 forgetIds 级联清理。
+  /// 中跳过（循环自身覆盖全库）；应用内删除由 forgetIds 级联清理；
+  /// 应用外删除（系统相册/文件管理器等）由本对账的反向收敛兜底——
+  /// photos 是全量扫描（scanAllImages），差集即已删照片的残留行。
   Future<void> syncNewPhotos(List<MsImageInfo> photos) async {
     if (state.running) return;
     final known = _metas.keys.toSet();
@@ -322,6 +324,14 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       await _store.updateMtimes(backfill);
       _mtimes.addAll(backfill);
       debugPrint('[SIDX] syncNewPhotos: backfill mtimes +${backfill.length}');
+    }
+    // 反向收敛：索引有、照片库无 → 外部删除的残留行，级联清理
+    // （内存 + DB + 张数 state；复用 forgetIds 的安全语义）。放在
+    // fresh 提前返回之前——只删行不补录的轮次也要收敛。
+    final gone = known.difference(mtimeById.keys.toSet());
+    if (gone.isNotEmpty) {
+      await forgetIds(gone);
+      debugPrint('[SIDX] syncNewPhotos: gc ${gone.length} stale rows');
     }
     if (fresh.isEmpty) return;
     debugPrint('[SIDX] syncNewPhotos: ${fresh.length} new/changed');
