@@ -280,7 +280,9 @@ class SearchIndexService extends Notifier<SearchIndexState> {
           running: true,
           processed: done,
           total: total,
-          metaCount: state.metaCount,
+          // 张数实时反映已落库行数（用户定稿 2026-09：随百分比一起涨，
+          // 不再跑完才跳）：存量（load 恢复/前轮）+ 本轮累计落库。
+          metaCount: _metas.length + metas.length,
           ranOnce: state.ranOnce,
         );
         await _saveProgress(done, total);
