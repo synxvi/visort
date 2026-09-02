@@ -108,6 +108,9 @@ const Map<String, String> stringsEn = {
   'permission_denied': 'Storage permission denied',
   'permission_needed':
       'Visort needs to read your photo albums to sort images. Please grant the permission.',
+  'gallery_perm_hint': 'Allow photo access to see your albums here',
+  'gallery_perm_settings_hint':
+      'No prompt? Open system settings to allow access',
   'grant_permission': 'Grant Permission',
   'retry': 'Retry',
   'cancel': 'Cancel',

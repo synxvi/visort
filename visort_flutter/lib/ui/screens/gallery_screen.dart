@@ -39,7 +39,8 @@ class GalleryScreen extends ConsumerStatefulWidget {
   ConsumerState<GalleryScreen> createState() => _GalleryScreenState();
 }
 
-class _GalleryScreenState extends ConsumerState<GalleryScreen> {
+class _GalleryScreenState extends ConsumerState<GalleryScreen>
+    with WidgetsBindingObserver {
   /// 飞行目标 tag（父级全局）：点击相册瞬间置位，所有 tile 的 HeroMode
   /// 据此屏蔽非目标 tile（含屏外预构建）；push 返回后清除。
   String? _flightTag;
@@ -47,6 +48,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(galleryControllerProvider.notifier).loadBuckets();
     });
@@ -64,7 +66,24 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 用户从系统设置授权后返回：重探权限，已授予则立即加载相册
+    // （提示条「去系统设置」路径——requestPermission 被「不再询问」短路时
+    // 系统设置是唯一出口，回到 app 由本钩子闭环）。
+    if (state != AppLifecycleState.resumed) return;
+    if (!ref.read(galleryControllerProvider).permissionDenied) return;
+    Future<void>.delayed(const Duration(milliseconds: 500), () async {
+      if (!mounted) return;
+      if (!ref.read(galleryControllerProvider).permissionDenied) return;
+      if (await const MediaStoreChannel().hasPermission()) {
+        ref.read(galleryControllerProvider.notifier).loadBuckets();
+      }
+    });
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     currentRouteName.removeListener(_onRouteChanged);
     widget.shellHandle?.onActivated = null;
     super.dispose();
@@ -169,6 +188,27 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
   Widget _buildBody(GalleryState gallery) {
     // ⚠️ 无转圈：buckets 为空（加载中/真空）时保持空网格底色，数据到达后
     // 直接填充，不闪不转；error 时显示错误页（可重试）。
+    // 权限未授予（新装/清空数据）：顶部友好引导条 + 空态骨架——不是错误，
+    // 不走红色错误页（用户定稿）。
+    if (gallery.permissionDenied) {
+      return SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            const _PermissionBanner(),
+            Expanded(
+              child: Center(
+                child: Icon(
+                  Icons.photo_library_outlined,
+                  size: 56,
+                  color: AppColors.muted.withValues(alpha: 0.4),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     if (gallery.error != null) {
       return Center(
         child: Padding(
@@ -272,6 +312,118 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
         bucket: buckets[i],
         flightTag: _flightTag,
         onFlightStart: (tag) => setState(() => _flightTag = tag),
+      ),
+    );
+  }
+}
+
+/// 未授权顶部引导条（新装/清空数据首启）：友好提示而非错误页。
+///
+/// 主行 = 图标 + 文案 + 「授予权限」按钮（弹系统权限窗，授予后自动加载，
+/// 条随 permissionDenied 清除而消失）。弹过仍被拒（含「不再询问」后
+/// requestPermission 立即回调 denied 不再弹窗）→ 追加副行「到系统设置」
+/// 跳转入口；从设置授权回来由页面的 lifecycle resumed 钩子闭环加载。
+class _PermissionBanner extends ConsumerStatefulWidget {
+  const _PermissionBanner();
+
+  @override
+  ConsumerState<_PermissionBanner> createState() => _PermissionBannerState();
+}
+
+class _PermissionBannerState extends ConsumerState<_PermissionBanner> {
+  /// 点过授权按钮但仍未授予 → 显示系统设置跳转副行。
+  bool _deniedOnce = false;
+
+  Future<void> _grant() async {
+    final ok = await const MediaStoreChannel().requestPermission();
+    if (!mounted) return;
+    if (ok) {
+      // 授权成功 → 重查（permissionDenied 清除后本条随分支消失）。
+      await ref.read(galleryControllerProvider.notifier).loadBuckets();
+    } else {
+      // 拒绝或「不再询问」短路 → 补系统设置出口（lifecycle 钩子接住回程）。
+      setState(() => _deniedOnce = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.photo_library_outlined,
+                size: 22,
+                color: AppColors.accent,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  t(ref, 'gallery_perm_hint'),
+                  style: const TextStyle(
+                    fontFamily: 'Space Mono',
+                    fontFamilyFallback: AppFonts.cjkFallback,
+                    color: AppColors.text,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              FilledButton(
+                onPressed: _grant,
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  textStyle: const TextStyle(
+                    fontFamily: 'Space Mono',
+                    fontFamilyFallback: AppFonts.cjkFallback,
+                    fontSize: 13,
+                  ),
+                ),
+                child: Text(t(ref, 'grant_permission')),
+              ),
+            ],
+          ),
+          if (_deniedOnce) ...[
+            const SizedBox(height: 6),
+            InkWell(
+              onTap: () =>
+                  const MediaStoreChannel().openAppSettings(),
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.settings_outlined,
+                      size: 14,
+                      color: AppColors.muted,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      t(ref, 'gallery_perm_settings_hint'),
+                      style: const TextStyle(
+                        fontFamily: 'Space Mono',
+                        fontFamilyFallback: AppFonts.cjkFallback,
+                        color: AppColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

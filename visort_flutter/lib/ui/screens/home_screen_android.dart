@@ -108,7 +108,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     _parentFocus.addListener(() {
       if (mounted) setState(() {});
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) => _initAndLoad());
+    // 预热/首启只探测权限不弹窗（requestIfDenied=false）：弹窗入口收敛
+    // 到「授予权限」按钮（用户显式点击）。
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _initAndLoad(requestIfDenied: false));
     // P2 会话恢复探测:杀进程后有未完成整理会话则显示横条。
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkResumableSession());
     // P2:从 sort/review 等返回 Home(手势 pop 不重建本页)时重探横条——
@@ -172,17 +175,39 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     debugPrint(
       '[Home] lifecycle: $state, permissionGranted=$_permissionGranted',
     );
-    // app 从后台恢复前台（用户从系统设置授权后返回）→ 重新检测 MANAGE_MEDIA
+    // app 从后台恢复前台（用户从系统设置授权后返回）→ 重探读取权限 +
+    // 重新检测 MANAGE_MEDIA
     if (state == AppLifecycleState.resumed) {
       // 延迟 500ms 检测，确保系统权限状态已刷新
-      Future.delayed(const Duration(milliseconds: 500), _recheckManageMedia);
+      Future.delayed(const Duration(milliseconds: 500), () async {
+        if (!mounted) return;
+        // 未授权态从设置回来：授权了就补走加载（整页 denied 提示的闭环）
+        if (!_permissionGranted && await _channel.hasPermission()) {
+          setState(() => _permissionGranted = true);
+          await _loadBuckets();
+          if (!mounted) return;
+        }
+        _recheckManageMedia();
+      });
     }
   }
 
-  Future<void> _initAndLoad() async {
+  /// 初始化并加载。[requestIfDenied]=false 时只探测不弹系统权限窗——
+  /// IndexedStack 预热构建也会走 initState，预热时弹窗会让用户在相册页
+  /// 莫名其妙看到权限对话框（[用户定稿] 引导收敛到各页显式 UI：相册页
+  /// 顶部提示条 / 本页整页提示的「授予权限」按钮）。
+  Future<void> _initAndLoad({bool requestIfDenied = true}) async {
     setState(() => _loading = true);
     final granted = await _channel.hasPermission();
     if (!granted) {
+      if (!requestIfDenied) {
+        if (!mounted) return;
+        setState(() {
+          _permissionGranted = false;
+          _loading = false;
+        });
+        return;
+      }
       final ok = await _channel.requestPermission();
       if (!mounted) return;
       if (!ok) {

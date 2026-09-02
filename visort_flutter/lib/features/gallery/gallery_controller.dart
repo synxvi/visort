@@ -73,6 +73,7 @@ class GalleryState {
     this.firstPageLoaded = false,
     this.nextCursor,
     this.error,
+    this.permissionDenied = false,
     this.albumSortBy = SortBy.name,
     this.albumSortAsc = true,
     this.photoSortBy = SortBy.dateCreated,
@@ -96,6 +97,11 @@ class GalleryState {
   /// 下一页 keyset 游标；null = 无更多数据。
   final String? nextCursor;
   final String? error;
+
+  /// 媒体读取权限未授予（新装/清空数据后查询被 PERMISSION_DENIED 拒）。
+  /// 与 [error] 互斥：权限缺失不是「失败」，UI 走顶部引导授权提示条
+  /// 而非错误页。授权成功后随 loadBuckets 成功路径一并清除。
+  final bool permissionDenied;
 
   final SortBy albumSortBy;
   final bool albumSortAsc;
@@ -149,6 +155,8 @@ class GalleryState {
     Object? nextCursor = _unsetCursor,
     String? error,
     bool clearError = false,
+    bool? permissionDenied,
+    bool clearPermissionDenied = false,
     SortBy? albumSortBy,
     bool? albumSortAsc,
     SortBy? photoSortBy,
@@ -165,6 +173,8 @@ class GalleryState {
           ? this.nextCursor
           : nextCursor as String?,
       error: clearError ? null : (error ?? this.error),
+      permissionDenied:
+          clearPermissionDenied ? false : (permissionDenied ?? this.permissionDenied),
       albumSortBy: albumSortBy ?? this.albumSortBy,
       albumSortAsc: albumSortAsc ?? this.albumSortAsc,
       photoSortBy: photoSortBy ?? this.photoSortBy,
@@ -250,12 +260,23 @@ class GalleryController extends Notifier<GalleryState> {
         asc: state.photoSortAsc,
       );
       if (buckets.isEmpty) {
-        state = state.copyWith(buckets: const [], clearError: true);
+        state = state.copyWith(
+            buckets: const [],
+            clearError: true,
+            clearPermissionDenied: true);
         return;
       }
-      state = state.copyWith(buckets: buckets, clearError: true);
+      state = state.copyWith(
+          buckets: buckets,
+          clearError: true,
+          clearPermissionDenied: true);
     } catch (e) {
-      state = state.copyWith(error: 'load_failed');
+      if (e is MsException && e.isPermission) {
+        // 权限缺失 ≠ 加载失败：UI 走顶部引导授权提示条（新装/清空数据）。
+        state = state.copyWith(permissionDenied: true, clearError: true);
+      } else {
+        state = state.copyWith(error: 'load_failed');
+      }
     }
   }
 

@@ -37,6 +37,9 @@ class _FakeMediaStoreChannel extends MediaStoreChannel {
   final Set<String> restoreStuckIds = {};
   /// 模拟 ROM 误报：这些 id 即使 requestDelete 成功 exists 仍返回 true。
   final Set<String> stickyIds = {};
+  /// 模拟权限未授予：listBuckets 抛 PERMISSION_DENIED（对齐原生
+  /// handleListBuckets 的前置检查）。
+  bool denyPermission = false;
   final List<String> scanCalls = []; // 记录每次 scanImages 的 afterCursor
 
   /// 模拟 MediaStore 查询语义：普通查询排除已删除/已回收站项；
@@ -58,6 +61,10 @@ class _FakeMediaStoreChannel extends MediaStoreChannel {
     SortBy sortBy = SortBy.dateCreated,
     bool asc = false,
   }) async {
+    if (denyPermission) {
+      throw const MsException(
+          MsErrorCode.permissionDenied, 'READ_MEDIA_IMAGES 权限未授予');
+    }
     // 对齐 Kotlin listBuckets：count 实时派生，cover = 该排序下每桶首张。
     return _buckets.map((b) {
       final photos = _visible(b.id);
@@ -451,6 +458,22 @@ void main() {
       final st = container.read(galleryControllerProvider);
       expect(st.buckets.length, 1);
       expect(st.buckets.first.name, 'Camera');
+    });
+
+    test('loadBuckets 权限被拒：置 permissionDenied 而非 error', () async {
+      fakeChannel.denyPermission = true;
+      await controller.loadBuckets();
+      final st = container.read(galleryControllerProvider);
+      expect(st.permissionDenied, true, reason: '权限缺失走引导授权，非错误页');
+      expect(st.error, isNull);
+
+      // 授权后重查：标志清除、数据正常载入（提示条消失路径）。
+      fakeChannel.denyPermission = false;
+      await controller.loadBuckets();
+      final ok = container.read(galleryControllerProvider);
+      expect(ok.permissionDenied, false);
+      expect(ok.error, isNull);
+      expect(ok.buckets.length, 1);
     });
   });
 

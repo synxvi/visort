@@ -105,6 +105,8 @@ const Map<String, String> stringsZh = {
   'no_albums': '未找到相册',
   'permission_denied': '存储权限被拒绝',
   'permission_needed': 'Visort 需要读取相册权限才能整理图片，请授予权限。',
+  'gallery_perm_hint': '授权访问图片后，您的相册将显示在这里',
+  'gallery_perm_settings_hint': '未弹出授权？点此到系统设置开启',
   'grant_permission': '授予权限',
   'retry': '重试',
   'cancel': '取消',
