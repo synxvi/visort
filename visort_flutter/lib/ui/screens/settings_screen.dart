@@ -96,8 +96,9 @@ class SettingsScreen extends ConsumerWidget {
                   onSelected: (v) => _update(ref, defaultHomePage: v),
                 ),
               // 抽屉动画档位（仅安卓 Shell 有抽屉；桌面端不显示）。
-              // 快速 = 250/200ms（Material 官方黄金值，默认）；舒适 =
-              // 320/240ms（emphasized 方向，节奏沉稳）。开/关非对称。
+              // 快速 = 250/200ms（Material 官方黄金值）；舒适 =
+              // 320/240ms（emphasized 方向，节奏沉稳，默认——2026-09
+              // 用户定稿）。开/关非对称。
               if (Platform.isAndroid)
                 _PickerRow<DrawerAnimSpeed>(
                   label: t(ref, 'settings_drawer_speed'),
