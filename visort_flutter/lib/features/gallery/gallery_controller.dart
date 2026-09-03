@@ -596,6 +596,8 @@ class GalleryController extends Notifier<GalleryState> {
   /// 进入「收藏」视图：扫描所有 IS_FAVORITE=1 的图（跨相册）。
   Future<void> enterFavorites({bool silent = false}) async {
     final token = ++_loadToken;
+    // 重查即全量对账：旧的待移除标记作废（照片集将整体替换）。
+    _pendingFavRemovals.clear();
     state = state.copyWith(
       view: GalleryView.favorites,
       clearBucketId: true,
@@ -990,10 +992,46 @@ class GalleryController extends Notifier<GalleryState> {
     }
   }
 
+  /// 收藏视图待移除集合（2026-09 用户需求：取消收藏后收藏页实时收敛）。
+  /// 单张大图取消收藏时 photos 不立即移除——Hero pop 飞行需要 cell 存在
+  /// （终点失配 = 飞行中断），先记名，DetailPage pop 动画完成后
+  /// [applyPendingFavRemovals] 统一应用。批量多选取消（无飞行）不走此
+  /// 机制，直接移除。
+  final Set<String> _pendingFavRemovals = {};
+
+  /// 应用待移除（DetailPage pop 飞行完成后调用）：只移除确认取消且
+  /// 未被重新收藏的项；期间重新按红心的跳过（保留在列表）。
+  void applyPendingFavRemovals() {
+    if (_pendingFavRemovals.isEmpty ||
+        state.view != GalleryView.favorites) {
+      _pendingFavRemovals.clear();
+      return;
+    }
+    final drop = <String>{};
+    for (final id in _pendingFavRemovals) {
+      for (final p in state.photos) {
+        if (p.id == id) {
+          if (!p.isFavorite) drop.add(id);
+          break;
+        }
+      }
+    }
+    _pendingFavRemovals.clear();
+    if (drop.isEmpty) return;
+    state = state.copyWith(
+      photos: state.photos.where((p) => !drop.contains(p.id)).toList(),
+    );
+  }
+
   /// 批量设置收藏状态（乐观更新，失败回滚）。回滚按原值快照恢复——
   /// 混合选中集（部分已收藏）下旧「!favorite 取反」会把原本已收藏的
   /// 项翻成未收藏（与磁盘脱节直到下次重扫）；UI 允许混合集触发本操作。
-  Future<String?> setFavorites(List<String> ids, bool favorite) async {
+  ///
+  /// [deferForFlight]（大图单张路径）：收藏视图下取消收藏不立即从
+  /// photos 移除——pop 飞行需要 cell，移除后经 applyPendingFavRemovals
+  /// 统一应用（见 [_pendingFavRemovals]）。批量路径不传，立即移除。
+  Future<String?> setFavorites(List<String> ids, bool favorite,
+      {bool deferForFlight = false}) async {
     if (ids.isEmpty) return null;
     final idSet = ids.toSet();
     final originFavById = {
@@ -1010,8 +1048,22 @@ class GalleryController extends Notifier<GalleryState> {
       final ok = await _channel.requestFavorite(ids, favorite);
       if (!ok) throw StateError('favorite_not_confirmed');
       _markSelfMutation();
+      // 收藏视图取消收藏 → 实时收敛（此前 photos 不动，收藏页返回后
+      // 列表不更新，2026-09 用户反馈）。
+      if (!favorite && state.view == GalleryView.favorites) {
+        if (deferForFlight) {
+          _pendingFavRemovals.addAll(idSet);
+        } else {
+          state = state.copyWith(
+            photos: state.photos
+                .where((p) => !idSet.contains(p.id))
+                .toList(),
+          );
+        }
+      }
       return null;
     } catch (e) {
+      _pendingFavRemovals.removeAll(idSet); // 回滚：不再待移除
       state = state.copyWith(
         photos: state.photos
             .map((p) => idSet.contains(p.id)

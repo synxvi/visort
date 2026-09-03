@@ -339,6 +339,15 @@ class _DetailPageState extends ConsumerState<DetailPage>
     if (status == AnimationStatus.dismissed) {
       _removeChromeEntry();
       _evictViewedViewerCache();
+      // 收藏视图取消收藏的延后移除在此应用（飞行已完成，cell 可安全消失，
+      // 见 gallery_controller._pendingFavRemovals）：postFrame 一拍让 Hero
+      // flight overlay 先完成清理，网格淡入补位。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref
+            .read(galleryControllerProvider.notifier)
+            .applyPendingFavRemovals();
+      });
     }
   }
 
@@ -1225,10 +1234,15 @@ class _DetailPageState extends ConsumerState<DetailPage>
   Future<void> _toggleFavoriteCurrent() async {
     final file = _selectedFile;
     if (file == null) return;
-    final err = await ref.read(galleryControllerProvider.notifier).setFavorites(
-      [file.id],
-      !file.isFavorite,
-    );
+    final err = await ref
+        .read(galleryControllerProvider.notifier)
+        .setFavorites(
+          [file.id],
+          !file.isFavorite,
+          // 收藏视图下取消收藏延后移除（controller 语义）：pop 飞行需要
+          // 网格 cell 存在，飞行完成后由 _onRouteAnimStatus 统一应用。
+          deferForFlight: true,
+        );
     if (!mounted) return;
     if (err != null) {
       toast(context, t(ref, 'favorite_failed'));

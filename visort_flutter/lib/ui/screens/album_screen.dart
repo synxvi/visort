@@ -563,7 +563,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         body: SafeArea(
           bottom: false,
           child: widget._embedded
-              ? _buildBody(gallery)
+              ? _wrapFavoritesFade(gallery)
               : TweenAnimationBuilder<double>(
                   key: ValueKey(_timelineView),
                   tween: Tween(begin: 0.0, end: 1.0),
@@ -574,10 +574,74 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                   child: _buildBody(gallery),
                 ),
         ),
-        // 批量选择模式：底部操作栏（按视图模式提供不同批量操作）
-        bottomNavigationBar: _selectMode ? _buildBatchBar(gallery) : null,
+        // 批量选择模式：底部操作栏（按视图模式提供不同批量操作）；
+        // 回收站非勾选态：常驻「清空回收站」底栏（无需进勾选即可清空）。
+        bottomNavigationBar: _selectMode
+            ? _buildBatchBar(gallery)
+            : (widget.trashedOnly &&
+                    gallery.firstPageLoaded &&
+                    gallery.photos.isNotEmpty
+                ? _TrashClearBar(
+                    count: gallery.photos.length,
+                    busy: _batchProcessing,
+                    clearLabel: t(ref, 'trash_clear_all'),
+                    onClear: _clearAllTrash,
+                  )
+                : null),
       ),
     );
+  }
+
+  /// 收藏视图收敛淡入（2026-09 用户需求：取消收藏后列表柔和补位而非硬
+  /// 切换）。key = id 序列——仅成员增减时换 key 重播 150ms 淡入（新列表
+  /// 布局渐进显现）；observer 静默重查/列数变化 id 序列不变 → 不闪。
+  /// TweenAnimationBuilder 换 child 不重播，必须换 key 整体重建（旧
+  /// scrollable 先卸载再挂新——避开 AnimatedSwitcher 双挂载的双 attach
+  /// 崩溃，见上方 push 版同款注释）。时机安全：移除发生在 pop 飞行
+  /// 完成后（applyPendingFavRemovals），无并发飞行。
+  /// 首挂不淡入（tab 首次挂载与抽屉切页预期满屏直出，见 557 行注释）：
+  /// 首帧标记后从第二次 build 起启用。
+  bool _favFadeArmed = false;
+  Widget _wrapFavoritesFade(GalleryState gallery) {
+    if (!widget.favoritesOnly || gallery.photos.isEmpty) {
+      return _buildBody(gallery);
+    }
+    if (!_favFadeArmed) {
+      _favFadeArmed = true;
+      return _buildBody(gallery);
+    }
+    return TweenAnimationBuilder<double>(
+      key: ValueKey(gallery.photos.map((p) => p.id).join(' ')),
+      tween: Tween(begin: 0.0, end: 1.0),
+      duration: AppDurations.enteContentSwitch,
+      curve: Curves.easeOut,
+      builder: (_, opacity, child) => Opacity(opacity: opacity, child: child),
+      child: _buildBody(gallery),
+    );
+  }
+
+  /// 清空回收站（常驻底栏入口）：确认弹窗 → 批量彻底删除（requestDelete
+  /// 系统弹窗 + exists 复查，复用 deletePhotos 全防御链）。
+  Future<void> _clearAllTrash() async {
+    final photos = ref.read(galleryControllerProvider).photos;
+    if (photos.isEmpty) return;
+    final ids = photos.map((p) => p.id).toList();
+    final confirmed = await showConfirmSheet(
+      context,
+      title: t(ref, 'trash_clear_all'),
+      desc: t(ref, 'trash_clear_all_confirm', [ids.length]),
+      cancelText: t(ref, 'cancel'),
+      confirmText: t(ref, 'confirm'),
+      confirmColor: AppColors.danger,
+    ).confirmed;
+    if (confirmed != true || !mounted) return;
+    await _runBatchGuarded(() async {
+      final err = await ref
+          .read(galleryControllerProvider.notifier)
+          .deletePhotos(ids);
+      if (!mounted) return;
+      toast(context, err == null ? t(ref, 'deleted') : t(ref, 'delete_failed'));
+    });
   }
 
   Widget _buildBody(GalleryState gallery) {
@@ -1373,6 +1437,63 @@ class _ThumbGridPlaceholder extends StatelessWidget {
       ),
       itemCount: cols * 6,
       itemBuilder: (_, _) => const ColoredBox(color: AppColors.surface),
+    );
+  }
+}
+
+/// 回收站常驻「清空回收站」底栏（2026-09 用户需求）：无需进入勾选态
+/// 即可一键清空。样式对齐勾选批量底栏（surface 底 + 自垫 bottomInset，
+/// edge-to-edge 下背景延伸到物理底边，见 _buildBatchBar 同款注释）。
+class _TrashClearBar extends StatelessWidget {
+  const _TrashClearBar({
+    required this.count,
+    required this.busy,
+    required this.clearLabel,
+    required this.onClear,
+  });
+
+  final int count;
+
+  /// 清空进行中（_runBatchGuarded 的 _batchProcessing）。
+  final bool busy;
+  final String clearLabel;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: AppColors.surface,
+      padding: EdgeInsets.only(
+        top: 6,
+        bottom: 6 + MediaQuery.viewPaddingOf(context).bottom,
+      ),
+      child: Row(
+        children: [
+          const SizedBox(width: 16),
+          Icon(Icons.delete_outline, size: 16, color: AppColors.muted),
+          const SizedBox(width: 6),
+          Text(
+            '$count',
+            style: const TextStyle(
+              fontFamily: 'Space Mono',
+              fontFamilyFallback: AppFonts.cjkFallback,
+              fontSize: 13,
+              color: AppColors.muted,
+            ),
+          ),
+          const Spacer(),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.danger,
+              foregroundColor: AppColors.bg,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+            ),
+            onPressed: busy ? null : onClear,
+            child: Text(clearLabel),
+          ),
+          const SizedBox(width: 12),
+        ],
+      ),
     );
   }
 }

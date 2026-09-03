@@ -306,6 +306,8 @@ const Map<String, String> stringsZh = {
 
   // ───────── P1a · 回收站 ─────────
   'trash_title': '回收站',
+  'trash_clear_all': '清空回收站',
+  'trash_clear_all_confirm': '将永久删除回收站中的 {0} 张图片，此操作不可恢复。',
   'trash_empty': '回收站为空',
   'action_restore': '恢复',
   'trashed': '已移到回收站',

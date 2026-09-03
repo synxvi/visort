@@ -315,6 +315,9 @@ const Map<String, String> stringsEn = {
 
   // ───────── P1a · 回收站 ─────────
   'trash_title': 'Trash',
+  'trash_clear_all': 'Empty trash',
+  'trash_clear_all_confirm':
+      'Permanently delete {0} photos in trash. This cannot be undone.',
   'trash_empty': 'Trash is empty',
   'action_restore': 'Restore',
   'trashed': 'Moved to trash',
