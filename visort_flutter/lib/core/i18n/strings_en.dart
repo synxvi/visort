@@ -386,7 +386,6 @@ const Map<String, String> stringsEn = {
   'settings_ml_index_note':
       'Scans photos for capture date, GPS coordinates and camera model, and resolves place names. The Places / Cameras / Metadata filters in search rely on this index; file types, albums and other filters work without it.',
   'settings_ml_progress': 'Indexing Progress',
-  'settings_ml_count': '{0} photos',
   'settings_ml_running': 'Indexing…',
   'settings_ml_done': 'Complete',
   'settings_ml_off_title': 'Disable image info index?',
