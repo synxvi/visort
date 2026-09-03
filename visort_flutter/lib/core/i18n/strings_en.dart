@@ -121,7 +121,7 @@ const Map<String, String> stringsEn = {
   'mode_to_newdir': 'Subdirs',
   'quick_sort_tips': 'Sorting Tips',
   'quick_sort_tips_intro':
-      'Quick sort: pick a source album, select photos, and move them to the target in one confirmed batch.',
+      'Pick the source album and target location, review photos one by one, and move them all in a single batch at the end.',
   'quick_sort_tips_newdir':
       'Enter a parent folder and name subfolders; selected photos move into the newly created subfolders.',
   'quick_sort_tips_album':
