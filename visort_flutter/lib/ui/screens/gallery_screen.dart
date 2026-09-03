@@ -250,12 +250,11 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     // 留白，见 home_screen_android 同款注释）；列表 = 行式（封面+名称+数量）。
     final config = ref.watch(configProvider);
     final isGrid = config.galleryLayout == HomeLayout.grid;
-    return RefreshIndicator(
-      color: AppColors.accent,
-      onRefresh: () =>
-          ref.read(galleryControllerProvider.notifier).loadBuckets(),
-      child: isGrid ? _buildGridBody(buckets, bottomInset) : _buildListBody(buckets, bottomInset),
-    );
+    // 无下拉刷新：ContentObserver 增量刷新（_onMediaStoreChanged）已覆盖
+    // 相册列表的一切外部变更（与 loadBuckets 同源），手动刷新冗余已移除。
+    return isGrid
+        ? _buildGridBody(buckets, bottomInset)
+        : _buildListBody(buckets, bottomInset);
   }
 
   /// 网格布局：与快速整理页网格同构（固定列宽，列数独立配置）。
@@ -278,7 +277,8 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
         final cellW = (c.maxWidth - hpad * 2 - spacing * (cols - 1)) / cols;
         final rowCount = (buckets.length + cols - 1) ~/ cols;
         return CustomScrollView(
-          // 动画对齐 ente：iOS 式回弹滚动物理（AlwaysScrollable 保下拉刷新）。
+          // 动画对齐 ente：iOS 式回弹滚动物理（AlwaysScrollable：不满一屏
+          // 也可下拉回弹）。
           physics: const BouncingScrollPhysics(
             parent: AlwaysScrollableScrollPhysics(),
           ),
