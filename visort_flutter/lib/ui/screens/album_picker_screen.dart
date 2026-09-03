@@ -11,6 +11,8 @@ import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
+import 'package:visort_flutter/shared/widgets/app_bar_title.dart';
+import 'package:visort_flutter/shared/widgets/back_glyph_button.dart';
 
 /// 打开相册选择页。返回选中的相册；取消返回 null。
 /// 顶栏标题恒「相册」（2026-09 用户定稿：不区分复制/移入来源）。
@@ -53,17 +55,21 @@ class _AlbumPickerScreenState extends ConsumerState<AlbumPickerScreen> {
       appBar: AppBar(
         backgroundColor: AppColors.surface,
         foregroundColor: AppColors.text,
-        // 与 album_screen AppBar 同款：标题紧贴返回箭头
+        // push 模式标准形制（album_screen 同款）：自绘细线返回箭头——
+        // 与抽屉侧栏/选项三线按钮同形制，非 AppBar 默认 Material 箭头。
+        leading: BackGlyphButton(
+          tooltip: t(ref, 'back'),
+          onPressed: () => Navigator.maybePop(context),
+        ),
+        // 标题紧贴返回箭头（默认 titleSpacing 16 会显得标题离箭头太远）
         titleSpacing: 0,
-        title: Text(
+        // 标题视觉对齐共用组件：CJK 重心 −1.4dp 上移贴中线；push 模式
+        //（返回箭头 leading）加 dx −1.6 抹平箭头字形窄出的 ~1.5dp。
+        title: AppBarTitleText(
           t(ref, 'gallery_title'),
-          style: const TextStyle(
-            fontFamily: 'Space Mono',
-            height: 1.2,
-            fontFamilyFallback: AppFonts.cjkFallback,
-            fontWeight: FontWeight.w700,
-            fontSize: 16,
-          ),
+          dx: -1.6,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
       ),
       body: buckets.isEmpty
