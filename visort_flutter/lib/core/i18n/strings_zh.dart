@@ -116,7 +116,7 @@ const Map<String, String> stringsZh = {
   'mode_to_album': '相册间',
   'mode_to_newdir': '子目录',
   'quick_sort_tips': '整理说明',
-  'quick_sort_tips_intro': '快速整理：进入源相册勾选图片，确认后统一移动到目标位置。',
+  'quick_sort_tips_intro': '选择目标源相册以及目标位置后，逐张审核，并在最后统一进行图片移动。',
   'quick_sort_tips_newdir': '输入父目录并编辑子目录，勾选的图片将移动到新建的子目录中。',
   'quick_sort_tips_album': '将勾选的图片直接移动到另一个已有相册。',
   'source_albums': '源相册',

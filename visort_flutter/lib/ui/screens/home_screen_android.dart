@@ -13,7 +13,6 @@
 //   Run 按 RELATIVE_PATH 分组批量 moveBatch（createWriteRequest）
 
 import 'dart:async';
-import 'dart:math' show pi;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -32,7 +31,7 @@ import 'package:visort_flutter/features/scan/scan_controller.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/shared/widgets/resume_button.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart'
-    show showCenterDialog, showSpringPopupFromAnchor;
+    show showCenterDialog;
 import 'package:visort_flutter/shared/widgets/app_bar_title.dart';
 import 'package:visort_flutter/shared/widgets/view_options_toggle.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
@@ -554,30 +553,13 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     }
   }
 
-  /// 顶栏「?」说明气泡：向下弹出，介绍本页用途与两种整理模式的区别。
-  /// 弹层与选项按钮面板同款（showSpringPopupFromAnchor 弹簧展开 / 点外
-  /// 收回）；气泡纯文字展示，无交互条目。
-  Future<void> _showTipsBubble(BuildContext btnCtx) async {
-    final box = btnCtx.findRenderObject() as RenderBox?;
-    if (box == null) return;
-    final pos = box.localToGlobal(Offset.zero);
-    final screen = MediaQuery.sizeOf(btnCtx);
-    // 定宽气泡（正文 12sp 多行）：屏宽 -32（两侧各 16 边距）与 340 取小。
-    final width = (screen.width - 32).clamp(0.0, 340.0);
-    await showSpringPopupFromAnchor<void>(
-      context: btnCtx,
-      barrierLabel: 'quick_sort_tips',
-      // 弹簧起点 = 按钮中心 × 面板顶边；面板右缘离按钮右缘 8dp
-      // （定位与选项按钮面板一致，见 ViewOptionsToggle._openPanel）。
-      anchorGlobalDx: pos.dx + box.size.width / 2,
-      anchorGlobalDy: pos.dy + box.size.height + 4,
-      menuLeft: (pos.dx + box.size.width - width - 8).clamp(
-        0.0,
-        (screen.width - width).clamp(0.0, double.infinity),
-      ),
-      menuTop: pos.dy + box.size.height + 4,
-      menuWidth: width,
-      menuBuilder: (_) => const _QuickSortTipsPanel(),
+  /// 顶栏「ⓘ」说明按钮：弹出屏幕居中的说明弹窗，介绍本页用途与两种
+  /// 整理模式的区别。弹层与恢复询问等居中弹窗同款（showCenterDialog：
+  /// scrim + 弹簧缩放 + 点外/返回收回）；内容纯文字，无交互条目。
+  Future<void> _showTipsDialog() async {
+    await showCenterDialog<void>(
+      context: context,
+      builder: (_) => const _QuickSortTipsDialog(),
     );
   }
 
@@ -603,18 +585,17 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         // 见 app_bar_title.dart）。
         title: AppBarTitleText(t(ref, 'quick_sort_title')),
         actions: [
-          // 说明气泡（选项按钮左侧）：点击向下弹出小气泡，介绍本页用途
-          // 与两种整理模式的区别。样式参照首页搜索按钮（自绘问号，形制
-          // 同 24 视口 stroke 1.9；x 12.75 → 与选项按钮图形间隙 22dp，
-          // y 0.5 = 瘦高字形重心偏上的光学补偿，贴 AppBar 几何中线）。
+          // 说明按钮（选项按钮左侧）：点击弹出屏幕居中的说明弹窗，介绍
+          // 本页用途与两种整理模式的区别。自绘 ⓘ 图标形制参照首页搜索
+          // 按钮（24 视口 stroke 1.8 圆头，图形外缘 ~10.8 与搜索/筛选
+          // 包络同量级）；x 12.75 → 与选项按钮图形间隙 22dp（搜索按钮
+          // 同款调校）。圆形图形几何正中，无需 y 补偿。
           Transform.translate(
-            offset: const Offset(12.75, 0.5),
-            child: Builder(
-              builder: (btnCtx) => IconButton(
-                icon: const _HelpGlyphIcon(),
-                tooltip: t(ref, 'quick_sort_tips'),
-                onPressed: () => _showTipsBubble(btnCtx),
-              ),
+            offset: const Offset(12.75, 0),
+            child: IconButton(
+              icon: const _HelpGlyphIcon(),
+              tooltip: t(ref, 'quick_sort_tips'),
+              onPressed: _showTipsDialog,
             ),
           ),
           // 视图选项（[ente 对齐]）：布局切换 + 网格列数 + 排序收口到一个
@@ -2481,11 +2462,11 @@ class _SubDirRowState extends State<_SubDirRow> {
   }
 }
 
-/// 快速整理页「?」说明气泡内容：本页用途 + 两种整理模式区别。
-/// 纯文字展示（无交互行），卡片样式对齐 ViewOptionsToggle 的面板
-/// （surfaceElevated / 圆角 12 / elevation 3）。
-class _QuickSortTipsPanel extends ConsumerWidget {
-  const _QuickSortTipsPanel();
+/// 快速整理页「ⓘ」说明弹窗内容：本页用途 + 两种整理模式区别。
+/// 纯文字展示（无交互行），屏幕居中（屏宽−48，两侧各 24 边距）、
+/// 卡片样式对齐选项面板（surfaceElevated / 圆角 12 / elevation 3）。
+class _QuickSortTipsDialog extends ConsumerWidget {
+  const _QuickSortTipsDialog();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -2533,35 +2514,41 @@ class _QuickSortTipsPanel extends ConsumerWidget {
       elevation: 3,
       borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(t(ref, 'quick_sort_tips_intro'), style: bodyStyle),
-            modeRow(
-              Icons.create_new_folder_outlined,
-              t(ref, 'mode_to_newdir'),
-              t(ref, 'quick_sort_tips_newdir'),
-            ),
-            modeRow(
-              Icons.swap_horiz,
-              t(ref, 'mode_to_album'),
-              t(ref, 'quick_sort_tips_album'),
-            ),
-          ],
+      // 定宽：屏宽 −48（两侧各 24 边距），大屏不再放宽（12sp 正文行宽
+      // 过长难读）。
+      child: SizedBox(
+        width: MediaQuery.sizeOf(context).width - 48,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(t(ref, 'quick_sort_tips_intro'), style: bodyStyle),
+              modeRow(
+                Icons.create_new_folder_outlined,
+                t(ref, 'mode_to_newdir'),
+                t(ref, 'quick_sort_tips_newdir'),
+              ),
+              modeRow(
+                Icons.swap_horiz,
+                t(ref, 'mode_to_album'),
+                t(ref, 'quick_sort_tips_album'),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// 自绘问号图标（快速整理页说明按钮用）。
+/// 自绘「ⓘ」图标（快速整理页说明按钮用）：圆圈 + 倒感叹号，顶点用
+/// 主题 accent 黄绿提亮（用户定稿 2026-09）。
 ///
-/// 形制对齐首页搜索按钮 _SearchGlyphPainter：24 基准视口、stroke 1.9、
-/// 圆头笔帽；宽向包络 ~10.3 与搜索图形（10.4）同宽，天然瘦高的字形
-/// 视觉分量相当（Material Icons.help_outline 轮廓过细不搭，同搜索弃用）。
+/// 形制对齐首页搜索按钮 _SearchGlyphPainter：24 基准视口、圆头笔帽；
+/// 圆圈外缘（含线宽）直径 ~10.8，与搜索图形（10.5）/筛选图形（11.2）
+/// 包络同量级，视觉分量一致。
 class _HelpGlyphIcon extends StatelessWidget {
   const _HelpGlyphIcon();
 
@@ -2579,32 +2566,24 @@ class _HelpGlyphPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     canvas.save();
     canvas.scale(size.width / 24);
-    final paint = Paint()
+    final stroke = Paint()
       ..color = AppColors.text
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.9
+      ..strokeWidth = 1.8
       ..strokeCap = StrokeCap.round;
-    // 上弧：中心 (12,10) 半径 4.2，从左侧起顺时针绕顶到右下 20°
-    //（屏幕 y 向下，角度顺时针增：180° → 270°(顶) → 360°(右) → 380°）。
-    canvas.drawArc(
-      Rect.fromCircle(center: const Offset(12, 10), radius: 4.2),
-      pi,
-      3.49,
-      false,
-      paint,
-    );
-    // 弯钩：弧终点 (15.95, 11.44) 贝塞尔弯向中心，再短竖线下引
-    //（起点切线与弧端切线连续，光滑衔接）。
-    final hook = Path()
-      ..moveTo(15.95, 11.44)
-      ..quadraticBezierTo(14.9, 15.0, 12, 15.0)
-      ..lineTo(12, 16.4);
-    canvas.drawPath(hook, paint);
-    // 句点：实心小圆。
+    // 外圈：中心 (12,12) 半径 4.5，外缘直径 4.5×2+1.8 = 10.8。
+    canvas.drawCircle(const Offset(12, 12), 4.5, stroke);
+    // 倒感叹号：顶点 = accent 实心小圆（唯一彩色点缀）；短竖线下引，
+    // 点/线间留 ~0.6 空隙（i 的字面结构）。
     canvas.drawCircle(
-      const Offset(12, 18.8),
+      const Offset(12, 9.8),
       1.0,
-      Paint()..color = AppColors.text,
+      Paint()..color = AppColors.accent,
+    );
+    canvas.drawLine(
+      const Offset(12, 12.2),
+      const Offset(12, 13.8),
+      stroke,
     );
     canvas.restore();
   }
