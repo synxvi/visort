@@ -13,23 +13,18 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 
 /// 打开相册选择页。返回选中的相册；取消返回 null。
-/// [titleKey] = i18n key（'copy_to_album' / 'move_to_album'）。
-Future<MsBucket?> pushAlbumPicker(
-  BuildContext context, {
-  required String titleKey,
-}) {
+/// 顶栏标题恒「相册」（2026-09 用户定稿：不区分复制/移入来源）。
+Future<MsBucket?> pushAlbumPicker(BuildContext context) {
   return Navigator.of(context).push<MsBucket>(
     MaterialPageRoute(
       settings: const RouteSettings(name: '/album-picker'),
-      builder: (_) => AlbumPickerScreen(titleKey: titleKey),
+      builder: (_) => const AlbumPickerScreen(),
     ),
   );
 }
 
 class AlbumPickerScreen extends ConsumerStatefulWidget {
-  const AlbumPickerScreen({super.key, required this.titleKey});
-
-  final String titleKey;
+  const AlbumPickerScreen({super.key});
 
   @override
   ConsumerState<AlbumPickerScreen> createState() => _AlbumPickerScreenState();
@@ -61,7 +56,7 @@ class _AlbumPickerScreenState extends ConsumerState<AlbumPickerScreen> {
         // 与 album_screen AppBar 同款：标题紧贴返回箭头
         titleSpacing: 0,
         title: Text(
-          t(ref, widget.titleKey),
+          t(ref, 'gallery_title'),
           style: const TextStyle(
             fontFamily: 'Space Mono',
             height: 1.2,

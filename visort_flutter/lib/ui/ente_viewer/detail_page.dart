@@ -1560,10 +1560,15 @@ class _DetailPageState extends ConsumerState<DetailPage>
   Future<void> _copyMoveCurrent({required bool copy}) async {
     final current = _selectedFile;
     if (current == null) return;
-    final bucket = await pushAlbumPicker(
-      context,
-      titleKey: copy ? 'copy_to_album' : 'move_to_album',
-    );
+    // 相册选择页期间抑制本页栏（root Overlay 浮于子路由之上——与
+    // _setAsWallpaper 同款问题：不抑制则顶栏/底栏/filmstrip 盖在选择页上）。
+    chromeSuppressed.value = true;
+    final MsBucket? bucket;
+    try {
+      bucket = await pushAlbumPicker(context);
+    } finally {
+      if (mounted) chromeSuppressed.value = false;
+    }
     if (bucket == null || !mounted) return;
     final controller = ref.read(galleryControllerProvider.notifier);
     final err = copy

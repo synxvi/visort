@@ -1139,7 +1139,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   Future<void> _batchCopyToAlbum() async {
     final ids = _currentSelectedIds();
     if (ids.isEmpty) return;
-    final bucket = await pushAlbumPicker(context, titleKey: 'copy_to_album');
+    final bucket = await pushAlbumPicker(context);
     if (bucket == null || !mounted) return;
     await _runBatchGuarded(() async {
       final err = await ref
@@ -1161,7 +1161,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   Future<void> _batchMoveToAlbum() async {
     final ids = _currentSelectedIds();
     if (ids.isEmpty) return;
-    final bucket = await pushAlbumPicker(context, titleKey: 'move_to_album');
+    final bucket = await pushAlbumPicker(context);
     if (bucket == null || !mounted) return;
     await _runBatchGuarded(() async {
       final err = await ref
