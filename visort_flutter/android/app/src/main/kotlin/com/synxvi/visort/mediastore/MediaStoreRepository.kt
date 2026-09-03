@@ -19,7 +19,9 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.nio.ByteBuffer
+import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.max
@@ -42,6 +44,53 @@ private const val TAG = "MsRepository"
 /// MediaStore Images 外部存储的 authority 常量。
 /// Dart 侧 ImageRef.root 编码此值，ImageRef.relativePath 编码 _ID。
 const val IMAGES_AUTHORITY = "content://media/external/images/media"
+
+/// 去抖节流 trim 调度：窗口内调用不丢弃而是安排到期补刀（至多挂一个），
+/// 停笔后 ≤[throttleMs] 必执行一次。丢弃式节流的缺陷：最后一笔写入若落在
+/// 窗口内则永不触发 trim，超额滞留到下次写入（设置页调低配额后浏览又
+/// 超标的现象即此）。
+/// 执行统一走单线程 executor：full/thumb trim 串行不并行竞争 IO，并发写
+/// 线程也不被 walk 全目录的 trim 卡住（call 仅锁内做时刻决策）。
+private class ThrottledTrim(private val throttleMs: Long, private val action: () -> Unit) {
+    fun call() = synchronized(lock) {
+        val now = SystemClock.elapsedRealtime()
+        val since = now - lastRunAt
+        when {
+            since >= throttleMs -> {
+                lastRunAt = now
+                executor.execute(action)
+            }
+            !pending -> {
+                pending = true
+                executor.schedule({
+                    synchronized(lock) {
+                        pending = false
+                        lastRunAt = SystemClock.elapsedRealtime()
+                    }
+                    action()
+                }, throttleMs - since, TimeUnit.MILLISECONDS)
+            }
+            // 已有补刀挂着：本次并入那一次执行
+        }
+    }
+
+    /// 绕过节流立即执行（用户调配额要即时反馈），在调用线程同步跑。
+    fun callNow() {
+        synchronized(lock) { lastRunAt = SystemClock.elapsedRealtime() }
+        action()
+    }
+
+    private val lock = Any()
+    private var lastRunAt = 0L
+    private var pending = false
+
+    companion object {
+        /// full/thumb 实例共享一个 trim 线程。
+        private val executor = Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "visort-trim").apply { isDaemon = true }
+        }
+    }
+}
 
 class MediaStoreRepository(private val context: Context) {
 
@@ -939,8 +988,7 @@ class MediaStoreRepository(private val context: Context) {
     fun setFullCacheQuota(bytes: Long) {
         fullCacheQuotaBytes = bytes.coerceIn(64L * 1024 * 1024, 2L * 1024 * 1024 * 1024)
         quotaPrefs.edit().putLong(KEY_FULL_QUOTA_BYTES, fullCacheQuotaBytes).apply()
-        lastFullTrimAt = 0 // 绕过节流
-        trimFullCache()
+        fullTrim.callNow() // 绕过节流立即 trim（用户操作要求即时反馈）
     }
 
     /// 清空图片磁盘缓存。[clearThumb]=true 连缩略图缓存一起清（手动清理
@@ -1121,7 +1169,7 @@ class MediaStoreRepository(private val context: Context) {
             } else {
                 tmp.delete()
             }
-            trimFullCache()
+            fullTrim.call()
         } catch (e: Exception) {
             Log.w(TAG, "writeFullCache 失败: ${e.message}")
         }
@@ -1129,11 +1177,9 @@ class MediaStoreRepository(private val context: Context) {
 
     /// 全图缓存 trim（独立于缩略图缓存：独立目录/独立配额/独立节流）。
     /// 配额 [fullCacheQuotaBytes] 运行时可调（用户设置档位）；默认 128MB
-    /// ≈ 850 张 1152 宽 JPEG（~150KB/张）。
+    /// ≈ 850 张 1152 宽 JPEG（~150KB/张）。节流由 [fullTrim]（ThrottledTrim，
+    /// 停笔后必有补刀）接管——本函数只做纯 trim。
     private fun trimFullCache() {
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastFullTrimAt < TRIM_THROTTLE_MS) return
-        lastFullTrimAt = now
         val quota = fullCacheQuotaBytes
         val files = fullCacheDir.walkTopDown().filter { it.isFile }.toList()
         var total = 0L
@@ -1149,13 +1195,13 @@ class MediaStoreRepository(private val context: Context) {
         fullBytesCalibratedAt = SystemClock.elapsedRealtime()
     }
 
+    /// 全图 trim 调度（去抖节流，见 ThrottledTrim）。
+    private val fullTrim = ThrottledTrim(TRIM_THROTTLE_MS) { trimFullCache() }
+
     /// 全图磁盘缓存目录（app cache，系统可清）。
     private val fullCacheDir: File by lazy {
         File(context.cacheDir, "visort_full").apply { mkdirs() }
     }
-
-    /// 全图缓存最近一次 trim 时刻（ms）。
-    private var lastFullTrimAt = 0L
 
     /// 全图缓存配额（字节，运行时可调——设置页档位手柄）。写路径
     /// （writeFullCache）与设置路径（setFullCacheQuota）均在 ioExecutor 或
@@ -1598,22 +1644,18 @@ class MediaStoreRepository(private val context: Context) {
             if (file.exists()) thumbBytesCounter.addIfReady(-file.length())
             file.writeBytes(bytes)
             thumbBytesCounter.addIfReady(file.length())
-            trimThumbnailCache()
+            thumbTrim.call()
         } catch (e: Exception) {
             Log.w(TAG, "writeThumbnailCache 失败: ${e.message}")
         }
     }
 
-    /// 最近一次 trim 全目录扫描时刻（ms）。拖拽/滑动高峰每次写缓存都触发
-    /// walkTopDown 是 O(缓存文件数) 全目录遍历——几千文件下每写一张扫一遍
-    /// 直接拖慢滚动。节流：高峰最多 5s 一次（超限清理只延时最多 5s）。
-    private var lastTrimAt = 0L
+    /// thumb trim 调度（去抖节流，见 ThrottledTrim——滚动高峰每写一张都
+    /// walkTopDown 是 O(缓存文件数) 全目录遍历，须节流；停笔后补刀收敛）。
+    private val thumbTrim = ThrottledTrim(TRIM_THROTTLE_MS) { trimThumbnailCache() }
 
     /// 容量上限：超出按 mtime 删最旧，直到达标。目录小（≤128MB）时跳过扫描。
     private fun trimThumbnailCache() {
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastTrimAt < TRIM_THROTTLE_MS) return
-        lastTrimAt = now
         // 缩略图实际写入 ${width}x${height}/ 子目录——顶层 listFiles 只见
         // 目录（isFile 过滤后为空、total 恒 0），旧实现永不触发清理、
         // 缓存无界增长。walkTopDown 递归统计并按最旧逐个淘汰。

@@ -375,7 +375,6 @@ const Map<String, String> stringsZh = {
   'settings_ml_index': '图片信息索引',
   'settings_ml_index_note': '扫描照片提取拍摄时间、GPS 坐标、相机型号并解析地名，供搜索页的地点/相机/元数据分类使用；文件类型、相册等其余分类无需索引。',
   'settings_ml_progress': '索引进度',
-  'settings_ml_count': '{0} 张',
   'settings_ml_running': '正在索引…',
   'settings_ml_done': '已完成',
   'settings_ml_off_title': '关闭图片信息索引？',

@@ -116,12 +116,13 @@ class SettingsScreen extends ConsumerWidget {
                 ),
             ],
           ),
+          // ── 机器学习（[ente 对齐] ENTE ML 设置页精简：开关+进度+注释）──
+          // 位于缓存组上方（2026-09 用户定稿排布）。
+          _SectionHeader(t(ref, 'settings_section_ml')),
+          const _MlSection(),
           // ── 缓存 ──
           _SectionHeader(t(ref, 'settings_section_cache')),
           const _CacheSection(),
-          // ── 机器学习（[ente 对齐] ENTE ML 设置页精简：开关+进度+注释）──
-          _SectionHeader(t(ref, 'settings_section_ml')),
-          const _MlSection(),
         ],
       ),
     );
@@ -692,21 +693,15 @@ class _MlSectionState extends ConsumerState<_MlSection> {
     }
   }
 
-  /// 进度百分比（0-100 整数）；total 未知时返回 null 显示「—」。
-  int? _percent(SearchIndexState ml) =>
-      ml.total <= 0 ? null : (ml.processed * 100 / ml.total).round().clamp(0, 100);
-
-  /// 进度主行右侧：百分比 + 索引张数。张数实时反映已落库行数——跑批中
-  /// 随百分比一起涨（2026-09 用户定稿，不再跑完才跳）；增量对账
-  /// （syncNewPhotos）只涨张数不动百分比，是观察增量变化的窗口。空库
-  /// （total=0 跑完）显示「0 张 · 已完成」而非「…」（ranOnce 语义）。
+  /// 进度主行右侧：已索引 / 总张数（对齐缓存区「cached / total 张」格式，
+  /// 2026-09 用户定稿替换百分比）。分母 = 全库扫描总数（scanAllImages，
+  /// 含 GIF 不含回收站）；分子 = 已落库行数，跑批中随落库实时涨（不再
+  /// 跑完才跳）；增量对账（syncNewPhotos）只涨分子不动分母，是观察增量
+  /// 变化的窗口。total 未知（刚开启未起跑）返回 null 显示「…」。
   String? _progressText(SearchIndexState ml) {
-    final pct = _percent(ml);
-    final parts = <String>[
-      if (pct != null) '$pct%',
-      t(ref, 'settings_ml_count', [_thousands(ml.metaCount)]),
-    ];
-    return parts.isEmpty ? null : parts.join(' · ');
+    if (ml.total <= 0) return null;
+    return '${_thousands(ml.metaCount)} / ${_thousands(ml.total)} '
+        '${t(ref, 'photos_unit')}';
   }
 
   /// 千分位（仅此一处用，不引 intl）。
