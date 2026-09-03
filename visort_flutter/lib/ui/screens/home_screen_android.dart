@@ -586,12 +586,12 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         title: AppBarTitleText(t(ref, 'quick_sort_title')),
         actions: [
           // 说明按钮（选项按钮左侧）：点击弹出屏幕居中的说明弹窗，介绍
-          // 本页用途与两种整理模式的区别。自绘 ⓘ 图标形制参照首页搜索
-          // 按钮（24 视口 stroke 1.8 圆头，图形外缘 ~10.8 与搜索/筛选
-          // 包络同量级）；x 12.75 → 与选项按钮图形间隙 22dp（搜索按钮
-          // 同款调校）。圆形图形几何正中，无需 y 补偿。
+          // 本页用途与两种整理模式的区别。自绘 ⓘ 图标（外缘 ~13.1，
+          // 与顶栏三图形视觉分量一致）；x 11.6 → 与选项按钮图形间隙
+          // 22dp（图形右缘较搜索按钮外扩 1.15，偏移相应回退）。
+          // 圆形图形几何正中，无需 y 补偿。
           Transform.translate(
-            offset: const Offset(12.75, 0),
+            offset: const Offset(11.6, 0),
             child: IconButton(
               icon: const _HelpGlyphIcon(),
               tooltip: t(ref, 'quick_sort_tips'),
@@ -2509,34 +2509,33 @@ class _QuickSortTipsDialog extends ConsumerWidget {
             ],
           ),
         );
-    return Material(
-      color: AppColors.surfaceElevated,
+    // 标准 Dialog 容器：自带屏幕居中 + 宽度约束（minWidth 280，上限
+    // 屏宽 − inset），是真正的居中小弹窗——裸 Material 会直接铺在
+    // Overlay 上不居中（用户实测铺满屏，已废弃）。
+    return Dialog(
+      backgroundColor: AppColors.surfaceElevated,
       elevation: 3,
-      borderRadius: BorderRadius.circular(12),
-      clipBehavior: Clip.antiAlias,
-      // 定宽：屏宽 −48（两侧各 24 边距），大屏不再放宽（12sp 正文行宽
-      // 过长难读）。
-      child: SizedBox(
-        width: MediaQuery.sizeOf(context).width - 48,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(t(ref, 'quick_sort_tips_intro'), style: bodyStyle),
-              modeRow(
-                Icons.create_new_folder_outlined,
-                t(ref, 'mode_to_newdir'),
-                t(ref, 'quick_sort_tips_newdir'),
-              ),
-              modeRow(
-                Icons.swap_horiz,
-                t(ref, 'mode_to_album'),
-                t(ref, 'quick_sort_tips_album'),
-              ),
-            ],
-          ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      // 两侧各 28 边距（Dialog 默认 40 在窄屏浪费宽度）。
+      insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(t(ref, 'quick_sort_tips_intro'), style: bodyStyle),
+            modeRow(
+              Icons.create_new_folder_outlined,
+              t(ref, 'mode_to_newdir'),
+              t(ref, 'quick_sort_tips_newdir'),
+            ),
+            modeRow(
+              Icons.swap_horiz,
+              t(ref, 'mode_to_album'),
+              t(ref, 'quick_sort_tips_album'),
+            ),
+          ],
         ),
       ),
     );
@@ -2546,9 +2545,10 @@ class _QuickSortTipsDialog extends ConsumerWidget {
 /// 自绘「ⓘ」图标（快速整理页说明按钮用）：圆圈 + 倒感叹号，顶点用
 /// 主题 accent 黄绿提亮（用户定稿 2026-09）。
 ///
-/// 形制对齐首页搜索按钮 _SearchGlyphPainter：24 基准视口、圆头笔帽；
-/// 圆圈外缘（含线宽）直径 ~10.8，与搜索图形（10.5）/筛选图形（11.2）
-/// 包络同量级，视觉分量一致。
+/// 形制对齐顶栏三图形（24 基准视口、stroke 1.9 圆头）：细线圆圈的
+/// 笔画密度低于搜索/筛选的多笔图形，数学包络同宽仍显小（用户实测
+/// 反馈）——圆圈放大到外缘 ~13.1，与侧栏图形（14）同档，视觉分量
+/// 对齐。
 class _HelpGlyphIcon extends StatelessWidget {
   const _HelpGlyphIcon();
 
@@ -2569,20 +2569,21 @@ class _HelpGlyphPainter extends CustomPainter {
     final stroke = Paint()
       ..color = AppColors.text
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.8
+      ..strokeWidth = 1.9
       ..strokeCap = StrokeCap.round;
-    // 外圈：中心 (12,12) 半径 4.5，外缘直径 4.5×2+1.8 = 10.8。
-    canvas.drawCircle(const Offset(12, 12), 4.5, stroke);
+    // 外圈：中心 (12,12) 半径 5.6，外缘直径 5.6×2+1.9 ≈ 13.1
+    //（Material info_outline 同比例：圆径 16/24 视口）。
+    canvas.drawCircle(const Offset(12, 12), 5.6, stroke);
     // 倒感叹号：顶点 = accent 实心小圆（唯一彩色点缀）；短竖线下引，
-    // 点/线间留 ~0.6 空隙（i 的字面结构）。
+    // 点/线间留空隙（i 的字面结构）。
     canvas.drawCircle(
-      const Offset(12, 9.8),
-      1.0,
+      const Offset(12, 9.4),
+      1.15,
       Paint()..color = AppColors.accent,
     );
     canvas.drawLine(
-      const Offset(12, 12.2),
-      const Offset(12, 13.8),
+      const Offset(12, 12.1),
+      const Offset(12, 14.7),
       stroke,
     );
     canvas.restore();
