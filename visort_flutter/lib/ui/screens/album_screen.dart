@@ -592,30 +592,18 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     );
   }
 
-  /// 收藏视图收敛淡入（2026-09 用户需求：取消收藏后列表柔和补位而非硬
-  /// 切换）。key = id 序列——仅成员增减时换 key 重播 150ms 淡入（新列表
-  /// 布局渐进显现）；observer 静默重查/列数变化 id 序列不变 → 不闪。
-  /// TweenAnimationBuilder 换 child 不重播，必须换 key 整体重建（旧
-  /// scrollable 先卸载再挂新——避开 AnimatedSwitcher 双挂载的双 attach
-  /// 崩溃，见上方 push 版同款注释）。时机安全：移除发生在 pop 飞行
-  /// 完成后（applyPendingFavRemovals），无并发飞行。
-  /// 首挂不淡入（tab 首次挂载与抽屉切页预期满屏直出，见 557 行注释）：
-  /// 首帧标记后从第二次 build 起启用。
-  bool _favFadeArmed = false;
   Widget _wrapFavoritesFade(GalleryState gallery) {
     if (!widget.favoritesOnly || gallery.photos.isEmpty) {
       return _buildBody(gallery);
     }
-    if (!_favFadeArmed) {
-      _favFadeArmed = true;
-      return _buildBody(gallery);
-    }
-    return TweenAnimationBuilder<double>(
-      key: ValueKey(gallery.photos.map((p) => p.id).join(' ')),
-      tween: Tween(begin: 0.0, end: 1.0),
-      duration: AppDurations.enteContentSwitch,
-      curve: Curves.easeOut,
-      builder: (_, opacity, child) => Opacity(opacity: opacity, child: child),
+    // 不换 key 重建网格：换 key 时新 Gallery 先挂载、旧 Gallery 帧末才
+    // 卸载，同帧窗口 ScrollController 双挂载——拖拽手柄读 position.single
+    // 即 "Too many elements" 崩（真机实证 2026-09-03，550 行注释同族坑）。
+    // dataKey 脉冲：网格同树原地更新（element 复用，controller 恒单挂载），
+    // id 序列变化时重播 150ms 淡入；静默重查/列数变化 id 不变不闪。
+    // 时机安全：移除发生在 pop 飞行完成后（applyPendingFavRemovals）。
+    return _FadePulseOnDataChange(
+      dataKey: gallery.photos.map((p) => p.id).join(' '),
       child: _buildBody(gallery),
     );
   }
@@ -1437,6 +1425,55 @@ class _ThumbGridPlaceholder extends StatelessWidget {
       ),
       itemCount: cols * 6,
       itemBuilder: (_, _) => const ColoredBox(color: AppColors.surface),
+    );
+  }
+}
+
+/// 数据变化淡入脉冲（收藏视图收敛用）：dataKey 变化时重播 150ms 淡入，
+/// child 同树原地更新（element 复用——绝不因动画重建网格，ScrollController
+/// 恒单挂载；首挂直出 value=1）。
+class _FadePulseOnDataChange extends StatefulWidget {
+  const _FadePulseOnDataChange({required this.dataKey, required this.child});
+
+  final Object dataKey;
+  final Widget child;
+
+  @override
+  State<_FadePulseOnDataChange> createState() => _FadePulseOnDataChangeState();
+}
+
+class _FadePulseOnDataChangeState extends State<_FadePulseOnDataChange>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: AppDurations.enteContentSwitch,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl.value = 1; // 首挂直出（tab 首挂不播淡入，见 557 行注释同款语义）
+  }
+
+  @override
+  void didUpdateWidget(covariant _FadePulseOnDataChange oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.dataKey != widget.dataKey) {
+      _ctrl.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: CurvedAnimation(parent: _ctrl, curve: Curves.easeOut),
+      child: widget.child,
     );
   }
 }
