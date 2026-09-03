@@ -694,10 +694,11 @@ class _MlSectionState extends ConsumerState<_MlSection> {
   }
 
   /// 进度主行右侧：已索引 / 总张数（对齐缓存区「cached / total 张」格式，
-  /// 2026-09 用户定稿替换百分比）。分母 = 全库扫描总数（scanAllImages，
-  /// 含 GIF 不含回收站）；分子 = 已落库行数，跑批中随落库实时涨（不再
-  /// 跑完才跳）；增量对账（syncNewPhotos）只涨分子不动分母，是观察增量
-  /// 变化的窗口。total 未知（刚开启未起跑）返回 null 显示「…」。
+  /// 2026-09 用户定稿替换百分比）。分母 = 当前库规模（scanAllImages 全量
+  /// 扫描，含 GIF 不含回收站；首轮跑批定基，此后每次增量对账
+  /// （syncNewPhotos）对齐到最新库规模）；分子 = 已落库行数，跑批中随
+  /// 落库实时涨（不再跑完才跳）。total 未知（刚开启未起跑）返回 null
+  /// 显示「…」。
   String? _progressText(SearchIndexState ml) {
     if (ml.total <= 0) return null;
     return '${_thousands(ml.metaCount)} / ${_thousands(ml.total)} '
