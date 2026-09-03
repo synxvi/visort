@@ -1194,6 +1194,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           // 相册（bucket）无删除日期概念；回退创建时间。
           cmp = a.dateCreatedMs.compareTo(b.dateCreatedMs);
           break;
+        case SortBy.dateFavorited:
+          // 相册（bucket）无收藏日期概念（该维度仅收藏视图提供）；回退创建时间。
+          cmp = a.dateCreatedMs.compareTo(b.dateCreatedMs);
+          break;
       }
       return config.albumSortAsc ? cmp : -cmp;
     });

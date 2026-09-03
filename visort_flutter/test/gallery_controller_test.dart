@@ -93,6 +93,7 @@ class _FakeMediaStoreChannel extends MediaStoreChannel {
           return a.dateModifiedMs.compareTo(b.dateModifiedMs);
         case SortBy.dateCreated:
         case SortBy.dateTrashed:
+        case SortBy.dateFavorited:
           return a.dateAddedMs.compareTo(b.dateAddedMs);
       }
     }

@@ -195,6 +195,7 @@ const Map<String, String> stringsEn = {
   'sort_by_date_created': 'By Created Date',
   'sort_by_date_modified': 'By Modified Date',
   'sort_by_date_trashed': 'By Deleted Date',
+  'sort_by_date_favorited': 'By Favorited Date',
   'photo_count': '{0} photos',
   'album_empty': 'This album is empty',
   'today': 'Today',

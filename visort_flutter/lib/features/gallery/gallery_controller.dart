@@ -14,9 +14,11 @@
 // 缩略图渲染时由 UI 层把 MsImageInfo.id 包成 ImageRef（imageRefFromMediaStoreId）。
 
 import 'dart:async';
+import 'dart:convert' show jsonDecode, jsonEncode;
 
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/config/profiles_service.dart';
 import 'package:visort_flutter/core/db/database_service.dart';
@@ -79,6 +81,10 @@ class GalleryState {
     this.albumSortAsc = true,
     this.photoSortBy = SortBy.dateCreated,
     this.photoSortAsc = false,
+    this.favSortBy = SortBy.dateFavorited,
+    this.favSortAsc = false,
+    this.trashSortBy = SortBy.dateTrashed,
+    this.trashSortAsc = false,
   });
 
   final List<MsBucket> buckets;
@@ -106,15 +112,50 @@ class GalleryState {
 
   final SortBy albumSortBy;
   final bool albumSortAsc;
+
+  /// 相册内图片排序偏好（bucket 视图）。
   final SortBy photoSortBy;
   final bool photoSortAsc;
 
-  /// 当前视图实际生效的图片排序。
-  /// 回收站视图允许 dateTrashed（DATE_EXPIRES）；其他视图遇到 dateTrashed 时
-  /// 回退 dateCreated——DATE_EXPIRES 仅回收站项有值，普通查询会全 NULL 导致乱序。
-  SortBy get effectivePhotoSortBy => view == GalleryView.trash
-      ? photoSortBy
-      : (photoSortBy == SortBy.dateTrashed ? SortBy.dateCreated : photoSortBy);
+  /// 收藏/回收站视图独立排序偏好（2026-09 用户定稿，持久化于 AppConfig）：
+  /// 收藏默认收藏日期降序、回收站默认删除日期降序，互不影响。
+  final SortBy favSortBy;
+  final bool favSortAsc;
+  final SortBy trashSortBy;
+  final bool trashSortAsc;
+
+  /// 当前视图实际生效的图片排序（维度）。
+  /// - 回收站视图用 [trashSortBy]（允许 dateTrashed=DATE_EXPIRES）；
+  /// - 收藏视图用 [favSortBy]（允许 dateFavorited；dateTrashed 在收藏集
+  ///   无意义，回退 dateCreated）；
+  /// - 其他视图（bucket/albums）用 [photoSortBy]，dateTrashed 回退
+  ///   dateCreated——DATE_EXPIRES 仅回收站项有值，普通查询会全 NULL 乱序。
+  /// ⚠️ 返回值可能为 dateFavorited（非 SQL 列）——SQL 查询前须经
+  /// [_sqlSortOf] 转换；本 getter 面向 UI 激活态展示。
+  SortBy get effectivePhotoSortBy => switch (view) {
+        GalleryView.favorites => favSortBy == SortBy.dateTrashed
+            ? SortBy.dateCreated
+            : favSortBy,
+        GalleryView.trash => trashSortBy,
+        _ => photoSortBy == SortBy.dateTrashed
+            ? SortBy.dateCreated
+            : photoSortBy,
+      };
+
+  /// 当前视图实际生效的排序方向。
+  bool get effectivePhotoSortAsc => switch (view) {
+        GalleryView.favorites => favSortAsc,
+        GalleryView.trash => trashSortAsc,
+        _ => photoSortAsc,
+      };
+
+  /// SQL 可用的排序维度（scanImages sortBy 传参）：dateFavorited 是本地
+  /// 排序（无 MediaStore 列），SQL 回退 dateCreated——dateFavorited 视图
+  /// 走全量拉取后 Dart 内存排序，SQL 序仅影响拉取顺序（随后被重排覆盖）。
+  SortBy get sqlSort =>
+      effectivePhotoSortBy == SortBy.dateFavorited
+          ? SortBy.dateCreated
+          : effectivePhotoSortBy;
 
   /// 是否还有更多图片可加载（游标非 null）
   bool get hasMore => nextCursor != null;
@@ -136,6 +177,10 @@ class GalleryState {
           break;
         case SortBy.dateTrashed:
           // 相册（bucket）无删除日期概念；回退创建时间。
+          cmp = a.dateCreatedMs.compareTo(b.dateCreatedMs);
+          break;
+        case SortBy.dateFavorited:
+          // 相册（bucket）无收藏日期概念（该维度仅收藏视图提供）；回退创建时间。
           cmp = a.dateCreatedMs.compareTo(b.dateCreatedMs);
           break;
       }
@@ -162,6 +207,10 @@ class GalleryState {
     bool? albumSortAsc,
     SortBy? photoSortBy,
     bool? photoSortAsc,
+    SortBy? favSortBy,
+    bool? favSortAsc,
+    SortBy? trashSortBy,
+    bool? trashSortAsc,
   }) {
     return GalleryState(
       buckets: buckets ?? this.buckets,
@@ -180,6 +229,10 @@ class GalleryState {
       albumSortAsc: albumSortAsc ?? this.albumSortAsc,
       photoSortBy: photoSortBy ?? this.photoSortBy,
       photoSortAsc: photoSortAsc ?? this.photoSortAsc,
+      favSortBy: favSortBy ?? this.favSortBy,
+      favSortAsc: favSortAsc ?? this.favSortAsc,
+      trashSortBy: trashSortBy ?? this.trashSortBy,
+      trashSortAsc: trashSortAsc ?? this.trashSortAsc,
     );
   }
 }
@@ -249,6 +302,10 @@ class GalleryController extends Notifier<GalleryState> {
       albumSortAsc: config.albumSortAsc,
       photoSortBy: config.photoSortBy,
       photoSortAsc: config.photoSortAsc,
+      favSortBy: config.favSortBy,
+      favSortAsc: config.favSortAsc,
+      trashSortBy: config.trashSortBy,
+      trashSortAsc: config.trashSortAsc,
     );
   }
 
@@ -267,7 +324,7 @@ class GalleryController extends Notifier<GalleryState> {
     try {
       final buckets = await _channel.listBuckets(
         sortBy: state.effectivePhotoSortBy,
-        asc: state.photoSortAsc,
+        asc: state.effectivePhotoSortAsc,
       );
       if (buckets.isEmpty) {
         state = state.copyWith(
@@ -298,7 +355,15 @@ class GalleryController extends Notifier<GalleryState> {
   /// - albums:不重查相册内,仅重查封面。
   /// 按 view 分发(而非读多个标志位),杜绝"标志位不一致走错分支"导致串视图。
   Future<void> setPhotoSort(SortBy sortBy, bool asc) async {
-    state = state.copyWith(photoSortBy: sortBy, photoSortAsc: asc);
+    // 视图独立排序偏好（2026-09 用户定稿）：按当前视图写对应字段，
+    // 相册内/收藏/回收站互不影响。
+    state = switch (state.view) {
+      GalleryView.favorites =>
+        state.copyWith(favSortBy: sortBy, favSortAsc: asc),
+      GalleryView.trash =>
+        state.copyWith(trashSortBy: sortBy, trashSortAsc: asc),
+      _ => state.copyWith(photoSortBy: sortBy, photoSortAsc: asc),
+    };
     await _persistSortPrefs();
     switch (state.view) {
       case GalleryView.bucket:
@@ -611,13 +676,29 @@ class GalleryController extends Notifier<GalleryState> {
         const [], // 不限 bucket
         afterCursor: null,
         limit: _pageSize,
-        sortBy: state.effectivePhotoSortBy,
-        asc: state.photoSortAsc,
+        sortBy: state.sqlSort,
+        asc: state.effectivePhotoSortAsc,
         favoritesOnly: true,
       );
       if (token != _loadToken) return;
+      var images = page.images;
+      // 收藏日期排序（dateFavorited）：非 MediaStore 列——SQL 拉取后按本地
+      // 记录的收藏时间（[_loadFavTimes]）内存重排。本 app 收藏集一次全量
+      // 拉取（_pageSize 覆盖全库），重排无分页破坏。无记录的收藏（升级前
+      // 的老收藏/外部 app 收藏）时间戳为 0——降序垫底（升序排头），重收藏
+      // 一次即获得真实时间。
+      if (state.favSortBy == SortBy.dateFavorited) {
+        final favTimes = await _loadFavTimes();
+        if (token != _loadToken) return;
+        final asc = state.favSortAsc;
+        images = [...images]..sort((a, b) {
+            final cmp =
+                (favTimes[a.id] ?? 0).compareTo(favTimes[b.id] ?? 0);
+            return asc ? cmp : -cmp;
+          });
+      }
       state = state.copyWith(
-        photos: page.images,
+        photos: images,
         nextCursor: page.nextCursor,
         loadingMore: false,
         firstPageLoaded: true,
@@ -646,8 +727,8 @@ class GalleryController extends Notifier<GalleryState> {
         const [],
         afterCursor: null,
         limit: _pageSize,
-        sortBy: state.effectivePhotoSortBy,
-        asc: state.photoSortAsc,
+        sortBy: state.sqlSort,
+        asc: state.effectivePhotoSortAsc,
         trashedOnly: true,
       );
       if (token != _loadToken) return;
@@ -758,8 +839,8 @@ class GalleryController extends Notifier<GalleryState> {
         view == GalleryView.bucket ? [state.bucketId!] : const [],
         afterCursor: cursor,
         limit: _pageSize,
-        sortBy: state.effectivePhotoSortBy,
-        asc: state.photoSortAsc,
+        sortBy: state.sqlSort,
+        asc: state.effectivePhotoSortAsc,
         favoritesOnly: view == GalleryView.favorites,
         trashedOnly: view == GalleryView.trash,
       );
@@ -1048,6 +1129,9 @@ class GalleryController extends Notifier<GalleryState> {
       final ok = await _channel.requestFavorite(ids, favorite);
       if (!ok) throw StateError('favorite_not_confirmed');
       _markSelfMutation();
+      // 收藏时间记录（dateFavorited 排序数据源）：收藏记当前时刻、取消移除。
+      // 不回滚：失败路径的残留时间无碍（再收藏覆盖、取消后不再参与排序）。
+      unawaited(_recordFavTimes(idSet, favorite));
       // 收藏视图取消收藏 → 实时收敛（此前 photos 不动，收藏页返回后
       // 列表不更新，2026-09 用户反馈）。
       if (!favorite && state.view == GalleryView.favorites) {
@@ -1072,6 +1156,51 @@ class GalleryController extends Notifier<GalleryState> {
             .toList(),
       );
       return _cancelKeyOrRaw(e);
+    }
+  }
+
+  // ───────────── 收藏时间（dateFavorited 排序数据源）─────────────
+
+  /// SP key：{id: 收藏时刻 ms} JSON。MediaStore 无收藏时间列（IS_FAVORITE
+  /// 仅 0/1），本地记录以支撑收藏视图「按收藏日期」排序。无记录（升级前
+  /// 老收藏/外部 app 收藏）按 0 处理——降序垫底。
+  static const _kFavTimesKey = 'visort_fav_times';
+
+  Future<Map<String, int>> _loadFavTimes() async {
+    // 全路径容错（含测试环境无 SP 插件）：任何失败返回空 map——收藏页
+    // 排序退化为「无记录项同档」（保持 SQL 序），不炸 load_failed。
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kFavTimesKey);
+      if (raw == null || raw.isEmpty) return const {};
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        return {
+          for (final e in decoded.entries) e.key: (e.value as num).toInt(),
+        };
+      }
+    } catch (_) {}
+    return const {};
+  }
+
+  Future<void> _recordFavTimes(Set<String> ids, bool favorite) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final map = await _loadFavTimes();
+      if (favorite) {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        for (final id in ids) {
+          map[id] = now;
+        }
+      } else {
+        for (final id in ids) {
+          map.remove(id);
+        }
+      }
+      await prefs.setString(_kFavTimesKey, jsonEncode(map));
+    } catch (e) {
+      // 时间记录失败不阻断收藏主流程（排序退化为无记录项同档）。
+      debugPrint('[GAL] record favTimes failed: $e');
     }
   }
 
@@ -1340,6 +1469,10 @@ class GalleryController extends Notifier<GalleryState> {
       albumSortAsc: state.albumSortAsc,
       photoSortBy: state.photoSortBy,
       photoSortAsc: state.photoSortAsc,
+      favSortBy: state.favSortBy,
+      favSortAsc: state.favSortAsc,
+      trashSortBy: state.trashSortBy,
+      trashSortAsc: state.trashSortAsc,
     );
     ref.read(configProvider.notifier).state = updated;
     await _service.save(updated);
