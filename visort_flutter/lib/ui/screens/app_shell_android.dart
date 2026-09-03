@@ -20,7 +20,8 @@
 //   1. 抽屉展开 → 收起抽屉
 //   2. 当前页勾选态 → 退出勾选（ShellHandle.onBack 返回 true 表示已消费）
 //   3. 非默认页 → 切回默认页——默认页是所有返回操作的应用内终点
-//      （设置 → 通用 → 默认首页，相册 / SORT / 收藏）
+//      （设置 → 通用 → 默认首页，相册 / SORT / 收藏）；例外：设置页
+//      返回回「进入设置前的页」（2026-09 定稿，见 _pageBeforeSettings）
 //   4. 默认页 → moveTaskToBack 回桌面
 //
 // 手势分派（设计定稿）：
@@ -112,6 +113,11 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
   /// 当前页下标。初始 = 默认首页（设置 → 通用，默认相册；下次启动生效）。
   late int _currentPage;
   late int _visited;
+
+  /// 最近一次切入设置页前所在的页（设置页返回特殊化用）：设置页按返回
+  /// 回「进入前的页」而非默认首页（2026-09 用户定稿——从 sort/收藏/
+  /// 回收站侧滑抽屉进设置，返回应回到原页）。每次切入设置页时覆盖。
+  int? _pageBeforeSettings;
   bool _drawerEverOpened = false; // 抽屉内容惰性构建（logo 入场动画随首开播放）
   Timer? _prewarmTimer;
 
@@ -268,6 +274,8 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
     dismissTopRootOverlay();
     _closeDrawer();
     if (index == _currentPage) return;
+    // 切入设置页前记下当前页（设置页返回回它，见 _pageBeforeSettings）。
+    if (index == _pageSettings) _pageBeforeSettings = _currentPage;
     setState(() {
       _visited |= (1 << index);
       _currentPage = index;
@@ -299,8 +307,13 @@ class _AppShellAndroidState extends ConsumerState<AppShellAndroid>
     final handler = _handles[_currentPage].onBack;
     if (handler != null && handler()) return;
     final homeIndex = _homeIndexOf(ref.read(configProvider).defaultHomePage);
-    if (_currentPage != homeIndex) {
-      _fadeToPage(homeIndex);
+    // 设置页返回特殊化：回「进入设置前的页」而非默认首页（sort/收藏/
+    // 回收站 → 抽屉 → 设置 → 返回，应回到原页）；其余页仍回默认首页。
+    final backTarget = _currentPage == _pageSettings
+        ? (_pageBeforeSettings ?? homeIndex)
+        : homeIndex;
+    if (_currentPage != backTarget) {
+      _fadeToPage(backTarget);
       return;
     }
     const MethodChannel('visort/app').invokeMethod('moveTaskToBack');

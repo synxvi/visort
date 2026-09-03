@@ -119,6 +119,13 @@ const Map<String, String> stringsEn = {
   // ───────── Home (Android 双模式分类) ─────────
   'mode_to_album': 'Between Albums',
   'mode_to_newdir': 'Subdirs',
+  'quick_sort_tips': 'Sorting Tips',
+  'quick_sort_tips_intro':
+      'Quick sort: pick a source album, select photos, and move them to the target in one confirmed batch.',
+  'quick_sort_tips_newdir':
+      'Enter a parent folder and name subfolders; selected photos move into the newly created subfolders.',
+  'quick_sort_tips_album':
+      'Move selected photos directly into another existing album.',
   'source_albums': 'Source Albums',
   'target_albums': 'Target Albums',
   'parent_dir': 'Target Parent Folder',
