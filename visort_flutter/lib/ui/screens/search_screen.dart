@@ -1175,7 +1175,9 @@ class _MlProgressBanner extends ConsumerWidget {
     final progress = state.total == 0 ? 0.0 : state.processed / state.total;
     final pct = (progress * 100).round().clamp(0, 100);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      // 底部 12：与下方首行（快捷行）留出间距（对齐列表 top 12 的节奏，
+      // 旧值 4 太挤——用户反馈）；顶部保持 4（ListView top 12 已有顶距）。
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
