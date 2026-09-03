@@ -39,7 +39,14 @@ class RouteNameObserver extends NavigatorObserver {
   // restoreState（导航状态恢复）在 build 期间同步回调 didPush/didPop，
   // 直接赋 currentRouteName 会触发监听者（app.dart 噪点层）build 期间 setState
   // 断言（setState() called during build）。延迟到帧后赋值。
+  //
+  // 无名路由（settings.name == null：dialog / bottom sheet / 弹簧菜单等
+  // 弹层）不是「页面」，底下的页面没变——不更新（保持上一个有名路由）。
+  // 旧实现置 null，而 app.dart 把 null 当「启用噪点」：豁免页（如设置页
+  // 所在的 '/' 壳）上弹任何小窗都会全屏叠出噪点纹理、观感变亮（2026-09
+  // 实报）。弹层 pop 时 previousRoute 是底下的有名页面，正常恢复。
   static void _set(String? name) {
+    if (name == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       currentRouteName.value = name;
     });
