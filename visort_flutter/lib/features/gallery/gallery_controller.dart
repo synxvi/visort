@@ -686,7 +686,7 @@ class GalleryController extends Notifier<GalleryState> {
       // 记录的收藏时间（[_loadFavTimes]）内存重排。本 app 收藏集一次全量
       // 拉取（_pageSize 覆盖全库），重排无分页破坏。
       if (state.favSortBy == SortBy.dateFavorited) {
-        var favTimes = await _loadFavTimes();
+        final favTimes = await _loadFavTimes();
         if (token != _loadToken) return;
         // 老收藏补记（自愈）：升级前收藏的图无历史时间戳（MediaStore 不
         // 记录收藏时刻，本地记录自本版本起）——补记一个比已有记录更早的

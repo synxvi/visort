@@ -13,6 +13,7 @@
 //   Run 按 RELATIVE_PATH 分组批量 moveBatch（createWriteRequest）
 
 import 'dart:async';
+import 'dart:math' show pi;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -31,7 +32,7 @@ import 'package:visort_flutter/features/scan/scan_controller.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/shared/widgets/resume_button.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart'
-    show showCenterDialog;
+    show showCenterDialog, showSpringPopupFromAnchor;
 import 'package:visort_flutter/shared/widgets/app_bar_title.dart';
 import 'package:visort_flutter/shared/widgets/view_options_toggle.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
@@ -553,6 +554,33 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
     }
   }
 
+  /// 顶栏「?」说明气泡：向下弹出，介绍本页用途与两种整理模式的区别。
+  /// 弹层与选项按钮面板同款（showSpringPopupFromAnchor 弹簧展开 / 点外
+  /// 收回）；气泡纯文字展示，无交互条目。
+  Future<void> _showTipsBubble(BuildContext btnCtx) async {
+    final box = btnCtx.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final pos = box.localToGlobal(Offset.zero);
+    final screen = MediaQuery.sizeOf(btnCtx);
+    // 定宽气泡（正文 12sp 多行）：屏宽 -32（两侧各 16 边距）与 340 取小。
+    final width = (screen.width - 32).clamp(0.0, 340.0);
+    await showSpringPopupFromAnchor<void>(
+      context: btnCtx,
+      barrierLabel: 'quick_sort_tips',
+      // 弹簧起点 = 按钮中心 × 面板顶边；面板右缘离按钮右缘 8dp
+      // （定位与选项按钮面板一致，见 ViewOptionsToggle._openPanel）。
+      anchorGlobalDx: pos.dx + box.size.width / 2,
+      anchorGlobalDy: pos.dy + box.size.height + 4,
+      menuLeft: (pos.dx + box.size.width - width - 8).clamp(
+        0.0,
+        (screen.width - width).clamp(0.0, double.infinity),
+      ),
+      menuTop: pos.dy + box.size.height + 4,
+      menuWidth: width,
+      menuBuilder: (_) => const _QuickSortTipsPanel(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final config = ref.watch(configProvider);
@@ -575,6 +603,20 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
         // 见 app_bar_title.dart）。
         title: AppBarTitleText(t(ref, 'quick_sort_title')),
         actions: [
+          // 说明气泡（选项按钮左侧）：点击向下弹出小气泡，介绍本页用途
+          // 与两种整理模式的区别。样式参照首页搜索按钮（自绘问号，形制
+          // 同 24 视口 stroke 1.9；x 12.75 → 与选项按钮图形间隙 22dp，
+          // y 0.5 = 瘦高字形重心偏上的光学补偿，贴 AppBar 几何中线）。
+          Transform.translate(
+            offset: const Offset(12.75, 0.5),
+            child: Builder(
+              builder: (btnCtx) => IconButton(
+                icon: const _HelpGlyphIcon(),
+                tooltip: t(ref, 'quick_sort_tips'),
+                onPressed: () => _showTipsBubble(btnCtx),
+              ),
+            ),
+          ),
           // 视图选项（[ente 对齐]）：布局切换 + 网格列数 + 排序收口到一个
           // 选项按钮；相册排序为源/目标 section 共用状态 albumSortBy/Asc。
           // 品牌 logo 已随抽屉定稿移除（只留抽屉头部一处）。
@@ -2437,4 +2479,136 @@ class _SubDirRowState extends State<_SubDirRow> {
       ),
     );
   }
+}
+
+/// 快速整理页「?」说明气泡内容：本页用途 + 两种整理模式区别。
+/// 纯文字展示（无交互行），卡片样式对齐 ViewOptionsToggle 的面板
+/// （surfaceElevated / 圆角 12 / elevation 3）。
+class _QuickSortTipsPanel extends ConsumerWidget {
+  const _QuickSortTipsPanel();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    const bodyStyle = TextStyle(
+      fontFamily: 'Space Mono',
+      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+      fontSize: 12,
+      height: 1.6,
+      color: AppColors.text,
+    );
+    const labelStyle = TextStyle(
+      fontFamily: 'Space Mono',
+      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+      fontSize: 12,
+      fontWeight: FontWeight.w700,
+      color: AppColors.text,
+    );
+    // 模式段：图标 + 模式名（与顶部 segmented control 同图标），说明
+    // 文字 muted 弱一档，与面板行的图标 16 + 间距 8 形制一致。
+    Widget modeRow(IconData icon, String label, String desc) => Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 16, color: AppColors.muted),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label, style: labelStyle),
+                    const SizedBox(height: 2),
+                    Text(
+                      desc,
+                      style: bodyStyle.copyWith(color: AppColors.muted),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+    return Material(
+      color: AppColors.surfaceElevated,
+      elevation: 3,
+      borderRadius: BorderRadius.circular(12),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(t(ref, 'quick_sort_tips_intro'), style: bodyStyle),
+            modeRow(
+              Icons.create_new_folder_outlined,
+              t(ref, 'mode_to_newdir'),
+              t(ref, 'quick_sort_tips_newdir'),
+            ),
+            modeRow(
+              Icons.swap_horiz,
+              t(ref, 'mode_to_album'),
+              t(ref, 'quick_sort_tips_album'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 自绘问号图标（快速整理页说明按钮用）。
+///
+/// 形制对齐首页搜索按钮 _SearchGlyphPainter：24 基准视口、stroke 1.9、
+/// 圆头笔帽；宽向包络 ~10.3 与搜索图形（10.4）同宽，天然瘦高的字形
+/// 视觉分量相当（Material Icons.help_outline 轮廓过细不搭，同搜索弃用）。
+class _HelpGlyphIcon extends StatelessWidget {
+  const _HelpGlyphIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: const Size.square(28),
+      painter: _HelpGlyphPainter(),
+    );
+  }
+}
+
+class _HelpGlyphPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 24);
+    final paint = Paint()
+      ..color = AppColors.text
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.9
+      ..strokeCap = StrokeCap.round;
+    // 上弧：中心 (12,10) 半径 4.2，从左侧起顺时针绕顶到右下 20°
+    //（屏幕 y 向下，角度顺时针增：180° → 270°(顶) → 360°(右) → 380°）。
+    canvas.drawArc(
+      Rect.fromCircle(center: const Offset(12, 10), radius: 4.2),
+      pi,
+      3.49,
+      false,
+      paint,
+    );
+    // 弯钩：弧终点 (15.95, 11.44) 贝塞尔弯向中心，再短竖线下引
+    //（起点切线与弧端切线连续，光滑衔接）。
+    final hook = Path()
+      ..moveTo(15.95, 11.44)
+      ..quadraticBezierTo(14.9, 15.0, 12, 15.0)
+      ..lineTo(12, 16.4);
+    canvas.drawPath(hook, paint);
+    // 句点：实心小圆。
+    canvas.drawCircle(
+      const Offset(12, 18.8),
+      1.0,
+      Paint()..color = AppColors.text,
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _HelpGlyphPainter oldDelegate) => false;
 }
