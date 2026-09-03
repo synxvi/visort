@@ -33,12 +33,15 @@ import 'package:visort_flutter/core/i18n/i18n.dart' show t;
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
+import 'package:visort_flutter/ui/route_transitions.dart' show enteFadeRoute;
 import 'package:visort_flutter/ui/screens/album_common.dart' show extOf;
 
 /// 大图查看器 → 壁纸调整页（返回手势退出，无栏位）。
+/// 入场 = enteFadeRoute 200ms 淡入（MaterialPageRoute 默认的从右向左
+/// 滑入已按用户要求移除——壁纸页是全屏沉浸预览，方向性位移突兀）。
 Future<void> pushWallpaperCropPage(BuildContext context, MsImageInfo photo) {
   return Navigator.of(context).push(
-    MaterialPageRoute<void>(builder: (_) => WallpaperCropPage(photo: photo)),
+    enteFadeRoute<void>(builder: (_) => WallpaperCropPage(photo: photo)),
   );
 }
 
