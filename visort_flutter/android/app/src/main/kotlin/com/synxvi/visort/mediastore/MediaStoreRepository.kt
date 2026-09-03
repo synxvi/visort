@@ -1687,10 +1687,11 @@ class MediaStoreRepository(private val context: Context) {
         /// 磁盘缩略图缓存容量上限（128MB ≈ 数千张 300~500px JPEG）。
         private const val MAX_THUMBNAIL_CACHE_BYTES = 128L * 1024 * 1024
 
-        /// viewer 全图磁盘缓存默认配额（128MB ≈ 850 张 1152 宽 JPEG，
-        /// ~150KB/张——对标系统相册 screenNail 磁盘层）。运行时由
+        /// viewer 全图磁盘缓存默认配额（512MB，与 Dart 侧 config
+        /// precacheQuotaMb 默认档一致——Worker 独立进程先于 Dart 推送
+        /// 运行时读 SP 无值落此兜底，两侧须同步）。运行时由
         /// setFullCacheQuota 按用户档位（256MB~2GB）调整。
-        private const val DEFAULT_FULL_CACHE_BYTES = 128L * 1024 * 1024
+        private const val DEFAULT_FULL_CACHE_BYTES = 512L * 1024 * 1024
 
         /// 配额持久化 SP 键（文件 "visort_cache"，见 quotaPrefs）。
         const val KEY_FULL_QUOTA_BYTES = "full_quota_bytes"

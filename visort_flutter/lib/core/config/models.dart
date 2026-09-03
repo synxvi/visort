@@ -253,10 +253,10 @@ class AppConfig {
     this.favoritesGridColumns = 4,
     this.trashGridColumns = 4,
     this.precacheEnabled = true,
-    this.precacheQuotaMb = 1024,
-    this.mlIndexEnabled = false,
+    this.precacheQuotaMb = 512,
+    this.mlIndexEnabled = true,
     this.mlFaceEnabled = false,
-    this.drawerAnimSpeed = DrawerAnimSpeed.fast,
+    this.drawerAnimSpeed = DrawerAnimSpeed.comfortable,
     this.defaultHomePage = DefaultHomePage.gallery,
     this.galleryLayout = HomeLayout.grid,
     this.galleryGridColumns = 3,
@@ -308,7 +308,7 @@ class AppConfig {
   /// screenNail（full 档盘缓存），加快浏览。关闭时由设置页清空全量缓存。
   final bool precacheEnabled;
 
-  /// 空闲预缓存磁盘配额（MB）。档位见设置页（256MB~2GB），默认 1GB。
+  /// 空闲预缓存磁盘配额（MB）。档位见设置页（256MB~2GB），默认 512MB。
   final int precacheQuotaMb;
 
   // ── 智能识别（搜索索引，设置页「智能识别」区开关）──
@@ -324,7 +324,8 @@ class AppConfig {
   /// 人物识别开关：预留（需要人脸检测模型，当前版本未内置）。
   final bool mlFaceEnabled;
 
-  /// 抽屉开合动画档位（舒适/快速），默认快速（Material 黄金值）。
+  /// 抽屉开合动画档位（舒适/快速），默认舒适（2026-09 用户定稿；
+  /// 原 Material 黄金值快速）。
   final DrawerAnimSpeed drawerAnimSpeed;
 
   /// 默认首页：启动进入的一级页 + 其它一级页返回键的终点。
