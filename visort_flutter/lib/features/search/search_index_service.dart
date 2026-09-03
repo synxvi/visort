@@ -385,6 +385,23 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       await forgetIds(gone);
       debugPrint('[SIDX] syncNewPhotos: gc ${gone.length} stale rows');
     }
+    // total/processed 对齐当前库规模（photos = 权威全量扫描）：首轮跑批后
+    // 的增删会让 SP 里的旧 total 失真——新增补录后 X>Y 打脸（1918/1910
+    // 实报）、删除后 total 虚高。对账（含 gc-only 轮）完成即收敛 + 持久
+    // 化，重启 load 不回旧值。仅 ranOnce 后生效——首轮未跑时 total 语义
+    // 属于跑批进度（start() 自己设），对齐会假 done 跳过首轮。
+    if (state.ranOnce &&
+        (state.total != photos.length || state.processed != photos.length)) {
+      state = SearchIndexState(
+        running: state.running,
+        processed: photos.length,
+        total: photos.length,
+        metaCount: _metas.length,
+        ranOnce: state.ranOnce,
+      );
+      await _saveProgress(photos.length, photos.length);
+      debugPrint('[SIDX] syncNewPhotos: align total->${photos.length}');
+    }
     if (fresh.isEmpty) return;
     debugPrint('[SIDX] syncNewPhotos: ${fresh.length} new/changed');
     _runSeq++;
@@ -414,12 +431,12 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       final mt = mtimeById[m.id];
       if (mt != null) _mtimes[m.id] = mt;
     }
-    // 张数进 state：增量落地后设置页进度行立即反映（processed/total 是
-    // 首轮进度语义，不动）。
+    // 张数进 state：增量落地后设置页进度行立即反映；total/processed 同步
+    // 对齐当前库规模（photos）——X/Y 恒同口径（含 SP 持久化，见对齐块）。
     state = SearchIndexState(
       running: state.running,
-      processed: state.processed,
-      total: state.total,
+      processed: photos.length,
+      total: photos.length,
       metaCount: _metas.length,
       ranOnce: state.ranOnce,
     );
