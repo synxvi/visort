@@ -2487,7 +2487,7 @@ class _QuickSortTipsDialog extends ConsumerWidget {
     // 模式段：图标 + 模式名（与顶部 segmented control 同图标），说明
     // 文字 muted 弱一档，与面板行的图标 16 + 间距 8 形制一致。
     Widget modeRow(IconData icon, String label, String desc) => Padding(
-          padding: const EdgeInsets.only(top: 12),
+          padding: const EdgeInsets.only(top: 16),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2509,33 +2509,43 @@ class _QuickSortTipsDialog extends ConsumerWidget {
             ],
           ),
         );
-    // 标准 Dialog 容器：自带屏幕居中 + 宽度约束（minWidth 280，上限
-    // 屏宽 − inset），是真正的居中小弹窗——裸 Material 会直接铺在
-    // Overlay 上不居中（用户实测铺满屏，已废弃）。
-    return Dialog(
-      backgroundColor: AppColors.surfaceElevated,
-      elevation: 3,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      // 两侧各 28 边距（Dialog 默认 40 在窄屏浪费宽度）。
-      insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+    // 居中弹窗自组合（Center + 外边距 + 定宽 + Material 卡片）：Dialog
+    // 组件的 minWidth 280 压不下去（弹窗要更窄），故不用它；但 Center /
+    // 两侧边距 / 宽度约束三件必须齐——缺一就是裸 Material 铺满屏（上
+    // 一版教训）。maxWidth 260 → 文字更早换行，弹窗窄而高（用户定稿
+    // 2026-09）。
+    return Center(
       child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(t(ref, 'quick_sort_tips_intro'), style: bodyStyle),
-            modeRow(
-              Icons.create_new_folder_outlined,
-              t(ref, 'mode_to_newdir'),
-              t(ref, 'quick_sort_tips_newdir'),
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 260),
+          child: Material(
+            color: AppColors.surfaceElevated,
+            elevation: 3,
+            borderRadius: BorderRadius.circular(12),
+            clipBehavior: Clip.antiAlias,
+            // 内容内边距整体加大（原 16 → 24，用户要求四周更空）。
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(t(ref, 'quick_sort_tips_intro'), style: bodyStyle),
+                  modeRow(
+                    Icons.create_new_folder_outlined,
+                    t(ref, 'mode_to_newdir'),
+                    t(ref, 'quick_sort_tips_newdir'),
+                  ),
+                  modeRow(
+                    Icons.swap_horiz,
+                    t(ref, 'mode_to_album'),
+                    t(ref, 'quick_sort_tips_album'),
+                  ),
+                ],
+              ),
             ),
-            modeRow(
-              Icons.swap_horiz,
-              t(ref, 'mode_to_album'),
-              t(ref, 'quick_sort_tips_album'),
-            ),
-          ],
+          ),
         ),
       ),
     );
