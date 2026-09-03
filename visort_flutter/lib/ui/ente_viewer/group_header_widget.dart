@@ -3,7 +3,6 @@
 // showGalleryLayoutSettingCTA/吸附头放大图标 fadeIn 保留（PinnedGroupHeader 常量内联）。
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
@@ -151,8 +150,9 @@ class _GroupHeaderWidgetState extends State<GroupHeaderWidget> {
 
   /// 切换该组全选：上抛回调由外层维护选择真源（回写 selectedFiles）；
   /// 未提供回调时回退 ente 原行为（仅 toggleGroupSelection 渲染层）。
+  /// 震动由外层真源（album_screen._toggleGroupSelection）触发——渲染层
+  /// 不自行震动，避免同一动作沿回调链双震。
   void _toggleGroup() {
-    HapticFeedback.selectionClick();
     final onGroupToggle = widget.onGroupToggle;
     if (onGroupToggle != null) {
       onGroupToggle(widget.filesInGroup);

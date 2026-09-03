@@ -15,6 +15,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:visort_flutter/core/config/models.dart';
@@ -882,7 +883,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                             setState(() => _targetExpanded = !_targetExpanded),
                         child: _buildBucketList(
                           selectedIds: _targetBucketIds,
-                          onToggle: (id) => setState(() {
+                          onToggle: (id) {
                             if (_targetBucketIds.contains(id)) {
                               // 取消勾选 = 移除目标相册：有未完成决策的会话
                               // 在引用目标快照，同子目录移除一样拦截。
@@ -890,11 +891,15 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                                 toast(context, t(ref, 'pending_session_guard'));
                                 return;
                               }
-                              _targetBucketIds.remove(id);
-                            } else {
-                              _targetBucketIds.add(id);
                             }
-                          }),
+                            // 勾选变化真发生才震（guard 拦截不震）。
+                            HapticFeedback.selectionClick();
+                            setState(() {
+                              _targetBucketIds.contains(id)
+                                  ? _targetBucketIds.remove(id)
+                                  : _targetBucketIds.add(id);
+                            });
+                          },
                         ),
                       ),
                     ],
@@ -979,11 +984,14 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             onToggle: () => setState(() => _sourceExpanded = !_sourceExpanded),
             child: _buildBucketList(
               selectedIds: _sourceBucketIds,
-              onToggle: (id) => setState(() {
-                _sourceBucketIds.contains(id)
-                    ? _sourceBucketIds.remove(id)
-                    : _sourceBucketIds.add(id);
-              }),
+              onToggle: (id) {
+                HapticFeedback.selectionClick();
+                setState(() {
+                  _sourceBucketIds.contains(id)
+                      ? _sourceBucketIds.remove(id)
+                      : _sourceBucketIds.add(id);
+                });
+              },
             ),
           ),
           // 目标区随模式交叉切换：

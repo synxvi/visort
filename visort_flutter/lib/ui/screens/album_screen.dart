@@ -15,6 +15,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/fs/cache_perf.dart';
@@ -131,7 +132,12 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// 视图模式：false=沉浸网格(默认)；true=日期分组视图。
   bool _timelineView = false;
 
+  // 勾选震动统一在真源层触发（视图无关）：长按进勾选态用 mediumImpact
+  // （重一下，与 Google Photos 长按进多选手感一致），勾/取消用轻量
+  // selectionClick。渲染层（GroupHeaderWidget 等）不再自行震动，避免双震。
+
   void _enterSelectMode(String id) {
+    HapticFeedback.mediumImpact();
     setState(() {
       _selectMode = true;
       _selectedIds.add(id);
@@ -150,6 +156,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   }
 
   void _toggleSelect(String id) {
+    HapticFeedback.selectionClick();
     setState(() {
       if (!_selectedIds.remove(id)) _selectedIds.add(id);
       _syncSelection();
@@ -160,6 +167,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// 走 _selectedIds 真源再回写 _selection——修复原 ente 行为只改
   /// SelectedFiles 导致批量栏按钮不启用/操作作用于空集的问题。
   void _toggleGroupSelection(List<MsImageInfo> files) {
+    HapticFeedback.selectionClick();
     setState(() {
       final ids = files.map((f) => f.id).toSet();
       if (ids.every(_selectedIds.contains)) {
@@ -174,6 +182,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// 组头长按（非选择模式）：进入选择模式并全选该组（aves 交互，
   /// 一步到位的批量整理入口——「删掉这一天」两次交互完成）。
   void _longPressGroupToSelect(List<MsImageInfo> files) {
+    HapticFeedback.mediumImpact();
     setState(() {
       _selectMode = true;
       _selectedIds.addAll(files.map((f) => f.id));
@@ -485,20 +494,24 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                     // toggle：当前已全选（已加载页全部在选）→ 清空；否则全选。
                     // 判定与全选同用 photos（已加载页），语义自洽；未加载页
                     // 不参与，与全选动作的范围一致。
-                    onPressed: () => setState(() {
-                      final photos = ref.read(galleryControllerProvider).photos;
-                      final allSelected = photos.isNotEmpty &&
-                          photos.every((p) => _selectedIds.contains(p.id));
-                      if (allSelected) {
-                        _selectedIds.clear();
-                      } else {
-                        _selectedIds.addAll(photos.map((p) => p.id));
-                      }
-                      // 真源改了必须同步 Gallery 勾选渲染（单击/组头全选
-                      // 都走 _syncSelection，此处曾漏调 → 数量变而小勾
-                      // 不应用，回收站勾选全部实证）。
-                      _syncSelection();
-                    }),
+                    onPressed: () {
+                      HapticFeedback.selectionClick();
+                      setState(() {
+                        final photos =
+                            ref.read(galleryControllerProvider).photos;
+                        final allSelected = photos.isNotEmpty &&
+                            photos.every((p) => _selectedIds.contains(p.id));
+                        if (allSelected) {
+                          _selectedIds.clear();
+                        } else {
+                          _selectedIds.addAll(photos.map((p) => p.id));
+                        }
+                        // 真源改了必须同步 Gallery 勾选渲染（单击/组头全选
+                        // 都走 _syncSelection，此处曾漏调 → 数量变而小勾
+                        // 不应用，回收站勾选全部实证）。
+                        _syncSelection();
+                      });
+                    },
                   ),
                   // 勾选态右上：普通相册/收藏视图换 ⋮ 选项菜单（首页 ⋮ 同款），
                   // 复制到相册/移至相册/重命名入口；系统返回手势已可退出勾选态，
