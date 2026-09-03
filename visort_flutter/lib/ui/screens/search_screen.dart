@@ -774,6 +774,23 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
     // 恒展开区（quick 类型行）：无折叠箭头、不参与手风琴（[用户定稿]
     // 「第一行保持展开状态，把折叠按钮去掉」）。
     final expanded = alwaysExpanded || _expandedSection == sectionKey;
+    // 折叠/展开切换：标题整行与右侧箭头共用（2026-09 用户要求：点击
+    // 标题名也可折叠/展开，等效箭头按钮）。
+    void toggleSection() {
+      _searchFocus.unfocus(); // 展开/收起也收起输入法（用户定稿）
+      setState(() {
+        if (expanded) {
+          _expandedSection = null;
+        } else {
+          // 单值：开新区旧区自动收起（[aves 对齐] 手风琴）；
+          // 「更多」态全部重置（收起旧区的残留 showAll 会让
+          // 其重展开时仍处全显态，与注释语义不符，子代理 P3）。
+          _expandedSection = sectionKey;
+          _showAllSections.clear();
+        }
+      });
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -786,17 +803,22 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
             padding: const EdgeInsets.fromLTRB(16, 14, 6, 4),
             child: Row(
               children: [
+                // 标题整行可点折叠/展开（等效右侧箭头）。
                 if (title != null)
                   Expanded(
-                    child: Text(
-                      title,
-                      style: const TextStyle(
-                        fontFamily: 'Space Mono',
-                        height: 1.2,
-                        fontFamilyFallback: AppFonts.cjkFallback,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14,
-                        color: AppColors.text,
+                    child: GestureDetector(
+                      onTap: toggleSection,
+                      behavior: HitTestBehavior.opaque,
+                      child: Text(
+                        title,
+                        style: const TextStyle(
+                          fontFamily: 'Space Mono',
+                          height: 1.2,
+                          fontFamilyFallback: AppFonts.cjkFallback,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                          color: AppColors.text,
+                        ),
                       ),
                     ),
                   ),
@@ -805,20 +827,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen>
                 // 过渡 200ms easeOutCubic（同 home 折叠箭头形制）。
                 // 按钮内 padding 10 + header 右 6 → 图形右缘 16。
                 GestureDetector(
-                  onTap: () {
-                    _searchFocus.unfocus(); // 展开/收起也收起输入法（用户定稿）
-                    setState(() {
-                      if (expanded) {
-                        _expandedSection = null;
-                      } else {
-                        // 单值：开新区旧区自动收起（[aves 对齐] 手风琴）；
-                        // 「更多」态全部重置（收起旧区的残留 showAll 会让
-                        // 其重展开时仍处全显态，与注释语义不符，子代理 P3）。
-                        _expandedSection = sectionKey;
-                        _showAllSections.clear();
-                      }
-                    });
-                  },
+                  onTap: toggleSection,
                   behavior: HitTestBehavior.opaque,
                   child: Padding(
                     padding:
