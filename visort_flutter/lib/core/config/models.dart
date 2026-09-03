@@ -16,11 +16,15 @@ import 'package:flutter/foundation.dart';
 /// dateModified→DATE_MODIFIED。拍摄时间(DATE_TAKEN)已移除。
 /// dateTrashed→DATE_EXPIRES：仅回收站视图有意义（移入回收站时系统写入的过期时间，
 /// 即「删除日期 + 30 天」）；其他视图由 [GalleryState.effectivePhotoSortBy] 回退到 dateCreated。
+/// dateFavorited：非 MediaStore 列（系统无收藏时间戳）——收藏时刻由 app 本地
+/// 记录（见 gallery_controller 收藏时间 SP），排序在 Dart 内存完成（全量拉取），
+/// 仅收藏视图提供；SQL 查询回退 dateCreated。
 enum SortBy {
   name,
   dateCreated,
   dateModified,
   dateTrashed,
+  dateFavorited,
 }
 
 /// 分类模式（安卓端 Home 选择）。
@@ -246,6 +250,12 @@ class AppConfig {
     this.albumSortAsc = true,
     this.photoSortBy = SortBy.dateCreated,
     this.photoSortAsc = false,
+    // 收藏/回收站视图独立排序偏好（2026-09 用户定稿）：收藏默认按收藏
+    // 日期降序、回收站默认按删除日期降序；与相册内（photoSortBy）互不影响。
+    this.favSortBy = SortBy.dateFavorited,
+    this.favSortAsc = false,
+    this.trashSortBy = SortBy.dateTrashed,
+    this.trashSortAsc = false,
     this.photoTimelineView = false,
     this.homeLayout = HomeLayout.grid,
     this.homeGridColumns = 3,
@@ -253,10 +263,10 @@ class AppConfig {
     this.favoritesGridColumns = 4,
     this.trashGridColumns = 4,
     this.precacheEnabled = true,
-    this.precacheQuotaMb = 1024,
-    this.mlIndexEnabled = false,
+    this.precacheQuotaMb = 512,
+    this.mlIndexEnabled = true,
     this.mlFaceEnabled = false,
-    this.drawerAnimSpeed = DrawerAnimSpeed.fast,
+    this.drawerAnimSpeed = DrawerAnimSpeed.comfortable,
     this.defaultHomePage = DefaultHomePage.gallery,
     this.galleryLayout = HomeLayout.grid,
     this.galleryGridColumns = 3,
@@ -285,6 +295,16 @@ class AppConfig {
   final SortBy photoSortBy;
   final bool photoSortAsc;
 
+  /// 收藏视图排序偏好（独立于相册内）。dateFavorited 为本地记录的收藏
+  /// 时间（MediaStore 无此列），仅收藏视图提供；默认收藏日期降序。
+  final SortBy favSortBy;
+  final bool favSortAsc;
+
+  /// 回收站视图排序偏好（独立于相册内）。dateTrashed = DATE_EXPIRES
+  /// （删除日期）；默认删除日期降序。
+  final SortBy trashSortBy;
+  final bool trashSortAsc;
+
   /// 相册内视图模式：false=沉浸网格(默认)；true=日期分组视图。
   final bool photoTimelineView;
 
@@ -308,7 +328,7 @@ class AppConfig {
   /// screenNail（full 档盘缓存），加快浏览。关闭时由设置页清空全量缓存。
   final bool precacheEnabled;
 
-  /// 空闲预缓存磁盘配额（MB）。档位见设置页（256MB~2GB），默认 1GB。
+  /// 空闲预缓存磁盘配额（MB）。档位见设置页（256MB~2GB），默认 512MB。
   final int precacheQuotaMb;
 
   // ── 智能识别（搜索索引，设置页「智能识别」区开关）──
@@ -324,7 +344,8 @@ class AppConfig {
   /// 人物识别开关：预留（需要人脸检测模型，当前版本未内置）。
   final bool mlFaceEnabled;
 
-  /// 抽屉开合动画档位（舒适/快速），默认快速（Material 黄金值）。
+  /// 抽屉开合动画档位（舒适/快速），默认舒适（2026-09 用户定稿；
+  /// 原 Material 黄金值快速）。
   final DrawerAnimSpeed drawerAnimSpeed;
 
   /// 默认首页：启动进入的一级页 + 其它一级页返回键的终点。
@@ -363,6 +384,10 @@ class AppConfig {
     bool? albumSortAsc,
     SortBy? photoSortBy,
     bool? photoSortAsc,
+    SortBy? favSortBy,
+    bool? favSortAsc,
+    SortBy? trashSortBy,
+    bool? trashSortAsc,
     bool? photoTimelineView,
     HomeLayout? homeLayout,
     int? homeGridColumns,
@@ -388,6 +413,10 @@ class AppConfig {
         albumSortAsc: albumSortAsc ?? this.albumSortAsc,
         photoSortBy: photoSortBy ?? this.photoSortBy,
         photoSortAsc: photoSortAsc ?? this.photoSortAsc,
+        favSortBy: favSortBy ?? this.favSortBy,
+        favSortAsc: favSortAsc ?? this.favSortAsc,
+        trashSortBy: trashSortBy ?? this.trashSortBy,
+        trashSortAsc: trashSortAsc ?? this.trashSortAsc,
         photoTimelineView: photoTimelineView ?? this.photoTimelineView,
         homeLayout: homeLayout ?? this.homeLayout,
         homeGridColumns: homeGridColumns ?? this.homeGridColumns,
@@ -414,6 +443,10 @@ class AppConfig {
         'album_sort_asc': albumSortAsc,
         'photo_sort_by': photoSortBy.name,
         'photo_sort_asc': photoSortAsc,
+        'fav_sort_by': favSortBy.name,
+        'fav_sort_asc': favSortAsc,
+        'trash_sort_by': trashSortBy.name,
+        'trash_sort_asc': trashSortAsc,
         'photo_timeline_view': photoTimelineView,
         'home_layout': homeLayout.name,
         'home_grid_columns': homeGridColumns,
@@ -482,6 +515,11 @@ class AppConfig {
           SortBy.dateCreated),
       photoSortAsc:
           _jsonBool(json['photo_sort_asc'], json['photoSortAsc'], false),
+      // 缺 key（升级用户旧 JSON 不含）→ 与构造默认一致的视图专属默认。
+      favSortBy: _parseSortBy(json['fav_sort_by'], SortBy.dateFavorited),
+      favSortAsc: _jsonBool(json['fav_sort_asc'], null, false),
+      trashSortBy: _parseSortBy(json['trash_sort_by'], SortBy.dateTrashed),
+      trashSortAsc: _jsonBool(json['trash_sort_asc'], null, false),
       photoTimelineView: _jsonBool(json['photo_timeline_view'], null, false),
       homeLayout: _parseHomeLayout(
           json['home_layout'] ?? json['homeLayout'], HomeLayout.grid),
@@ -492,11 +530,11 @@ class AppConfig {
       favoritesGridColumns: _jsonInt(json['favorites_grid_columns'], null, 4),
       trashGridColumns: _jsonInt(json['trash_grid_columns'], null, 4),
       precacheEnabled: _jsonBool(json['precache_enabled'], null, true),
-      precacheQuotaMb: _jsonInt(json['precache_quota_mb'], null, 1024),
-      mlIndexEnabled: _jsonBool(json['ml_index_enabled'], null, false),
+      precacheQuotaMb: _jsonInt(json['precache_quota_mb'], null, 512),
+      mlIndexEnabled: _jsonBool(json['ml_index_enabled'], null, true),
       mlFaceEnabled: _jsonBool(json['ml_face_enabled'], null, false),
       drawerAnimSpeed: _parseDrawerAnimSpeed(
-          json['drawer_anim_speed'], DrawerAnimSpeed.fast),
+          json['drawer_anim_speed'], DrawerAnimSpeed.comfortable),
       defaultHomePage: _parseDefaultHomePage(
           json['default_home_page'], DefaultHomePage.gallery),
       galleryLayout: _parseHomeLayout(
@@ -573,6 +611,8 @@ SortBy _parseSortBy(Object? value, SortBy fallback) {
         return SortBy.dateModified;
       case 'dateTrashed':
         return SortBy.dateTrashed;
+      case 'dateFavorited':
+        return SortBy.dateFavorited;
       // ── 旧版本枚举值迁移（v1：dateTaken/dateAdded → dateCreated）──
       // dateAdded 与 dateCreated 数据一致(均为 DATE_ADDED)；dateTaken(拍摄)无对应，
       // 归入 dateCreated 以保留「按时间排序」的偏好。

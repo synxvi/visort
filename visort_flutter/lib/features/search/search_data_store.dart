@@ -378,6 +378,7 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
           break;
         case SortBy.dateCreated:
         case SortBy.dateTrashed:
+        case SortBy.dateFavorited:
           cmp = (ba?.dateCreatedMs ?? 0).compareTo(bb?.dateCreatedMs ?? 0);
           break;
         case SortBy.dateModified:

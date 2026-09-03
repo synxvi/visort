@@ -536,11 +536,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                     sortBy: _timelineView
                         ? SortBy.dateCreated
                         : gallery.effectivePhotoSortBy,
-                    asc: gallery.photoSortAsc,
+                    asc: gallery.effectivePhotoSortAsc,
                     // 日期视图的排序段单行化由面板按当前视图动态推导
                     // （收藏/回收站不传 timelineView，天然恒全维度）。
-                    // 回收站视图额外提供「按删除日期」
+                    // 回收站视图额外提供「按删除日期」；收藏视图额外提供
+                    // 「按收藏日期」（视图独立排序偏好，2026-09 用户定稿）。
                     showDateTrashed: widget.trashedOnly,
+                    showDateFavorited: widget.favoritesOnly,
                     onSortChanged: (by, asc) => ref
                         .read(galleryControllerProvider.notifier)
                         .setPhotoSort(by, asc),

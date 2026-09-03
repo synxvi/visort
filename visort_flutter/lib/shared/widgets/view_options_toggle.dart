@@ -45,6 +45,7 @@ class ViewOptionsToggle extends ConsumerStatefulWidget {
     required this.asc,
     required this.onSortChanged,
     this.showDateTrashed = false,
+    this.showDateFavorited = false,
   });
 
   /// 当前是否日期分组视图；null = 页面无视图切换（收藏/回收站）。
@@ -75,6 +76,10 @@ class ViewOptionsToggle extends ConsumerStatefulWidget {
 
   /// 回收站视图：排序段显示「按删除日期」(dateTrashed) 维度选项。
   final bool showDateTrashed;
+
+  /// 收藏视图：排序段显示「按收藏日期」(dateFavorited) 维度选项
+  /// （本地记录的收藏时刻，Dart 内存排序）。
+  final bool showDateFavorited;
 
   @override
   ConsumerState<ViewOptionsToggle> createState() => _ViewOptionsToggleState();
@@ -147,6 +152,7 @@ class _ViewOptionsToggleState extends ConsumerState<ViewOptionsToggle>
         asc: widget.asc,
         onSortChanged: widget.onSortChanged,
         showDateTrashed: widget.showDateTrashed,
+        showDateFavorited: widget.showDateFavorited,
       ),
     );
     if (mounted) _morph.reverse();
@@ -192,6 +198,8 @@ class _ViewOptionsToggleState extends ConsumerState<ViewOptionsToggle>
       rowWidth(t(ref, 'sort_by_date_created'), 8 + 14),
       rowWidth(t(ref, 'sort_by_date_modified'), 8 + 14),
       if (widget.showDateTrashed) rowWidth(t(ref, 'sort_by_date_trashed'), 8 + 14),
+      if (widget.showDateFavorited)
+        rowWidth(t(ref, 'sort_by_date_favorited'), 8 + 14),
     ];
     // 尾部 +2：测量余量。
     return candidates.reduce((a, b) => a > b ? a : b) + 2;
@@ -304,6 +312,7 @@ class _ViewOptionsPanel extends ConsumerStatefulWidget {
     required this.asc,
     required this.onSortChanged,
     required this.showDateTrashed,
+    required this.showDateFavorited,
   });
 
   final bool? initialTimelineView;
@@ -318,6 +327,7 @@ class _ViewOptionsPanel extends ConsumerStatefulWidget {
   final bool asc;
   final void Function(SortBy sortBy, bool asc) onSortChanged;
   final bool showDateTrashed;
+  final bool showDateFavorited;
 
   @override
   ConsumerState<_ViewOptionsPanel> createState() => _ViewOptionsPanelState();
@@ -466,6 +476,10 @@ class _ViewOptionsPanelState extends ConsumerState<_ViewOptionsPanel> {
             if (widget.showDateTrashed)
               _sortRow(SortBy.dateTrashed, Icons.delete_outline,
                   'sort_by_date_trashed'),
+            // 收藏视图额外提供「按收藏日期」（本地记录的收藏时刻）
+            if (widget.showDateFavorited)
+              _sortRow(SortBy.dateFavorited, Icons.favorite_border,
+                  'sort_by_date_favorited'),
           ] else
             // 日期视图：维度固定按创建日期，点行只换方向
             _sortRow(
