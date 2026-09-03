@@ -684,12 +684,29 @@ class GalleryController extends Notifier<GalleryState> {
       var images = page.images;
       // 收藏日期排序（dateFavorited）：非 MediaStore 列——SQL 拉取后按本地
       // 记录的收藏时间（[_loadFavTimes]）内存重排。本 app 收藏集一次全量
-      // 拉取（_pageSize 覆盖全库），重排无分页破坏。无记录的收藏（升级前
-      // 的老收藏/外部 app 收藏）时间戳为 0——降序垫底（升序排头），重收藏
-      // 一次即获得真实时间。
+      // 拉取（_pageSize 覆盖全库），重排无分页破坏。
       if (state.favSortBy == SortBy.dateFavorited) {
-        final favTimes = await _loadFavTimes();
+        var favTimes = await _loadFavTimes();
         if (token != _loadToken) return;
+        // 老收藏补记（自愈）：升级前收藏的图无历史时间戳（MediaStore 不
+        // 记录收藏时刻，本地记录自本版本起）——补记一个比已有记录更早的
+        // 时刻（无已记录项用当前时刻）：垫底于一切已记录收藏，且补记后
+        // 持久化，后续零成本。老收藏之间同刻并列（保持 SQL 序，历史无法
+        // 复原）；重收藏一次即获得真实时间。
+        final missing = images
+            .map((p) => p.id)
+            .where((id) => !favTimes.containsKey(id))
+            .toList();
+        if (missing.isNotEmpty) {
+          final base = favTimes.values.isEmpty
+              ? DateTime.now().millisecondsSinceEpoch
+              : favTimes.values.reduce((a, b) => a < b ? a : b) - 1;
+          for (final id in missing) {
+            favTimes[id] = base;
+          }
+          final toSave = favTimes;
+          unawaited(_saveFavTimes(toSave));
+        }
         final asc = state.favSortAsc;
         images = [...images]..sort((a, b) {
             final cmp =
@@ -1169,10 +1186,11 @@ class GalleryController extends Notifier<GalleryState> {
   Future<Map<String, int>> _loadFavTimes() async {
     // 全路径容错（含测试环境无 SP 插件）：任何失败返回空 map——收藏页
     // 排序退化为「无记录项同档」（保持 SQL 序），不炸 load_failed。
+    // 返回可变 map（补记路径原地写入）。
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_kFavTimesKey);
-      if (raw == null || raw.isEmpty) return const {};
+      if (raw == null || raw.isEmpty) return {};
       final decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic>) {
         return {
@@ -1180,12 +1198,21 @@ class GalleryController extends Notifier<GalleryState> {
         };
       }
     } catch (_) {}
-    return const {};
+    return {};
+  }
+
+  /// 收藏时间落盘。失败静默（debugPrint）——时间记录不阻断收藏主流程。
+  Future<void> _saveFavTimes(Map<String, int> map) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kFavTimesKey, jsonEncode(map));
+    } catch (e) {
+      debugPrint('[GAL] save favTimes failed: $e');
+    }
   }
 
   Future<void> _recordFavTimes(Set<String> ids, bool favorite) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
       final map = await _loadFavTimes();
       if (favorite) {
         final now = DateTime.now().millisecondsSinceEpoch;
@@ -1197,7 +1224,7 @@ class GalleryController extends Notifier<GalleryState> {
           map.remove(id);
         }
       }
-      await prefs.setString(_kFavTimesKey, jsonEncode(map));
+      await _saveFavTimes(map);
     } catch (e) {
       // 时间记录失败不阻断收藏主流程（排序退化为无记录项同档）。
       debugPrint('[GAL] record favTimes failed: $e');
