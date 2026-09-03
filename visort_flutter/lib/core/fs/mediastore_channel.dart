@@ -163,21 +163,8 @@ class MsImageInfo {
         'isHdr': isHdr,
       };
 
-  factory MsImageInfo.fromJson(Map<String, dynamic> j) => MsImageInfo(
-        id: j['id'] as String,
-        name: j['name'] as String,
-        size: j['size'] as int,
-        mime: j['mime'] as String,
-        bucketId: j['bucketId'] as String,
-        dateAddedMs: j['dateAddedMs'] as int,
-        dateModifiedMs: j['dateModifiedMs'] as int? ?? j['dateAddedMs'] as int,
-        isFavorite: j['isFavorite'] as bool? ?? false,
-        isTrashed: j['isTrashed'] as bool? ?? false,
-        dateTrashedMs: j['dateTrashedMs'] as int? ?? 0,
-        width: j['width'] as int? ?? 0,
-        height: j['height'] as int? ?? 0,
-        isHdr: j['isHdr'] as bool? ?? false,
-      );
+  // fromJson 已删（审查 F22 死代码）：Kotlin 侧经扁平数组重组构造
+  //（_MsImageInfoList），Map JSON 反序列化路径从未存在调用方。
 
   /// 全字段 copyWith。此前只有 {isHdr, name}，调用方为改一个字段手写
   /// 13 字段构造——三处手写拷贝全都漏了 isHdr（收藏/取消后 HDR 徽标被
@@ -359,7 +346,7 @@ class MediaStoreChannel {
         {'sortBy': sortBy.name, 'asc': asc},
       );
       if (raw == null) return const [];
-      return raw.cast<Map>().map(_toBucket).toList(growable: false);
+      return raw.cast<Map<dynamic, dynamic>>().map(_toBucket).toList(growable: false);
     } on PlatformException catch (e) {
       throw _convertError(e);
     }
@@ -458,7 +445,7 @@ class MediaStoreChannel {
   /// 读取单图元信息
   Future<MsMetaInfo> readMeta(String id) async {
     try {
-      final raw = await _channel.invokeMethod<Map>('readMeta', {'id': id});
+      final raw = await _channel.invokeMethod<Map<dynamic, dynamic>>('readMeta', {'id': id});
       // 裸 Exception 换 MsException（审查 F12）：调用方 on MsException 接不住
       if (raw == null) {
         throw const MsException(MsErrorCode.unknown, 'readMeta 返回 null');
@@ -481,7 +468,7 @@ class MediaStoreChannel {
   Future<Map<String, MsSearchMeta>> indexSearchMeta(List<String> ids) async {
     try {
       final raw =
-          await _channel.invokeMethod<Map>('indexSearchMeta', {'ids': ids});
+          await _channel.invokeMethod<Map<dynamic, dynamic>>('indexSearchMeta', {'ids': ids});
       if (raw == null) return const {};
       return raw.map((id, v) {
         final m = (v as Map).cast<String, dynamic>();
@@ -511,7 +498,7 @@ class MediaStoreChannel {
       geocodePlaces(List<List<double>> coords) async {
     try {
       final raw = await _channel
-          .invokeMethod<List>('geocodePlaces', {'coords': coords});
+          .invokeMethod<List<dynamic>>('geocodePlaces', {'coords': coords});
       if (raw == null) return const [];
       return raw.map((e) {
         final m = (e as Map?)?.cast<String, dynamic>() ?? const {};
@@ -531,7 +518,7 @@ class MediaStoreChannel {
   /// 失败或无元数据返回空 Map（不抛错，调用方据此决定是否渲染 EXIF 区）。
   Future<Map<String, Map<String, String>>> getMetadata(String id) async {
     try {
-      final raw = await _channel.invokeMethod<Map>('getMetadata', {'id': id});
+      final raw = await _channel.invokeMethod<Map<dynamic, dynamic>>('getMetadata', {'id': id});
       if (raw == null) return const {};
       return raw.map((g, v) {
         final inner = (v as Map).map((k2, v2) =>
@@ -934,7 +921,7 @@ class MediaStoreChannel {
     }
   }
 
-  MsBucket _toBucket(Map m) => MsBucket(
+  MsBucket _toBucket(Map<dynamic, dynamic> m) => MsBucket(
         id: m['id'].toString(),
         name: m['name'] as String,
         count: (m['count'] as num).toInt(),

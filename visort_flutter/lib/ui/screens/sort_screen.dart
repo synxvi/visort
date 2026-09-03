@@ -13,6 +13,8 @@
 // 键盘处理不再按 Platform.isWindows 条件包裹——本文件只在桌面路由下实例化，
 // WindowsKeyboardHandler 本身平台无关。
 
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/fs/fs_provider.dart';
@@ -136,7 +138,7 @@ class _ImageAreaState extends ConsumerState<_ImageArea> {
       if (session.hasNext) {
         final next = session.images[session.currentIndex + 1];
         if (mounted) {
-          precacheNextImage(context, next, targetWidth: sortTargetWidth(context));
+          unawaited(precacheNextImage(context, next, targetWidth: sortTargetWidth(context)));
         }
       }
     } catch (_) {}

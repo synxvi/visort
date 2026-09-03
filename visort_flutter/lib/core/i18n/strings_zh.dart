@@ -125,6 +125,7 @@ const Map<String, String> stringsZh = {
   'too_many_targets': '目标数超过上限（最多 {0} 个）',
   'scan_failed': '扫描失败：无法读取所选目录（权限或网络存储问题）',
   'scan_busy': '正在扫描中，请稍候',
+  'show_more_rows': '显示更多（还有 {0} 行）',
   'load_failed': '加载失败，请重试',
   'open_settings': '去系统设置',
   'key_conflict_action': '撤销 / 删除 / 跳过三个快捷键存在冲突',
@@ -305,6 +306,8 @@ const Map<String, String> stringsZh = {
 
   // ───────── P1a · 回收站 ─────────
   'trash_title': '回收站',
+  'trash_clear_all': '清空回收站',
+  'trash_clear_all_confirm': '将永久删除回收站中的 {0} 张图片，此操作不可恢复。',
   'trash_empty': '回收站为空',
   'action_restore': '恢复',
   'trashed': '已移到回收站',

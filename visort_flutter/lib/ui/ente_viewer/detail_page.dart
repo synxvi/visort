@@ -130,6 +130,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
   late final ValueNotifier<int> _selectedIndexNotifier;
   late List<MsImageInfo> _files;
 
+  /// id→index 查表（审查 F19）：_trimDistantViewerCache 每次翻页对每个
+  /// 已看 id 线性扫 _files（O(N)×已看数）——千张长翻看 = 每页数十次
+  /// 全表扫。惰性建一次；_files 结构性变更（removeAt）时置 null 重建，
+  /// copyWith 原位替换 id 不变无需失效。
+  Map<String, int>? _indexById;
+  Map<String, int> get _idIndex =>
+      _indexById ??= {
+        for (var i = 0; i < _files.length; i++) _files[i].id: i,
+      };
+
   /// 缩略图条独立数据：删除时条**立即**删除+补位动画（白色框固定、
   /// 下一张滑入），主图在旧数据上滑动（PageView 需要"从被删项滑到
   /// 下一项"的旧列表）——300ms 后主图数据才删。两者同步动画的关键。
@@ -329,6 +339,15 @@ class _DetailPageState extends ConsumerState<DetailPage>
     if (status == AnimationStatus.dismissed) {
       _removeChromeEntry();
       _evictViewedViewerCache();
+      // 收藏视图取消收藏的延后移除在此应用（飞行已完成，cell 可安全消失，
+      // 见 gallery_controller._pendingFavRemovals）：postFrame 一拍让 Hero
+      // flight overlay 先完成清理，网格淡入补位。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ref
+            .read(galleryControllerProvider.notifier)
+            .applyPendingFavRemovals();
+      });
     }
   }
 
@@ -372,14 +391,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
   void _trimDistantViewerCache(int currentIndex) {
     final tw = _viewerTargetWidthPx;
     if (tw == null || _viewedFullIds.length <= 8) return;
-    final ids = _files;
+    final indexById = _idIndex; // F19：O(1) 查表替线性扫
     final distant = <String>[];
     for (final id in _viewedFullIds) {
-      var i = 0;
-      for (; i < ids.length; i++) {
-        if (ids[i].id == id) break;
-      }
-      if (i == ids.length || (i - currentIndex).abs() > 3) distant.add(id);
+      final i = indexById[id];
+      if (i == null || (i - currentIndex).abs() > 3) distant.add(id);
     }
     for (final id in distant) {
       evictViewerImageCache(id, tw);
@@ -641,7 +657,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
           allowImplicitScrolling: true,
           itemBuilder: (context, index) {
             final file = _files[index];
-            _preloadFiles(index);
             final fileContent = ZoomableImage(
               file,
               tagPrefix: 'photo',
@@ -760,10 +775,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
     );
   }
 
-  void _preloadFiles(int index) {
-    // 图片由 ImageCache + allowImplicitScrolling 预渲染处理，无需显式预加载
-    //（ente 有服务端预取；visort 本地 MediaStore 读取快，跳过）。
-  }
+  // （F22 删除空壳 _preloadFiles）邻页图片由 ImageCache +
+  // allowImplicitScrolling 预渲染处理，无需显式预加载（ente 有服务端
+  // 预取；visort 本地 MediaStore 读取快，跳过）。
 
   // ─────────────── 顶栏（主分支 _TopChromeBar 样式） ───────────────
 
@@ -1220,10 +1234,15 @@ class _DetailPageState extends ConsumerState<DetailPage>
   Future<void> _toggleFavoriteCurrent() async {
     final file = _selectedFile;
     if (file == null) return;
-    final err = await ref.read(galleryControllerProvider.notifier).setFavorites(
-      [file.id],
-      !file.isFavorite,
-    );
+    final err = await ref
+        .read(galleryControllerProvider.notifier)
+        .setFavorites(
+          [file.id],
+          !file.isFavorite,
+          // 收藏视图下取消收藏延后移除（controller 语义）：pop 飞行需要
+          // 网格 cell 存在，飞行完成后由 _onRouteAnimStatus 统一应用。
+          deferForFlight: true,
+        );
     if (!mounted) return;
     if (err != null) {
       toast(context, t(ref, 'favorite_failed'));
@@ -1648,7 +1667,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
               // 动画被中断（理论不可达：physics 已锁；防御未知 ROM/手势
               // 竞争）：数据照删（MediaStore 已物理删除，不删会残留幽灵
               // 项），同帧 jump 校正选中态，无动画终态收敛。
-              setState(() => _files.removeAt(index));
+              setState(() {
+                _files.removeAt(index);
+                _indexById = null; // F19：结构变更，查表重建
+              });
               final newIndex = min(index, _files.length - 1);
               _selectedIndexNotifier.value = newIndex;
               widget.onIndexChanged?.call(newIndex);
@@ -1657,7 +1679,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
               }
               return;
             }
-            setState(() => _files.removeAt(index));
+            setState(() {
+              _files.removeAt(index);
+              _indexById = null; // F19：结构变更，查表重建
+            });
             final newIndex = min(index, _files.length - 1);
             _selectedIndexNotifier.value = newIndex;
             widget.onIndexChanged?.call(newIndex);

@@ -574,10 +574,46 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                   child: _buildBody(gallery),
                 ),
         ),
-        // 批量选择模式：底部操作栏（按视图模式提供不同批量操作）
-        bottomNavigationBar: _selectMode ? _buildBatchBar(gallery) : null,
+        // 批量选择模式：底部操作栏（按视图模式提供不同批量操作）；
+        // 回收站非勾选态：常驻「清空回收站」底栏（无需进勾选即可清空）。
+        bottomNavigationBar: _selectMode
+            ? _buildBatchBar(gallery)
+            : (widget.trashedOnly &&
+                    gallery.firstPageLoaded &&
+                    gallery.photos.isNotEmpty
+                ? _TrashClearBar(
+                    count: gallery.photos.length,
+                    busy: _batchProcessing,
+                    clearLabel: t(ref, 'trash_clear_all'),
+                    onClear: _clearAllTrash,
+                  )
+                : null),
       ),
     );
+  }
+
+  /// 清空回收站（常驻底栏入口）：确认弹窗 → 批量彻底删除（requestDelete
+  /// 系统弹窗 + exists 复查，复用 deletePhotos 全防御链）。
+  Future<void> _clearAllTrash() async {
+    final photos = ref.read(galleryControllerProvider).photos;
+    if (photos.isEmpty) return;
+    final ids = photos.map((p) => p.id).toList();
+    final confirmed = await showConfirmSheet(
+      context,
+      title: t(ref, 'trash_clear_all'),
+      desc: t(ref, 'trash_clear_all_confirm', [ids.length]),
+      cancelText: t(ref, 'cancel'),
+      confirmText: t(ref, 'confirm'),
+      confirmColor: AppColors.danger,
+    ).confirmed;
+    if (confirmed != true || !mounted) return;
+    await _runBatchGuarded(() async {
+      final err = await ref
+          .read(galleryControllerProvider.notifier)
+          .deletePhotos(ids);
+      if (!mounted) return;
+      toast(context, err == null ? t(ref, 'deleted') : t(ref, 'delete_failed'));
+    });
   }
 
   Widget _buildBody(GalleryState gallery) {
@@ -1241,13 +1277,16 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       const spacing = GalleryGroups.spacing;
       var groupTop = 0.0; // 目标组的组头起始 offset（滚动到此时组头贴视口顶）
       var photosInGroup = 0;
+      // 整数分组键（审查 F18 同款）：相邻比较免每对构造 2 个 DateTime。
+      var prevKey = 0;
       for (var i = 0; i <= index && i < photos.length; i++) {
-        if (i > 0 &&
-            !GroupType.day.areFromSameGroup(photos[i - 1], photos[i])) {
+        final key = GroupType.day.groupKeyOf(photos[i]);
+        if (i > 0 && key != prevKey) {
           final rows = (photosInGroup + cols - 1) ~/ cols;
           groupTop += 32 + rows * cellH - spacing;
           photosInGroup = 0;
         }
+        prevKey = key;
         photosInGroup++;
       }
       // index 所在行：组头 + 组内前序行的偏移。
@@ -1316,7 +1355,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       buildImageProvider(imgRef, targetWidth: openTw),
       context,
     );
-    final route = PageRouteBuilder(
+    final route = PageRouteBuilder<void>(
       // [ente 移植] 完全复刻 ente routeToPage（navigation_util _buildPageRoute）：
       // Align + FadeTransition 200ms + opaque:false。无黑遮罩、无门控——
       // viewer（含 PageView 预渲染 ±1 页）随 fade 一起淡入 = 中间图淡入淡出、
@@ -1370,6 +1409,63 @@ class _ThumbGridPlaceholder extends StatelessWidget {
       ),
       itemCount: cols * 6,
       itemBuilder: (_, _) => const ColoredBox(color: AppColors.surface),
+    );
+  }
+}
+
+/// 回收站常驻「清空回收站」底栏（2026-09 用户需求）：无需进入勾选态
+/// 即可一键清空。样式对齐勾选批量底栏（surface 底 + 自垫 bottomInset，
+/// edge-to-edge 下背景延伸到物理底边，见 _buildBatchBar 同款注释）。
+class _TrashClearBar extends StatelessWidget {
+  const _TrashClearBar({
+    required this.count,
+    required this.busy,
+    required this.clearLabel,
+    required this.onClear,
+  });
+
+  final int count;
+
+  /// 清空进行中（_runBatchGuarded 的 _batchProcessing）。
+  final bool busy;
+  final String clearLabel;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: AppColors.surface,
+      padding: EdgeInsets.only(
+        top: 6,
+        bottom: 6 + MediaQuery.viewPaddingOf(context).bottom,
+      ),
+      child: Row(
+        children: [
+          const SizedBox(width: 16),
+          Icon(Icons.delete_outline, size: 16, color: AppColors.muted),
+          const SizedBox(width: 6),
+          Text(
+            '$count',
+            style: const TextStyle(
+              fontFamily: 'Space Mono',
+              fontFamilyFallback: AppFonts.cjkFallback,
+              fontSize: 13,
+              color: AppColors.muted,
+            ),
+          ),
+          const Spacer(),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.danger,
+              foregroundColor: AppColors.bg,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+            ),
+            onPressed: busy ? null : onClear,
+            child: Text(clearLabel),
+          ),
+          const SizedBox(width: 12),
+        ],
+      ),
     );
   }
 }

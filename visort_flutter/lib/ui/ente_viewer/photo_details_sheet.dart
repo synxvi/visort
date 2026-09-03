@@ -19,7 +19,7 @@ import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 
-import '../screens/album_common.dart';
+import 'package:visort_flutter/ui/screens/album_common.dart';
 
 class PhotoDetailsSheet extends ConsumerStatefulWidget {
   const PhotoDetailsSheet({

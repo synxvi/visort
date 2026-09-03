@@ -9,8 +9,8 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../config/models.dart';
-import '../config/profiles_service.dart';
+import 'package:visort_flutter/core/config/models.dart';
+import 'package:visort_flutter/core/config/profiles_service.dart';
 import 'strings_en.dart';
 import 'strings_zh.dart';
 

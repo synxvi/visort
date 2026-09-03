@@ -676,7 +676,7 @@ class _MlSectionState extends ConsumerState<_MlSection> {
     if (enable) {
       await _update(mlIndexEnabled: true);
       // 后台分批跑，不 await（设置页停留期间进度实时更新）。
-      notifier.start();
+      unawaited(notifier.start());
     } else {
       final confirmed = await showConfirmSheet(
         context,

@@ -297,15 +297,55 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-class _ChangesTable extends ConsumerWidget {
+/// 变更表格（审查 F15：渐进渲染）。原 SingleChildScrollView+Column 全量
+/// 构建全部行（每行 Tooltip+MiddleEllipsisText），万张整理一次 Run 后
+/// 本页一次性 inflate 上万行。现首屏 [_kFirstRows] 行 +「显示更多」按
+/// +500 渐进展开——行规格合成仍 O(n)（轻 tuple），重的 widget 构建只
+/// 发生在可见部分。
+class _ChangesTable extends ConsumerStatefulWidget {
   const _ChangesTable({required this.stats});
   final ReviewStats stats;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_ChangesTable> createState() => _ChangesTableState();
+}
+
+class _ChangesTableState extends ConsumerState<_ChangesTable> {
+  static const _kFirstRows = 200;
+  static const _kMoreRows = 500;
+  int _visible = _kFirstRows;
+
+  @override
+  Widget build(BuildContext context) {
+    final stats = widget.stats;
+    final ref = this.ref;
     // fileId(安卓=MediaStore _ID 数字)→ 真实文件名(含扩展名)label,显示用。
     final images = ref.watch(sessionControllerProvider).images;
     final labelOf = {for (final img in images) img.id: img.label};
+    // 行规格一次合成（badge 延迟到可见行才建）。
+    final rows = <({String file, BadgeType type, String label, String dest})>[
+      for (final e in stats.moveEntries)
+        (
+          file: labelOf[e.fileId] ?? e.fileId,
+          type: BadgeType.move,
+          label: t(ref, 'moved'),
+          dest: e.destPath,
+        ),
+      for (final f in stats.deleteEntries)
+        (
+          file: labelOf[f] ?? f,
+          type: BadgeType.delete,
+          label: t(ref, 'deleted'),
+          dest: '—',
+        ),
+      for (final f in stats.skipEntries)
+        (
+          file: labelOf[f] ?? f,
+          type: BadgeType.skip,
+          label: t(ref, 'skipped'),
+          dest: '—',
+        ),
+    ];
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
@@ -328,37 +368,28 @@ class _ChangesTable extends ConsumerWidget {
               ],
             ),
           ),
-          // 行
-          ...stats.moveEntries.map(
-            (e) => _Row(
-              file: labelOf[e.fileId] ?? e.fileId,
-              badge: DecisionBadge(
-                type: BadgeType.move,
-                label: t(ref, 'moved'),
-              ),
-              dest: e.destPath,
+          // 行（渐进：只 build 可见部分）
+          for (final r in rows.take(_visible))
+            _Row(
+              file: r.file,
+              badge: DecisionBadge(type: r.type, label: r.label),
+              dest: r.dest,
             ),
-          ),
-          ...stats.deleteEntries.map(
-            (f) => _Row(
-              file: labelOf[f] ?? f,
-              badge: DecisionBadge(
-                type: BadgeType.delete,
-                label: t(ref, 'deleted'),
+          if (rows.length > _visible)
+            TextButton(
+              onPressed: () =>
+                  setState(() => _visible += _kMoreRows),
+              child: Text(
+                t(ref, 'show_more_rows')
+                    .replaceFirst('{0}', '${rows.length - _visible}'),
+                style: const TextStyle(
+                  fontFamily: 'Space Mono',
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  fontSize: 12,
+                  color: AppColors.muted,
+                ),
               ),
-              dest: '—',
             ),
-          ),
-          ...stats.skipEntries.map(
-            (f) => _Row(
-              file: labelOf[f] ?? f,
-              badge: DecisionBadge(
-                type: BadgeType.skip,
-                label: t(ref, 'skipped'),
-              ),
-              dest: '—',
-            ),
-          ),
           if (stats.total == 0)
             Padding(
               padding: const EdgeInsets.all(24),

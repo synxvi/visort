@@ -9,6 +9,8 @@
 //   - Start 按钮 → 触发扫描 → 跳 Sort
 //   - 右侧目标文件夹预览
 
+import 'dart:async' show unawaited;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
@@ -193,7 +195,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       }
       final config = ref.read(configProvider);
       final profile = config.activeProfileData;
-      var templates = List<FolderTemplate>.from(profile.folders);
+      final templates = List<FolderTemplate>.from(profile.folders);
 
       // 替换模式：仅 1 个且 label 为 General/通用/default_label
       final isDefaultOnly = templates.length == 1 &&
@@ -475,7 +477,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ),
       ),
     );
-    if (selected != null) setLanguage(ref, selected);
+    if (selected != null) unawaited(setLanguage(ref, selected));
   }
 
   // ───────────── 左列：目录 + Profile + 编辑器 ─────────────

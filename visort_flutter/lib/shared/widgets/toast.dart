@@ -78,7 +78,7 @@ class _ToastViewState extends State<_ToastView>
                   borderRadius: BorderRadius.circular(6),
                   boxShadow: const [
                     BoxShadow(
-                      color: Color(0x66000000),
+                      color: AppColors.shadowScrim,
                       blurRadius: 12,
                       offset: Offset(0, 4),
                     ),

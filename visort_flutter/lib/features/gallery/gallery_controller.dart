@@ -261,7 +261,9 @@ class GalleryController extends Notifier<GalleryState> {
   /// 避免相册内网格因 loading 切换而闪烁。
   /// ⚠️ 无 loading 转圈：UI 层在 buckets 为空时显示占位（收藏/回收站入口行），
   /// 数据到达后列表直接填充，不闪不转。
-  Future<void> loadBuckets({bool silent = false}) async {
+  /// [silent] 死参数已删（审查 F22）：copyWith 只更新 buckets 字段、无
+  /// loading 态切换，天然静默——原「非首页静默」的意图本就由实现保证。
+  Future<void> loadBuckets() async {
     try {
       final buckets = await _channel.listBuckets(
         sortBy: state.effectivePhotoSortBy,
@@ -312,8 +314,8 @@ class GalleryController extends Notifier<GalleryState> {
       case GalleryView.albums:
         break;
     }
-    // 重查封面（首页用；非首页静默不闪）
-    await loadBuckets(silent: state.view != GalleryView.albums);
+    // 重查封面（copyWith 只动 buckets，本就静默不闪）
+    await loadBuckets();
   }
 
   /// 切换相册列表排序并持久化（仅影响列表顺序，不影响封面）
@@ -594,6 +596,8 @@ class GalleryController extends Notifier<GalleryState> {
   /// 进入「收藏」视图：扫描所有 IS_FAVORITE=1 的图（跨相册）。
   Future<void> enterFavorites({bool silent = false}) async {
     final token = ++_loadToken;
+    // 重查即全量对账：旧的待移除标记作废（照片集将整体替换）。
+    _pendingFavRemovals.clear();
     state = state.copyWith(
       view: GalleryView.favorites,
       clearBucketId: true,
@@ -894,6 +898,26 @@ class GalleryController extends Notifier<GalleryState> {
     }
   }
 
+  /// 批量 existsStatus（审查 F20）：原逐 id 串行 await，每个一次
+  /// method-channel 往返——千张级长阻塞无响应。此处按 [_kExistsBatch]
+  /// 一批 Future.wait 并发发起（Kotlin 侧仍按序执行查询，省的是串行
+  /// 等待的往返叠加），语义与逐个 await 一致。
+  static const _kExistsBatch = 64;
+  Future<Map<String, MsExistsStatus>> _existsStatusBatch(
+      List<String> ids) async {
+    final out = <String, MsExistsStatus>{};
+    for (var i = 0; i < ids.length; i += _kExistsBatch) {
+      final end = i + _kExistsBatch < ids.length ? i + _kExistsBatch : ids.length;
+      final chunk = ids.sublist(i, end);
+      final results = await Future.wait(
+          chunk.map((id) => _channel.existsStatus(id)));
+      for (var j = 0; j < chunk.length; j++) {
+        out[chunk[j]] = results[j];
+      }
+    }
+    return out;
+  }
+
   /// 批量从回收站恢复。成功后本地移除 + 清缓存 + 重查相册列表。
   ///
   /// RESULT_OK 只代表用户确认了弹窗，不代表系统 untrash 执行成功（真机
@@ -906,11 +930,11 @@ class GalleryController extends Notifier<GalleryState> {
       await _channel.requestRestore(ids);
       final restored = <String>[];
       final stuck = <String>[];
+      // found=已恢复；notFound/error 都保守留列表（error 不可当"未恢复"
+      // 证据删除，但也不可当"已恢复"移除）。
+      final statusById = await _existsStatusBatch(ids);
       for (final id in ids) {
-        // found=已恢复；notFound/error 都保守留列表（error 不可当"未恢复"
-        // 证据删除，但也不可当"已恢复"移除）。
-        final st = await _channel.existsStatus(id);
-        (st == MsExistsStatus.found ? restored : stuck).add(id);
+        (statusById[id] == MsExistsStatus.found ? restored : stuck).add(id);
       }
       if (restored.isEmpty) return 'restore_failed';
       _markSelfMutation();
@@ -938,10 +962,10 @@ class GalleryController extends Notifier<GalleryState> {
       await _channel.requestDelete(ids);
       final gone = <String>[];
       final stuck = <String>[];
+      // notFound=已删除；found/error 都保守留列表（error 不可当删除证据）。
+      final statusById = await _existsStatusBatch(ids);
       for (final id in ids) {
-        final st = await _channel.existsStatus(id);
-        // notFound=已删除；found/error 都保守留列表（error 不可当删除证据）。
-        if (st == MsExistsStatus.notFound) {
+        if (statusById[id] == MsExistsStatus.notFound) {
           gone.add(id);
         } else {
           stuck.add(id);
@@ -968,10 +992,46 @@ class GalleryController extends Notifier<GalleryState> {
     }
   }
 
+  /// 收藏视图待移除集合（2026-09 用户需求：取消收藏后收藏页实时收敛）。
+  /// 单张大图取消收藏时 photos 不立即移除——Hero pop 飞行需要 cell 存在
+  /// （终点失配 = 飞行中断），先记名，DetailPage pop 动画完成后
+  /// [applyPendingFavRemovals] 统一应用。批量多选取消（无飞行）不走此
+  /// 机制，直接移除。
+  final Set<String> _pendingFavRemovals = {};
+
+  /// 应用待移除（DetailPage pop 飞行完成后调用）：只移除确认取消且
+  /// 未被重新收藏的项；期间重新按红心的跳过（保留在列表）。
+  void applyPendingFavRemovals() {
+    if (_pendingFavRemovals.isEmpty ||
+        state.view != GalleryView.favorites) {
+      _pendingFavRemovals.clear();
+      return;
+    }
+    final drop = <String>{};
+    for (final id in _pendingFavRemovals) {
+      for (final p in state.photos) {
+        if (p.id == id) {
+          if (!p.isFavorite) drop.add(id);
+          break;
+        }
+      }
+    }
+    _pendingFavRemovals.clear();
+    if (drop.isEmpty) return;
+    state = state.copyWith(
+      photos: state.photos.where((p) => !drop.contains(p.id)).toList(),
+    );
+  }
+
   /// 批量设置收藏状态（乐观更新，失败回滚）。回滚按原值快照恢复——
   /// 混合选中集（部分已收藏）下旧「!favorite 取反」会把原本已收藏的
   /// 项翻成未收藏（与磁盘脱节直到下次重扫）；UI 允许混合集触发本操作。
-  Future<String?> setFavorites(List<String> ids, bool favorite) async {
+  ///
+  /// [deferForFlight]（大图单张路径）：收藏视图下取消收藏不立即从
+  /// photos 移除——pop 飞行需要 cell，移除后经 applyPendingFavRemovals
+  /// 统一应用（见 [_pendingFavRemovals]）。批量路径不传，立即移除。
+  Future<String?> setFavorites(List<String> ids, bool favorite,
+      {bool deferForFlight = false}) async {
     if (ids.isEmpty) return null;
     final idSet = ids.toSet();
     final originFavById = {
@@ -988,8 +1048,22 @@ class GalleryController extends Notifier<GalleryState> {
       final ok = await _channel.requestFavorite(ids, favorite);
       if (!ok) throw StateError('favorite_not_confirmed');
       _markSelfMutation();
+      // 收藏视图取消收藏 → 实时收敛（此前 photos 不动，收藏页返回后
+      // 列表不更新，2026-09 用户反馈）。
+      if (!favorite && state.view == GalleryView.favorites) {
+        if (deferForFlight) {
+          _pendingFavRemovals.addAll(idSet);
+        } else {
+          state = state.copyWith(
+            photos: state.photos
+                .where((p) => !idSet.contains(p.id))
+                .toList(),
+          );
+        }
+      }
       return null;
     } catch (e) {
+      _pendingFavRemovals.removeAll(idSet); // 回滚：不再待移除
       state = state.copyWith(
         photos: state.photos
             .map((p) => idSet.contains(p.id)
@@ -1148,7 +1222,7 @@ class GalleryController extends Notifier<GalleryState> {
     _bucketsDebounce?.cancel();
     _bucketsDebounce = Timer(const Duration(milliseconds: 400), () {
       _bucketsDirty = false;
-      loadBuckets(silent: true);
+      loadBuckets();
     });
   }
 
@@ -1215,7 +1289,7 @@ class GalleryController extends Notifier<GalleryState> {
               final id = state.bucketId;
               if (id != null) enterBucket(id, silent: true);
             case GalleryView.albums:
-              loadBuckets(silent: true);
+              loadBuckets();
           }
         });
         break;
@@ -1250,7 +1324,7 @@ class GalleryController extends Notifier<GalleryState> {
             final id = state.bucketId;
             if (id != null) enterBucket(id, silent: true);
           case GalleryView.albums:
-            loadBuckets(silent: true);
+            loadBuckets();
         }
       });
     }

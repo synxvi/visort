@@ -166,7 +166,7 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
             'restored hdr=${restoredHdr.length}');
         rebuildFilters();
         unawaited(_detectHdr());
-        _syncIndex(photos);
+        unawaited(_syncIndex(photos));
         return;
       }
       // 对账：id 集与数量都未变、且收藏态无变化则零 setState（进页高频
@@ -192,7 +192,7 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
           oldIds.length == newIds.length &&
           oldIds.containsAll(newIds)) {
         debugPrint('[SDS] warmUp: unchanged');
-        _syncIndex(photos);
+        unawaited(_syncIndex(photos));
         return;
       }
       final buckets = await _channel.listBuckets();
@@ -208,7 +208,7 @@ class SearchDataNotifier extends Notifier<SearchDataState> {
       );
       debugPrint('[SDS] warmUp: ${photos.length} photos (changed)');
       rebuildFilters();
-      _syncIndex(photos);
+      unawaited(_syncIndex(photos));
     } catch (e) {
       debugPrint('[SDS] warmUp FAILED: $e');
     } finally {
