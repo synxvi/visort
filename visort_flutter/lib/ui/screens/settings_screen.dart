@@ -295,9 +295,12 @@ class _InfoHintButton extends StatelessWidget {
       barrierLabel: 'note_info',
       anchorGlobalDx: pos.dx + box.size.width / 2,
       anchorGlobalDy: pos.dy + box.size.height + 4,
-      menuLeft: (pos.dx + box.size.width - menuWidth - 8).clamp(
-        0.0,
-        (screen.width - menuWidth).clamp(0.0, double.infinity),
+      // 面板左缘对齐按钮左缘（设置行按钮在左半区，右缘对齐算式会把
+      // 面板钳到屏幕边缘贴边——2026-09 真机反馈）；两侧各留 12dp
+      // 安全边距，越屏时钳制。
+      menuLeft: pos.dx.clamp(
+        12.0,
+        (screen.width - menuWidth - 12).clamp(12.0, double.infinity),
       ),
       menuTop: pos.dy + box.size.height + 4,
       menuWidth: menuWidth,
@@ -349,7 +352,8 @@ class _NoteInfoPanel extends StatelessWidget {
       borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        // 四周留白收敛（20 → 14，2026-09 真机反馈偏空）
+        padding: const EdgeInsets.all(14),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
