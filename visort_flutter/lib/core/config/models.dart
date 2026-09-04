@@ -266,6 +266,7 @@ class AppConfig {
     this.precacheQuotaMb = 512,
     this.mlIndexEnabled = true,
     this.mlFaceEnabled = false,
+    this.deleteConfirmEnabled = true,
     this.drawerAnimSpeed = DrawerAnimSpeed.comfortable,
     this.defaultHomePage = DefaultHomePage.gallery,
     this.galleryLayout = HomeLayout.grid,
@@ -344,6 +345,11 @@ class AppConfig {
   /// 人物识别开关：预留（需要人脸检测模型，当前版本未内置）。
   final bool mlFaceEnabled;
 
+  /// 图片删除提醒开关：大图界面删除（移入回收站）前是否弹应用内确认
+  /// sheet。关闭后直接移入回收站（仍可恢复，非彻底删除）；回收站内的
+  /// 「彻底删除」确认不受此开关影响（不可恢复操作恒确认）。
+  final bool deleteConfirmEnabled;
+
   /// 抽屉开合动画档位（舒适/快速），默认舒适（2026-09 用户定稿；
   /// 原 Material 黄金值快速）。
   final DrawerAnimSpeed drawerAnimSpeed;
@@ -398,6 +404,7 @@ class AppConfig {
     int? precacheQuotaMb,
     bool? mlIndexEnabled,
     bool? mlFaceEnabled,
+    bool? deleteConfirmEnabled,
     DrawerAnimSpeed? drawerAnimSpeed,
     DefaultHomePage? defaultHomePage,
     HomeLayout? galleryLayout,
@@ -427,6 +434,7 @@ class AppConfig {
         precacheQuotaMb: precacheQuotaMb ?? this.precacheQuotaMb,
         mlIndexEnabled: mlIndexEnabled ?? this.mlIndexEnabled,
         mlFaceEnabled: mlFaceEnabled ?? this.mlFaceEnabled,
+        deleteConfirmEnabled: deleteConfirmEnabled ?? this.deleteConfirmEnabled,
         drawerAnimSpeed: drawerAnimSpeed ?? this.drawerAnimSpeed,
         defaultHomePage: defaultHomePage ?? this.defaultHomePage,
         galleryLayout: galleryLayout ?? this.galleryLayout,
@@ -457,6 +465,7 @@ class AppConfig {
         'precache_quota_mb': precacheQuotaMb,
         'ml_index_enabled': mlIndexEnabled,
         'ml_face_enabled': mlFaceEnabled,
+        'delete_confirm_enabled': deleteConfirmEnabled,
         'drawer_anim_speed': drawerAnimSpeed.name,
         'default_home_page': defaultHomePage.name,
         'gallery_layout': galleryLayout.name,
@@ -533,6 +542,8 @@ class AppConfig {
       precacheQuotaMb: _jsonInt(json['precache_quota_mb'], null, 512),
       mlIndexEnabled: _jsonBool(json['ml_index_enabled'], null, true),
       mlFaceEnabled: _jsonBool(json['ml_face_enabled'], null, false),
+      deleteConfirmEnabled:
+          _jsonBool(json['delete_confirm_enabled'], null, true),
       drawerAnimSpeed: _parseDrawerAnimSpeed(
           json['drawer_anim_speed'], DrawerAnimSpeed.comfortable),
       defaultHomePage: _parseDefaultHomePage(

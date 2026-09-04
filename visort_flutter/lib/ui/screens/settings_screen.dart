@@ -115,6 +115,17 @@ class SettingsScreen extends ConsumerWidget {
                   ],
                   onSelected: (v) => _update(ref, drawerAnimSpeed: v),
                 ),
+              // 图片删除提醒（仅安卓：大图删除是安卓相册路径）：关闭后
+              // 大图界面删除不再弹应用内确认 sheet，直接移入回收站（仍
+              // 可恢复；回收站内「彻底删除」恒确认，不受此开关影响）。
+              if (Platform.isAndroid)
+                _SwitchRow(
+                  label: t(ref, 'settings_delete_confirm'),
+                  note: t(ref, 'settings_delete_confirm_note'),
+                  value: config.deleteConfirmEnabled,
+                  onChanged: (v) =>
+                      _update(ref, deleteConfirmEnabled: v),
+                ),
             ],
           ),
           // ── 机器学习（[ente 对齐] ENTE ML 设置页精简：开关+进度+注释）──
@@ -134,10 +145,12 @@ class SettingsScreen extends ConsumerWidget {
     WidgetRef ref, {
     DrawerAnimSpeed? drawerAnimSpeed,
     DefaultHomePage? defaultHomePage,
+    bool? deleteConfirmEnabled,
   }) async {
     final updated = ref.read(configProvider).copyWith(
           drawerAnimSpeed: drawerAnimSpeed,
           defaultHomePage: defaultHomePage,
+          deleteConfirmEnabled: deleteConfirmEnabled,
         );
     ref.read(configProvider.notifier).state = updated;
     await ref.read(profilesServiceProvider).save(updated);
@@ -196,6 +209,68 @@ class _SettingsCard extends StatelessWidget {
             children[i],
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// 开关行：标题 + Switch + 可选副文案（说明关闭后的行为）。整行可点切换，
+/// 结构与 ML 区 _switchGroup 一致（InkWell + Row + Switch + note）。
+class _SwitchRow extends StatelessWidget {
+  const _SwitchRow({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+    this.note,
+  });
+
+  final String label;
+  final String? note;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final n = note;
+    return InkWell(
+      onTap: () => onChanged(!value),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(label,
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontFamily: 'Space Mono', height: 1.2,
+                      fontFamilyFallback: AppFonts.cjkFallback,
+                      fontSize: 14,
+                    )),
+                const Spacer(),
+                Switch(
+                  value: value,
+                  activeColor: AppColors.accent,
+                  onChanged: onChanged,
+                ),
+              ],
+            ),
+            if (n != null) ...[
+              const SizedBox(height: 2),
+              Text(
+                n,
+                style: const TextStyle(
+                  fontFamily: 'Space Mono',
+                  height: 1.3,
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  color: AppColors.muted,
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
