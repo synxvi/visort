@@ -1001,11 +1001,12 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                   ),
                                 ),
                               // 回收站恢复按钮：跑道形撤回图标（删除
-                              // toast 同款图形，2026-09 用户定稿）——28
-                              // 画布档与其他底栏 Glyph 一致，默认 accent。
+                              // toast 同款图形，2026-09 用户定稿）。size 24
+                              //（跑道含箭头包络 ~15 > 其他底栏图形 13——
+                              // 28 画布实测显大一圈，缩档后 ≈12.9 同档）。
                               if (file.isTrashed)
                                 IconButton(
-                                  icon: const UndoTrackGlyphIcon(),
+                                  icon: const UndoTrackGlyphIcon(size: 24),
                                   tooltip: t(ref, 'action_restore'),
                                   onPressed: _restoreCurrent,
                                 ),

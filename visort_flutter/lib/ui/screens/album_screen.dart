@@ -869,11 +869,17 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     // 图标 UndoTrackGlyphIcon——与删除 toast 撤回按钮同款图形，size 22
     // 缩小档（批量栏图标位 18dp，细线图形按包络补偿放大画布；
     // 2026-09 用户定稿）；其余 Material 项维持 18。
+    // 图标统一 dy +1.2 光学补偿：图标几何居中而 CJK 文字视觉重心低
+    // ~1.4dp（AppBarTitleText 同实证），不补偿则图标显高、文字沉底
+    //——行内所有元素（图标/文字）视觉水平居中共线（2026-09 规范）。
     Widget op(Widget icon, String label, Color color, VoidCallback? onTap) =>
         Expanded(
           child: TextButton.icon(
             onPressed: enabled ? onTap : null,
-            icon: icon,
+            icon: Transform.translate(
+              offset: const Offset(0, 1.2),
+              child: icon,
+            ),
             label: Text(
               label,
               style: const TextStyle(fontSize: 12),
