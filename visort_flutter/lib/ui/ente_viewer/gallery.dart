@@ -19,7 +19,6 @@
 //   - onFileTap/onFileLongPress 透传给 GalleryFileWidget（经 GalleryGroups 转发）。
 
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -402,6 +401,9 @@ class GalleryState extends State<Gallery> {
                   columns: widget.crossAxisCount,
                   viewportRows: 5,
                   monotonicExtent: true,
+                  // 拖动中标志喂给 PinnedGroupHeader：手柄拖拽跨组时轻震
+                  // （日期视图限——沉浸网格不挂 PinnedGroupHeader 不震）。
+                  dragInUseNotifier: scrollBarInUseNotifier,
                   // 日期视图行程起点避让顶部吸附组头（+8 间隙）：
                   // 手柄初始位在第一个日期标题栏下方，不叠加显示。
                   // 沉浸网格无组头（showGroupHeader=false）传 0 不受影响。
@@ -623,12 +625,13 @@ class _PinnedGroupHeaderState extends State<PinnedGroupHeader>
     }
 
     setState(() {});
+    // [visort 定制] 滚动条手柄拖拽跨组轻震（selectionClick，全平台统一）：
+    // ente 原版 Android 走 vibrate() 重震——手柄快速滑过多组时连续重震太吵，
+    // 轻量 tick 才有「档位感」且与勾选震动语义一致。拖拽状态由 ScrollDragHandle
+    // 写入 scrollbarInUseNotifier（visort 自绘手柄的拖动中标志，ente 原生
+    // 滚动条已移除、该值原恒 false 从不触发）。
     if (widget.scrollbarInUseNotifier.value) {
-      if (Platform.isIOS) {
-        HapticFeedback.selectionClick();
-      } else {
-        HapticFeedback.vibrate();
-      }
+      HapticFeedback.selectionClick();
     }
   }
 
