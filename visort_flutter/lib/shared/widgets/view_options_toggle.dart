@@ -236,7 +236,7 @@ class _FilterMorphPainter extends CustomPainter {
   /// morph 进度：0 = 收起态（三线筛选），1 = 展开态（✕）。
   final double t;
 
-  /// 收起态三线端点（24 视口，线宽 1.9 圆头）。整体轮廓收窄成近方形
+  /// 收起态三线端点（24 视口，线宽 1.7 圆头）。整体轮廓收窄成近方形
   /// （~11×10），与左侧抽屉按钮的侧栏图形（14×13 方框）轮廓呼应
   /// （2026-08 用户反馈：宽扁条 → 接近方形矩形）。
   static const _topA = Offset(6.4, 7.9), _topB = Offset(17.6, 7.9);
@@ -253,9 +253,11 @@ class _FilterMorphPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     canvas.save();
     canvas.scale(size.width / 24);
+    // stroke 1.7（2026-09 真机反馈：1.9 偏重，与 glyph_icons 底栏族
+    // 同步降档；线与 ✕ 臂、滑点统一变细）
     final line = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.9
+      ..strokeWidth = 1.7
       ..strokeCap = StrokeCap.round
       ..color = AppColors.text;
     final knob = Paint()

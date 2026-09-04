@@ -595,7 +595,8 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           Transform.translate(
             offset: const Offset(11.6, 0),
             child: IconButton(
-              icon: const InfoGlyphIcon(),
+              // strokeWidth 1.7（2026-09 真机反馈降档试看；默认 1.9）
+              icon: const InfoGlyphIcon(strokeWidth: 1.7),
               tooltip: t(ref, 'quick_sort_tips'),
               onPressed: _showTipsDialog,
             ),
