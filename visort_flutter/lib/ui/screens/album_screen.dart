@@ -865,11 +865,15 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
 
   Widget _buildBatchBar(GalleryState gallery) {
     final enabled = _selectedIds.isNotEmpty && !_batchProcessing;
-    Widget op(IconData icon, String label, Color color, VoidCallback? onTap) =>
+    // icon 为 Widget（自绘 Glyph 与 Material 并存：恢复项用跑道形撤回
+    // 图标 UndoTrackGlyphIcon——与删除 toast 撤回按钮同款图形，size 22
+    // 缩小档（批量栏图标位 18dp，细线图形按包络补偿放大画布；
+    // 2026-09 用户定稿）；其余 Material 项维持 18。
+    Widget op(Widget icon, String label, Color color, VoidCallback? onTap) =>
         Expanded(
           child: TextButton.icon(
             onPressed: enabled ? onTap : null,
-            icon: Icon(icon, size: 18),
+            icon: icon,
             label: Text(
               label,
               style: const TextStyle(fontSize: 12),
@@ -880,13 +884,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     final ops = widget.trashedOnly
         ? [
             op(
-              Icons.restore,
+              const UndoTrackGlyphIcon(size: 22),
               t(ref, 'action_restore'),
               AppColors.accent,
               _runBatchRestore,
             ),
             op(
-              Icons.delete_forever,
+              const Icon(Icons.delete_forever, size: 18),
               t(ref, 'delete_permanently'),
               AppColors.danger,
               _runBatchDelete,
@@ -895,13 +899,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         : widget.favoritesOnly
         ? [
             op(
-              Icons.favorite_border,
+              const Icon(Icons.favorite_border, size: 18),
               t(ref, 'action_unfavorite'),
               AppColors.accent,
               _runBatchUnfavorite,
             ),
             op(
-              Icons.delete_outline,
+              const Icon(Icons.delete_outline, size: 18),
               t(ref, 'delete_photo'),
               AppColors.danger,
               _runBatchTrash,
@@ -913,19 +917,19 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             // 已收藏保持）。回收藏视图不显示收藏（trashedOnly 分支）。
             _selectedAllFavorited(gallery)
                 ? op(
-                    Icons.favorite_border,
+                    const Icon(Icons.favorite_border, size: 18),
                     t(ref, 'action_unfavorite'),
                     AppColors.accent,
                     _runBatchUnfavorite,
                   )
                 : op(
-                    Icons.favorite_border,
+                    const Icon(Icons.favorite_border, size: 18),
                     t(ref, 'action_favorite'),
                     AppColors.accent,
                     _runBatchFavorite,
                   ),
             op(
-              Icons.delete_outline,
+              const Icon(Icons.delete_outline, size: 18),
               t(ref, 'delete_photo'),
               AppColors.danger,
               _runBatchTrash,

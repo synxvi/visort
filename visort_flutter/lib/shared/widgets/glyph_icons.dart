@@ -24,6 +24,8 @@
 // ⋮ 圆点两场景统一 r 1.7（实心点密度高于线，略细于线宽是合理搭配，
 // 参照三线筛选滑点 r1.75 vs 线 1.9 先例）。
 
+import 'dart:math' show pi;
+
 import 'package:flutter/material.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 
@@ -344,6 +346,83 @@ class _RestoreGlyphPainter extends CustomPainter {
   @override
   bool shouldRepaint(_RestoreGlyphPainter oldDelegate) =>
       oldDelegate.color != color;
+}
+
+/// 跑道形撤回图标（自绘）：上/下两条直线 + 右端半圆弧的体育场跑道
+/// 轮廓，开放于左侧——路径从左下起（底线左端）→ 底直线 → 右端半圆弧
+/// → 顶直线 → 左上止，箭头在左上端指向行进方向（左）。线条风格同
+/// BackGlyphButton 自绘箭头（stroke 1.9 圆帽圆角）。
+///
+/// 用途：大图删除结果气泡的撤回按钮（size 28 画布，accent）；回收站
+/// 批量栏「恢复」操作（size 22——批量栏图标位 18dp 档，细线图形按
+/// 包络补偿略放大画布，2026-09 用户定稿：样式与删除 toast 同款）。
+class UndoTrackGlyphIcon extends StatelessWidget {
+  const UndoTrackGlyphIcon({super.key, this.size = 28, this.color});
+
+  /// 画布边长（图形包络 13×10.8，按 24 视口等比缩放）。
+  final double size;
+
+  /// 线色；null 用默认 AppColors.accent（撤回/恢复语义色）。
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: Size.square(size),
+      painter: _UndoTrackPainter(color),
+    );
+  }
+}
+
+class _UndoTrackPainter extends CustomPainter {
+  const _UndoTrackPainter(this.color);
+
+  final Color? color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 24);
+    final paint = Paint()
+      ..color = color ?? AppColors.accent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.9
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    // 几何（24 视口，形制对齐 BackGlyphIcon：stroke 1.9、字形 ~13×11）。
+    final yTop = 7.2, yBottom = 18.0; // 字形高 10.8 ≈ 返回箭头 11
+    final r = (yBottom - yTop) / 2; // 端弧半径 = 半高（两端正好半圆）
+    final cy = (yTop + yBottom) / 2;
+    const arcRightCx = 12.0; // 右弧圆心；最右缘 17.4 对齐返回横线右端
+    const xLeft = 6.4; // 跑道开口端（左）x
+
+    final track = Path()
+      ..moveTo(xLeft, yBottom) // 左下起点
+      ..lineTo(arcRightCx, yBottom) // 底直线 →
+      ..arcTo(
+        // 右端半圆：底部起经最右点到顶部（视觉逆时针）。
+        Rect.fromCircle(center: Offset(arcRightCx, cy), radius: r),
+        pi / 2,
+        -pi,
+        false,
+      )
+      ..lineTo(xLeft, yTop); // 顶直线 →（弧后笔已在右弧顶端）
+
+    // 箭头：尖在 (tipX, yTop) 指向左（行进方向），两翼后张。
+    const tipX = 4.2, wing = 2.6;
+    final arrow = Path()
+      ..moveTo(tipX + wing, yTop - wing)
+      ..lineTo(tipX, yTop)
+      ..lineTo(tipX + wing, yTop + wing);
+
+    canvas.drawPath(track, paint);
+    canvas.drawPath(arrow, paint);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_UndoTrackPainter oldDelegate) => oldDelegate.color != color;
 }
 
 /// 自绘 ⓘ（看图器底栏照片详情 / 快速整理页说明）：细线圆圈 + 倒感叹号，
