@@ -30,7 +30,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/fs/cache_perf.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/service_policy.dart' show RequestPriority;
-import 'package:visort_flutter/ui/ente_viewer/thumbnail_widget.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart' show configProvider, t;
 import 'package:visort_flutter/core/theme/app_colors.dart';
@@ -47,6 +46,7 @@ import 'package:visort_flutter/ui/screens/album_picker_screen.dart';
 
 import 'detail_page_state.dart';
 import 'fast_scroll_physics.dart';
+import 'filmstrip.dart';
 import 'photo_details_sheet.dart';
 import 'wallpaper_crop_page.dart';
 import 'zoomable_image.dart';
@@ -68,39 +68,19 @@ const double _kImagePushFactor = 0.5;
 /// 顶/底栏显隐动画时长（曲线分离见 _buildTopBar/_buildBottomOverlay）。
 const Duration _kChromeAnimDuration = Duration(milliseconds: 200);
 
-// ─────────────── 底栏缩略图条(ThumbLine)常量（主分支同款） ───────────────
+// ─────────────── 底栏缩略图条(filmstrip)：常量在 filmstrip.dart ───────────────
+// 行为/布局/动画全部封装在 Filmstrip 组件（滚动无聚焦 + 吸附聚焦 + 变格宽
+// 28/36 全条间隙恒 5px + 白框与图片同步生长），本文件只持数据与联动。
 
-/// 缩略图条高度(竖屏)：容纳放大后的当前项(42dp)+上下边距。
-const double _kThumbLineHeight = 44.0;
-
-/// 每个 item 的固定布局宽度(含间距)。
-const double _kThumbItemExtent = 32.0;
-
-/// 当前(中心)档宽:固定聚焦框外沿 34（含 1.5 边框；item 贴内沿 31）。
-const double _kThumbCenterW = 34.0;
-
-/// 当前(中心)档高:固定聚焦框外沿 42（item 贴内沿 39）。
-const double _kThumbCenterH = 42.0;
-
-/// 普通项宽:正常大小。
-const double _kThumbNormalW = 23.0;
-
-/// 普通项高:正常大小(32dp)。
-const double _kThumbItemH = 32.0;
-
-/// 中心/普通项圆角。
-const double _kThumbRadiusCenter = 4.0;
-const double _kThumbRadiusNormal = 2.5;
+/// 缩略图条高度(竖屏)：布局/滑出公式引用（定义在 filmstrip.dart）。
+const double _kThumbLineHeight = kFilmstripHeight;
 
 /// 缩略图加载尺寸(px)：与 zoomable_image 加载兜底共用 key（见
 /// detail_page_state.kFilmstripThumbLoadSize），单点定义防漂移。
 const int _kThumbLoadSize = kFilmstripThumbLoadSize;
 
-/// 缩略图条→主图联动动画时长(主图翻页跟随缩略图条滚动停止/点按)。
-const Duration _kThumbSyncDuration = Duration(milliseconds: 220);
-
-/// 缩略图条滚动停止后吸附居中时长(略短,手感利落)。
-const Duration _kThumbSnapDuration = Duration(milliseconds: 180);
+/// 主图翻页跟随动画时长（与条程序滚动 kFilmstripSyncDuration 同步）。
+const Duration _kThumbSyncDuration = kFilmstripSyncDuration;
 
 class DetailPage extends ConsumerStatefulWidget {
   final List<MsImageInfo> files;
@@ -167,13 +147,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
   AnimationController? _panelCtrl;
 
   // ─────────────── 底栏缩略图条 ───────────────
-  ScrollController? _thumbScrollCtrl;
-
-  /// 实时居中项（滚动中更新，驱动单项高亮）。
+  /// 条居中项双向桥（Filmstrip.center）：外部写 = 程序滚动+聚焦指令
+  ///（主图翻页联动/删除同步）；条滚动中组件实时写（跟手联动入口）。
   ValueNotifier<int>? _thumbCenterIndex;
 
-  /// 主图→缩略图条程序滚动标记：期间忽略滚动联动，防回环。
-  bool _thumbSyncing = false;
+  /// 条联动抑制桥（Filmstrip.frozen）：pop 冻结/删除流程期间置 true，
+  /// 条忽略滚动联动与外部指令（渲染照常；删除流程 offset 冻结天然自洽，
+  /// 见 filmstrip.dart 文件头）。
+  final ValueNotifier<bool> _thumbFrozen = ValueNotifier(false);
 
   /// 删除流程抑制条滚动：删除期间白色激活框必须固定在视口中心不动——
   /// 主图 animateToPage 触发的 onPageChanged→_syncThumbTo 若滚条，
@@ -259,11 +240,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
       if (!mounted) return;
       _chromeEntry = OverlayEntry(builder: _buildChromeOverlay);
       Overlay.of(context).insert(_chromeEntry!);
-      // filmstrip 在 overlay 内：本帧插入、下一帧才 build——嵌套一个
-      // postFrame 等它挂载后再居中（_centerThumbOnce 幂等，多路径安全）。
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _centerThumbOnce();
-      });
+      // filmstrip 初始定位在组件内（initialScrollOffset 直达 + postFrame
+      // 兜底），本页不再干预。
+
       // pop flight（SDK patch HeroController.didPop 同步启动）的 overlay
       // 插在最上，会盖住栏——flight 插入后同帧重插栏（保持栏在飞行层
       // 之上，消失时机不变）。
@@ -271,37 +250,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
     });
     _selectedIndexNotifier = ValueNotifier(widget.initialIndex);
     _pageController = PageController(initialPage: widget.initialIndex);
-    _thumbScrollCtrl = ScrollController(
-      // 初始定位直达目标格（initialIndex × 32，与 _thumbOffsetForCenter
-      // 同公式）：attach 帧即渲染在正确位置——消灭 offset=0 首帧闪现
-      //（打开末尾图片时目标 offset 大，首帧满条图片瞬间跳成右半空白
-      // = 「右半侧从右向左冲走」残影，真机实证）。
-      // _centerThumbOnce 的 jumpTo 保留为兜底（幂等，同值无害）。
-      initialScrollOffset: widget.initialIndex * _kThumbItemExtent,
-    )..addListener(_onThumbScroll);
+    // 滚动/吸附/聚焦/初始定位全部在 Filmstrip 组件内；本页只持双向桥。
     _thumbCenterIndex = ValueNotifier<int>(widget.initialIndex);
     // 沉浸模式：进入缩放（双击/双指放大）→ 隐藏顶/底栏/缩略图条；
     // 退出缩放 → 恢复进入前的显示状态（手动全屏过则保持全屏）。
     isZoomedNotifier.addListener(_onZoomedForImmersive);
-    // 首帧定位到当前 index 居中。注意：filmstrip 在 OverlayEntry 里
-    //（_chromeEntry postFrame 才插入，下一帧才 build）——postFrame 里
-    // hasClients 恒 false（跳过早于挂载），改由 ScrollController 检测
-    // 首次 attach（hasClients 翻转）后居中，覆盖任意 build 时序。
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _centerThumbOnce();
-    });
-  }
-
-  bool _thumbCentered = false;
-
-  /// filmstrip 首次就绪（hasClients）后居中到进入时的图片（只执行一次）。
-  void _centerThumbOnce() {
-    final ctrl = _thumbScrollCtrl;
-    if (_thumbCentered || ctrl == null || !ctrl.hasClients) return;
-    final pos = ctrl.position;
-    if (!pos.hasContentDimensions) return;
-    _thumbCentered = true;
-    ctrl.jumpTo(_thumbOffsetForCenter(widget.initialIndex));
   }
 
   Animation<double>? _routeAnimation;
@@ -329,6 +282,8 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // 网格锁死在 flush 定位（album 侧 reverse 同帧冲刷），飞行目标稳定。
     if (status == AnimationStatus.reverse) {
       _popping = true;
+      // 条联动一并冻结（Filmstrip.frozen）：滚动/吸附/外部指令全停。
+      _thumbFrozen.value = true;
       // ⚠️ pop 冻结须同时锁 PageView 惯性（physics 加 _popping）：
       // 快甩（fling 惯性未停）中返回时 PageView 若继续滚，onPageChanged
       // 被 _popping 拒后网格 cell 与 viewer 页错位，Hero 终点悬空/错位
@@ -467,8 +422,8 @@ class _DetailPageState extends ConsumerState<DetailPage>
     showingThumbnailFallbackNotifier.dispose();
     _panelExtent.dispose();
     _panelCtrl?.dispose();
-    _thumbScrollCtrl?.dispose();
     _thumbCenterIndex?.dispose();
+    _thumbFrozen.dispose();
     _thumbDeleteAnim.dispose();
     super.dispose();
   }
@@ -1040,7 +995,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 回收站项底栏的删除日期标签：由外层 _BottomChromeBar 使用。
   /// 实现见文件底部顶层类 _TrashDateLabel（ConsumerWidget）。
 
-  // ─────────────── 底栏缩略图条（主分支 _ThumbLineStrip 同款） ───────────────
+  // ─────────────── 底栏缩略图条（Filmstrip 组件，见 filmstrip.dart） ───────────────
 
   Widget _buildThumbLine() {
     final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
@@ -1098,12 +1053,20 @@ class _DetailPageState extends ConsumerState<DetailPage>
                       opacity: thumbVis,
                       child: IgnorePointer(
                         ignoring: isFullScreen || thumbVis < 0.5,
-                        child: _ThumbLineStrip(
-                          photos: _thumbFiles,
-                          controller: _thumbScrollCtrl!,
-                          centerIndex: _thumbCenterIndex!,
-                          onTap: _onThumbTap,
-                          onScrollEnd: _onThumbScrollEnd,
+                        child: Filmstrip(
+                          itemCount: _thumbFiles.length,
+                          initialIndex: widget.initialIndex,
+                          center: _thumbCenterIndex!,
+                          frozen: _thumbFrozen,
+                          thumbnail: (i) => buildThumbnailProvider(
+                            imageRefFromMediaStoreId(_thumbFiles[i].id),
+                            size: _kThumbLoadSize,
+                            squareCrop: true, // 方形 cover item
+                          ),
+                          onCenterChanged: _onThumbCenterChanged,
+                          onSettled: _onThumbSettled,
+                          onTap: _onThumbSettled,
+                          onItemBuild: _prefetchStripItem,
                           deleteAnim: _thumbDeleteAnim,
                           deleteIndex: _thumbDeleteIndex,
                         ),
@@ -1119,84 +1082,79 @@ class _DetailPageState extends ConsumerState<DetailPage>
     );
   }
 
-  /// 缩略图条滚动中：实时算离视口中心最近的项，更新高亮 + 跟手联动主图。
-  void _onThumbScroll() {
-    if (_popping) return; // pop 冻结：见 _popping 注释
-    final ctrl = _thumbScrollCtrl;
-    final ci = _thumbCenterIndex;
-    if (ctrl == null || ci == null || !ctrl.hasClients) return;
-    final newCenter = _thumbComputeCenter();
-    if (newCenter == ci.value) return;
-    // 跨档轻震（系统相册同款）：手指在条上慢扫每跨一档 tick 一次；甩动
-    // fling 连续跨档 → 连续 tick、随减速自然降频。程序滚动（主图翻页联动
-    // _syncThumbTo / 点按吸附 _onThumbTap 置 _thumbSyncing）与删除流程
-    // （_suppressThumbScroll）期间不震——tick 只属于用户在条上的真实滑动。
-    if (!_thumbSyncing && !_suppressThumbScroll) {
-      HapticFeedback.selectionClick();
-    }
-    ci.value = newCenter; // 高亮跟手（含删除推入动画：白框翻到滚入项）
-    // 程序滚动（_thumbSyncing）与删除流程（_suppressThumbScroll）：
-    // 只跟手高亮，不回打主图（主图有自己的滑动动画）。
-    if (_thumbSyncing || _suppressThumbScroll) return;
-    if (newCenter == _selectedIndexNotifier.value) return;
-    // 跟手联动主图：直接赋值 + jumpToPage 即时切换（含快甩——对标系统
-    // 相册全程跟随；途经页零解码请求由 containsKey 守卫保证，跟随首帧
-    // 质量由条构建时的 512 预取保证，见 _ThumbLineStrip）。
-    _selectedIndexNotifier.value = newCenter;
-    widget.onIndexChanged?.call(newCenter);
-    if (_pageController.hasClients) _pageController.jumpToPage(newCenter);
+  /// 条滚动跨档（Filmstrip.onCenterChanged，实时）：主图跟手联动——直接
+  /// 赋值 + jumpToPage 即时切换（含快甩——对标系统相册全程跟随；途经页
+  /// 零解码请求由 containsKey 守卫保证，跟随首帧质量由条构建时的预取
+  /// 保证，见 _prefetchStripItem）。pop/删除冻结已由 frozen 桥在组件内挡。
+  void _onThumbCenterChanged(int i) {
+    if (i == _selectedIndexNotifier.value) return;
+    _selectedIndexNotifier.value = i;
+    widget.onIndexChanged?.call(i);
+    if (_pageController.hasClients) _pageController.jumpToPage(i);
   }
 
-  /// 缩略图条滚动停止（fling 减速结束）：吸附兜底（格点物理
-  /// [_ThumbSnapPhysics] 常规路径已落格，此处防御非 ballistic 静止
-  /// 停位）+ 主图联动。
-  void _onThumbScrollEnd() {
-    if (_popping || _deletingInProgress) return;
-    final ctrl = _thumbScrollCtrl;
-    if (ctrl == null || !ctrl.hasClients || _thumbSyncing) return;
-    final target = _thumbComputeCenter();
-    final offset = _thumbOffsetForCenter(target);
-    if ((ctrl.offset - offset).abs() > 0.5) {
-      ctrl.animateTo(
-        offset,
-        duration: _kThumbSnapDuration,
-        curve: Curves.easeOut,
+  /// 条停稳吸附/点按单项（Filmstrip.onSettled/onTap，组件已完成吸附
+  /// 聚焦）：主图跟随动画。
+  void _onThumbSettled(int i) => _onThumbPageChanged(i);
+
+  /// 条目构建钩子（Filmstrip.onItemBuild）：解码预取策略。
+  ///   - large（640 等比）：每个构建项——对标系统相册「全相册 MINI 缩略图
+  ///     预生成」，条滚过的图 large 即在缓存/在途，主图跟随切页首帧直接
+  ///     large 级（96 兜底只剩在途 1-2 帧窗口）。打点实证 run ~15-25ms。
+  ///   - full（p250）：**仅聚焦项近邻（|i−center|≤1，GIF 跳过）**——不可
+  ///     无条件预取：快甩时几十条目批量构建 → 46 张×4.4MB ARGB 灌满
+  ///     ImageCache → LRU evict 海啸 + GC，jank 落在 push/pop 飞行窗
+  ///     （真机 [FPS]/[CACHE] 实证）。
+  ///   - ±1 large / ±2 96 方形：近邻预热，主图起步档从 cell(346 方形裁剪)
+  ///     升为 large 等比（竖图 ~7 倍垂直放大 = 甩动糊感来源）。
+  void _prefetchStripItem(BuildContext ctx, int i) {
+    precacheImage(
+      buildThumbnailProvider(
+        imageRefFromMediaStoreId(_thumbFiles[i].id),
+        size: kViewerLargeThumbSize,
+        squareCrop: false,
+      ),
+      ctx,
+    );
+    if ((i - _thumbCenterIndex!.value).abs() <= 1 &&
+        _thumbFiles[i].mime != 'image/gif') {
+      final view = View.of(ctx);
+      precacheImage(
+        buildImageProvider(
+          imageRefFromMediaStoreId(_thumbFiles[i].id),
+          targetWidth: computeViewerTargetWidth(
+            view.physicalSize.width,
+          ),
+          priority: RequestPriority.prefetchFull,
+        ),
+        ctx,
       );
     }
-    if (target != _selectedIndexNotifier.value) _onThumbPageChanged(target);
-  }
-
-  /// 点按缩略图单项 → 主图跳转 + 缩略图条吸附居中。
-  void _onThumbTap(int i) {
-    // pop 冻结 / 删除动画窗口：条仍可点按会打断流程——直接忽略。
-    if (_popping || _deletingInProgress) return;
-    if (i == _selectedIndexNotifier.value) return;
-    _onThumbPageChanged(i);
-    final ctrl = _thumbScrollCtrl;
-    if (ctrl != null && ctrl.hasClients) {
-      _thumbSyncing = true;
-      ctrl
-          .animateTo(
-            _thumbOffsetForCenter(i),
-            duration: _kThumbSnapDuration,
-            curve: Curves.easeOut,
-          )
-          .then((_) => _thumbSyncing = false);
+    for (final n in [i - 1, i + 1]) {
+      if (n >= 0 && n < _thumbFiles.length) {
+        precacheImage(
+          buildThumbnailProvider(
+            imageRefFromMediaStoreId(_thumbFiles[n].id),
+            size: kViewerLargeThumbSize,
+            squareCrop: false,
+          ),
+          ctx,
+        );
+      }
+    }
+    for (final n in [i - 2, i + 2]) {
+      if (n >= 0 && n < _thumbFiles.length) {
+        precacheImage(
+          buildThumbnailProvider(
+            imageRefFromMediaStoreId(_thumbFiles[n].id),
+            size: _kThumbLoadSize,
+            squareCrop: true,
+          ),
+          ctx,
+        );
+      }
     }
   }
-
-  /// 离视口中心最近的 item index（padding=vw/2−ext/2 时 = round(offset/ext)）。
-  int _thumbComputeCenter() {
-    final ctrl = _thumbScrollCtrl;
-    if (ctrl == null || !ctrl.hasClients) return _selectedIndexNotifier.value;
-    return (ctrl.offset / _kThumbItemExtent).round().clamp(
-      0,
-      _files.length - 1,
-    );
-  }
-
-  /// 让 item i 居中所需的 scroll offset（= i × itemExtent）。
-  double _thumbOffsetForCenter(int i) => i * _kThumbItemExtent;
 
   /// 缩略图条滚动停止/点按 → 主图跟随。靠 `i == 当前` 天然防回环。
   void _onThumbPageChanged(int i) {
@@ -1224,23 +1182,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
     }
   }
 
-  /// 主图翻页 → 缩略图条居中跟随（程序滚动，_thumbSyncing 防回环）。
+  /// 主图翻页 → 缩略图条居中跟随：写 center 双向桥即可（Filmstrip 监听
+  /// 外部写入 → 程序滚动 + 保持聚焦，大格随滚动滑入聚焦位）。
   /// 删除流程（_suppressThumbScroll）完全忽略：条数据/center 已由
-  /// _removeCurrentAndAdvance 直接同步，滑动期间的 onPageChanged 若
-  /// 更新会把 center 推到旧语义 index（白色框高亮跳出中心）。
+  /// _removeCurrentAndAdvance 直接同步（frozen 桥挡），滑动期间的
+  /// onPageChanged 若更新会把 center 推到旧语义 index（白框跳出中心）。
   void _syncThumbTo(int i) {
-    final ctrl = _thumbScrollCtrl;
-    if (ctrl == null || !ctrl.hasClients) return;
     if (_suppressThumbScroll) return;
-    _thumbSyncing = true;
     _thumbCenterIndex?.value = i;
-    ctrl
-        .animateTo(
-          _thumbOffsetForCenter(i),
-          duration: _kThumbSyncDuration,
-          curve: Curves.easeOut,
-        )
-        .then((_) => _thumbSyncing = false);
   }
 
   // ─────────────── 操作（主分支弹窗/流程 + galleryController） ───────────────
@@ -1643,7 +1592,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// （见 [_showDeleteToast]）；null 走全局 toast（恢复/移动/彻底删除）。
   ///
   /// 条动画 = 系统相册 PhotoPagerIndicator 同构（RecyclerView ItemAnimator
-  /// 位置动画）。聚焦框固定在条正中（见 _ThumbLineStrip 固定框层）：
+  /// 位置动画）。聚焦框固定在条正中（见 Filmstrip 固定框层）：
   ///  1. center 翻到下一项延迟到补位后段（150ms）——B 进框途中才放大
   ///     （120ms），两条动画同时收尾，不出现「框外先放大再推入」；
   ///  2. 被删项保持放大态在固定框内原地淡出（框内置空），后续项
@@ -1671,6 +1620,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
     final next = index < _files.length - 1 ? index + 1 : index - 1;
     _deletingInProgress = true;
     _suppressThumbScroll = true;
+    // 条联动一并冻结（Filmstrip.frozen）：offset 冻结 + 渲染照常——删除
+    // 前后聚焦格模型同构，中心项不动，下一项顶入原聚焦格（见 filmstrip
+    // 文件头）；frozen 解除时组件对齐 center 补聚焦（删末项场景）。
+    _thumbFrozen.value = true;
     // 300ms 动画窗口锁主图 physics（_swipeLocked 旧字段从未接线=死代码）：
     // 用户滑动会打断 animateToPage → .then 提前 removeAt 与手势目标打架，
     // 选中态/白框/主图三处错位。锁后手势全部失效，动画必然走完。
@@ -1740,6 +1693,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
           .whenComplete(() {
             _deletingInProgress = false;
             _suppressThumbScroll = false;
+            _thumbFrozen.value = false; // 组件对齐 center 补聚焦
             if (mounted) setState(() => _swipeLocked = false);
           }),
     );
@@ -2199,318 +2153,6 @@ class _DeleteToastViewState extends State<_DeleteToastView>
       ),
     );
   }
-}
-
-/// 底栏缩略图条（主分支 _ThumbLineStrip 同款）。
-///
-/// 横向 ListView + 固定紧凑 itemExtent,自由 fling(甩一下滚多张慢慢减速,非 PageView 的
-/// 一页一停)。居中即选中:[controller] 实时算离视口中心最近的项 → [centerIndex] 高亮;
-/// 滚动停止(fling 减速结束)→ [onScrollEnd] 吸附该项到正中 + 联动主图。点按单项 →
-/// [onTap] 跳转。
-/// 缩略图条格点吸附物理（2026-09 固定聚焦框配套）：聚焦框钉在条正中
-/// 后，摩擦滚动停在半格会让框内跨两个 item（「只显示部分」）；松手后
-/// 手动 snap 只有 1~15px 位移、肉眼无感（真机 [THUMB] 打点实证）——
-/// 观感即「吸附没了」。此物理把 ballistic 直接模拟到最近 32px 格点
-///（速度外推决定落哪格，甩得远跨多格，PageView 式档位感），item 永远
-/// 完整对进固定框。_onThumbScrollEnd 的手动 snap 保留为兜底（防御非
-/// ballistic 路径静止停位）+ 主图联动入口。
-class _ThumbSnapPhysics extends ScrollPhysics {
-  const _ThumbSnapPhysics({super.parent});
-
-  @override
-  _ThumbSnapPhysics applyTo(ScrollPhysics? ancestor) =>
-      _ThumbSnapPhysics(parent: buildParent(ancestor));
-
-  @override
-  Simulation? createBallisticSimulation(
-    ScrollMetrics position,
-    double velocity,
-  ) {
-    // 边界外（overscroll）交给父类（Android clamping 回边）。
-    if ((velocity > 0.0 && position.pixels > position.maxScrollExtent) ||
-        (velocity < 0.0 && position.pixels < position.minScrollExtent)) {
-      return super.createBallisticSimulation(position, velocity);
-    }
-    // 速度外推（PageScrollPhysics 同系数）：轻拖回最近格，甩动跨多格。
-    final tol = toleranceFor(position);
-    final projected = position.pixels + velocity * 0.125;
-    // maxScrollExtent = (n−1)×32（首尾 padding 设计保证），本身是格点。
-    final maxIdx = (position.maxScrollExtent / _kThumbItemExtent).round();
-    final target = ((projected / _kThumbItemExtent).round().clamp(0, maxIdx)) *
-        _kThumbItemExtent;
-    // 已在格点且无速度 → 静止（默认流程）。
-    if ((target - position.pixels).abs() < tol.distance &&
-        velocity.abs() < tol.velocity) {
-      return null;
-    }
-    // PageView 同款 spring（mass .5 / stiffness 100 / ratio 1.1）。
-    return ScrollSpringSimulation(
-      SpringDescription.withDampingRatio(mass: 0.5, stiffness: 100, ratio: 1.1),
-      position.pixels,
-      target,
-      velocity,
-      tolerance: tol,
-    );
-  }
-}
-
-class _ThumbLineStrip extends StatelessWidget {
-  const _ThumbLineStrip({
-    required this.photos,
-    required this.controller,
-    required this.centerIndex,
-    required this.onTap,
-    required this.onScrollEnd,
-    this.deleteAnim,
-    this.deleteIndex = -1,
-  });
-
-  final List<MsImageInfo> photos;
-  final ScrollController controller;
-
-  /// 当前居中项(滚动中实时更新,驱动单项高亮)。
-  final ValueListenable<int> centerIndex;
-
-  /// 点按单项 → 主图跳转。
-  final ValueChanged<int> onTap;
-
-  /// 滚动停止(fling 减速结束)→ 吸附居中 + 联动主图。
-  final VoidCallback onScrollEnd;
-
-  /// 删除补位动画（系统相册 ItemAnimator 同构：被删项淡出、后续项
-  /// 平移左移一格）。null = 无删除动画。
-  final Animation<double>? deleteAnim;
-
-  /// 正在删除的条索引。
-  final int deleteIndex;
-
-  @override
-  Widget build(BuildContext context) {
-    // padding 让首尾项能滚到视口正中(每侧留 vw/2 − itemExtent/2)。
-    final vw = MediaQuery.sizeOf(context).width;
-    final pad = (vw - _kThumbItemExtent) / 2;
-    // 黑底:与底栏视觉一体,缩略图条覆盖在图片上(图片在下层被黑底遮)。
-    return ColoredBox(
-      color: Colors.black,
-      child: NotificationListener<ScrollEndNotification>(
-        onNotification: (_) {
-          onScrollEnd();
-          return false;
-        },
-        child: Stack(
-          children: [
-            ListView.builder(
-          controller: controller,
-          scrollDirection: Axis.horizontal,
-          // 格点吸附（32px 对齐固定聚焦框）：ballistic 落格，见类注释。
-          physics: const _ThumbSnapPhysics(),
-          itemExtent: _kThumbItemExtent,
-          padding: EdgeInsets.symmetric(horizontal: pad),
-          itemCount: photos.length,
-          itemBuilder: (ctx, i) {
-            // 当前构建项预取 large（contain 等比，与 viewer 渐进 large 同
-            // key）：对标系统相册「全相册 MINI 缩略图预生成」——条滚过的图
-            // large 即在缓存/在途，主图跟随切页首帧直接 large 级（96 兜底
-            // 只剩 large 在途的 1-2 帧窗口），观感「跟随且不糊」。打点实证
-            // run ~15-25ms、6 门下甩滑百张排空 <0.5s，且 p200 不挡主图/条
-            // 96 的优先级。
-            precacheImage(
-              buildThumbnailProvider(
-                imageRefFromMediaStoreId(photos[i].id),
-                size: kViewerLargeThumbSize,
-                squareCrop: false,
-              ),
-              ctx,
-            );
-            // full 预取（p250，GIF 跳过）：**仅聚焦项近邻（|i−center|≤1）**。
-            // 盘缓存就绪区域（空闲预缓存已扫过）readSampledImage 内部 30ms
-            // 盘命中 → full 进内存，停稳/换页目标条目直接 full 级。
-            // ⚠️ 不可对每个构建条目无条件预取：条初始定位滚动/快甩时几十个
-            // 条目批量构建 → 46 张×4.4MB ARGB 在 ~200ms 内灌满 ImageCache
-            // （43→256MB）→ LRU evict 海啸 + GC，jank 落在 push/pop 飞行窗上
-            // （真机 [FPS]/[CACHE] 实证：pop 飞行中 33/35ms 双重 jank）。
-            // 途经项零 full（large 0.7MB 级顶着）；停稳后主图页自身的
-            // heavy loads（p50 当前页 ±1 预建页）兜住「停稳即清晰」。
-            if ((i - centerIndex.value).abs() <= 1 &&
-                photos[i].mime != 'image/gif') {
-              final view = View.of(ctx);
-              precacheImage(
-                buildImageProvider(
-                  imageRefFromMediaStoreId(photos[i].id),
-                  targetWidth: computeViewerTargetWidth(
-                    view.physicalSize.width,
-                  ),
-                  priority: RequestPriority.prefetchFull,
-                ),
-                ctx,
-              );
-            }
-            // 近邻预载：±1 用 large 等比（与当前项同档、与 viewer 渐进 large
-            // 同 key）——甩条滚动中/停稳页必有 large 预热，主图起步档从 cell
-            //（346 方形裁剪，竖图 ~7 倍垂直放大 = 甩动糊感来源）升为
-            // large 等比（640 档 1.8 倍放大）。±2 保持 96 方形兜底（黑屏防线，
-            // 请求量不涨）。打点实证 run 3-17ms（512 档）、q 峰 83 排空 <0.5s，
-            // 每条目仅 +1 个 large 请求；precacheImage 幂等：已缓存立即
-            // complete，加载中合并 listener。
-            for (final n in [i - 1, i + 1]) {
-              if (n >= 0 && n < photos.length) {
-                precacheImage(
-                  buildThumbnailProvider(
-                    imageRefFromMediaStoreId(photos[n].id),
-                    size: kViewerLargeThumbSize,
-                    squareCrop: false,
-                  ),
-                  ctx,
-                );
-              }
-            }
-            for (final n in [i - 2, i + 2]) {
-              if (n >= 0 && n < photos.length) {
-                precacheImage(
-                  buildThumbnailProvider(
-                    imageRefFromMediaStoreId(photos[n].id),
-                    size: _kThumbLoadSize,
-                    squareCrop: true,
-                  ),
-                  ctx,
-                );
-              }
-            }
-            Widget item = _buildStripItem(
-              photos[i],
-              centerIndex,
-              i,
-              onTap: () => onTap(i),
-            );
-            final anim = deleteAnim;
-            if (anim != null && deleteIndex >= 0) {
-              if (i == deleteIndex) {
-                // 被删项：原地缩小淡出（固定聚焦框内置空——框不跟
-                // item 走，见 _ThumbLineStrip 固定框层注释）。
-                item = FadeTransition(
-                  opacity: Tween<double>(begin: 1, end: 0).animate(anim),
-                  child: item,
-                );
-              } else if (i > deleteIndex) {
-                // 后续项：平滑左移一格补位（位置动画——平移不触发布局
-                // 重排，其余项位置稳定，无"跳到第二个又弹回"）。
-                item = AnimatedBuilder(
-                  animation: anim,
-                  child: item,
-                  builder: (_, child) => Transform.translate(
-                    offset: Offset(-anim.value * _kThumbItemExtent, 0),
-                    child: child,
-                  ),
-                );
-              }
-            }
-            return item;
-          },
-        ),
-            // 固定聚焦框（2026-09 用户定稿）：白框钉在条正中**不跟 item
-            // 走**——删除时被删项在框内缩小淡出（框内先置空），后续项
-            // 推入框内；滚动时框稳定居中、放大项随滚动切换。此前白框是
-            // center 项自带 border，删除时框瞬间跳到还在右侧的下一项上
-            // 随其滑入，且放大（120ms）与补位位移（250ms）两条时间线
-            // 不一致 = 残影感来源。z 序在 ListView 之上（框线压图外缘）。
-            IgnorePointer(
-              child: Align(
-                alignment: Alignment.bottomCenter,
-                child: Container(
-                  width: _kThumbCenterW,
-                  height: _kThumbCenterH,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(_kThumbRadiusCenter),
-                    border: Border.all(color: AppColors.text, width: 1.5),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 缩略图条单项渲染。
-///
-/// 高亮 = 尺寸/透明度差异（无白框——白框是 [_ThumbLineStrip] 的固定
-/// 装饰层，不跟 item 走）：中心项贴固定框【内沿】（外沿 34/42 − 边框
-/// 1.5×2 = 31/39）。
-Widget _buildStripItem(
-  MsImageInfo info,
-  ValueListenable<int> centerIndex,
-  int i, {
-  VoidCallback? onTap,
-}) {
-  return ValueListenableBuilder<int>(
-    valueListenable: centerIndex,
-    builder: (_, center, _) {
-      final isCenter = i == center;
-      // 中心项贴固定白框内沿（31×39），普通项 23×32。
-      final w = isCenter ? _kThumbCenterW - 3 : _kThumbNormalW;
-      final h = isCenter ? _kThumbCenterH - 3 : _kThumbItemH;
-      // 固定 itemExtent 宽（AnimatedList 无 itemExtent 参数）——
-      // 居中偏移 _thumbOffsetForCenter = i × _kThumbItemExtent 依赖此。
-      return SizedBox(
-        width: _kThumbItemExtent,
-        child: GestureDetector(
-          onTap: onTap,
-          behavior: HitTestBehavior.opaque,
-          child: Align(
-            alignment: Alignment.bottomCenter,
-            // 底基准 = 固定框【内沿底】（框底贴条底 − 边框 1.5）：普通项与
-            // center 项统一垫底 1.5——center 项 39 高正好与内沿重合（不垫
-            // 的话图片底压边框线、顶部比内沿顶低 1.5 → 框内上沿露黑边，
-            // 真机实证）；普通项整排底线上移 1.5 无感，且与框内沿对齐
-            // 更整齐。
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 1.5),
-              child: Opacity(
-                opacity: isCenter ? 1.0 : 0.5,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 120),
-                  width: w,
-                  height: h,
-                // 图片裁剪圆角：中心项贴白框【内沿】（外沿 4.0 − 边框 1.5 =
-                // 2.5），普通项 = 自身 r（2.5）——两者数值一致，高亮切换无
-                // 跳变。不 clip 的话图片直角穿出圆角观感（四角不统一）。
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(
-                    isCenter ? _kThumbRadiusCenter - 1.5 : _kThumbRadiusNormal,
-                  ),
-                  // Image + frameBuilder 占位：旧 DecorationImage 在未加载帧
-                  // 渲染空白（黑屏）；frameBuilder 首帧前垫占位色块，加载完
-                  // 渐入，快速滑动不再闪黑。
-                  child: Image(
-                    image: buildThumbnailProvider(
-                      imageRefFromMediaStoreId(info.id),
-                      size: _kThumbLoadSize,
-                      squareCrop: true, // 方形 cover item
-                    ),
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                    frameBuilder: (c, child, frame, wasSync) {
-                      if (wasSync || frame != null) return child;
-                      return Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          ThumbnailPlaceHolder(),
-                          child,
-                        ],
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-      );
-    },
-  );
 }
 
 /// 面板内容区 physics:默认 physics 在内容不可滚(maxScrollExtent==0,占位/短内容)
