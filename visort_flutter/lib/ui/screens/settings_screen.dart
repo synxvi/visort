@@ -242,6 +242,8 @@ class _SwitchRow extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
         child: Row(
+          // 同一行元素（文字/ⓘ/开关）垂直居中对齐
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Text(label,
                 style: const TextStyle(
@@ -267,16 +269,41 @@ class _SwitchRow extends StatelessWidget {
   }
 }
 
-/// 行内 ⓘ 说明按钮（设置行 label 文字后）：点击弹出居中说明弹窗
-///（与快速整理页说明弹窗同款）。图形与顶栏说明按钮同一个
-/// InfoGlyphIcon（含 accent 顶点，stroke 1.7 降档同款）；点击区
-/// 32×32——不用 IconButton（48 盒会撑破行内布局，此处非 bar 按钮）。
-/// 嵌在外层整行 InkWell 内：内层手势在竞技场胜出，点 ⓘ 不会误触开关。
+/// 行内 ⓘ 说明按钮（设置行 label 文字后）：点击从按钮正下方弹簧展开
+/// 小说明面板（与设置页选择器菜单 / 选项面板同一下拉家族）。
+/// 图形与顶栏说明按钮同一个 InfoGlyphIcon（含 accent 顶点，stroke 1.7
+/// 降档同款）；点击区 32×32——不用 IconButton（48 盒会撑破行内布局，
+/// 此处非 bar 按钮）。嵌在外层整行 InkWell 内：内层手势在竞技场胜出，
+/// 点 ⓘ 不会误触开关。
 class _InfoHintButton extends StatelessWidget {
   const _InfoHintButton({required this.title, required this.body});
 
   final String title;
   final String body;
+
+  /// 点击 → 按钮正下方弹簧展开说明面板（锚点约定与 ViewOptionsToggle
+  /// 选项面板一致：弹簧起点 = 按钮中心 × 面板顶边，面板右缘离按钮
+  /// 右缘 8，越屏左移钳制，240 定宽）。
+  void _open(BuildContext context) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final pos = box.localToGlobal(Offset.zero);
+    final screen = MediaQuery.sizeOf(context);
+    const menuWidth = 240.0;
+    showSpringPopupFromAnchor<void>(
+      context: context,
+      barrierLabel: 'note_info',
+      anchorGlobalDx: pos.dx + box.size.width / 2,
+      anchorGlobalDy: pos.dy + box.size.height + 4,
+      menuLeft: (pos.dx + box.size.width - menuWidth - 8).clamp(
+        0.0,
+        (screen.width - menuWidth).clamp(0.0, double.infinity),
+      ),
+      menuTop: pos.dy + box.size.height + 4,
+      menuWidth: menuWidth,
+      menuBuilder: (_) => _NoteInfoPanel(title: title, body: body),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -284,22 +311,25 @@ class _InfoHintButton extends StatelessWidget {
       width: 32,
       height: 32,
       child: InkWell(
-        onTap: () => showCenterDialog<void>(
-          context: context,
-          builder: (_) => _NoteInfoDialog(title: title, body: body),
-        ),
-        child: const Center(
-          child: InfoGlyphIcon(strokeWidth: 1.7),
+        onTap: () => _open(context),
+        // dy +1.2 光学补偿：CJK 字形视觉重心低于几何中心 ~1.4dp
+        //（AppBarTitleText 同实证），ⓘ 几何居中会显高于文字视觉
+        // 中线——下移贴齐（行内元素垂直居中对齐的视觉完成态）。
+        child: Center(
+          child: Transform.translate(
+            offset: const Offset(0, 1.2),
+            child: const InfoGlyphIcon(strokeWidth: 1.7),
+          ),
         ),
       ),
     );
   }
 }
 
-/// 说明弹窗：标题 + 一段描述。卡片样式与快速整理页说明弹窗同款
-///（260 定宽、四周 24 内边距、12 圆角、surfaceElevated + 弹簧入场）。
-class _NoteInfoDialog extends StatelessWidget {
-  const _NoteInfoDialog({required this.title, required this.body});
+/// 说明面板：标题 + 一段描述，从 ⓘ 按钮正下方弹簧展开（设置选择器
+/// 菜单同族卡片：surfaceElevated / 12 圆角 / elevation 3）。
+class _NoteInfoPanel extends StatelessWidget {
+  const _NoteInfoPanel({required this.title, required this.body});
 
   final String title;
   final String body;
@@ -313,35 +343,27 @@ class _NoteInfoDialog extends StatelessWidget {
       fontSize: 12,
       color: AppColors.muted,
     );
-    return Center(
+    return Material(
+      color: AppColors.surfaceElevated,
+      elevation: 3,
+      borderRadius: BorderRadius.circular(12),
+      clipBehavior: Clip.antiAlias,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 260),
-          child: Material(
-            color: AppColors.surfaceElevated,
-            elevation: 3,
-            borderRadius: BorderRadius.circular(12),
-            clipBehavior: Clip.antiAlias,
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: bodyStyle.copyWith(
-                      color: AppColors.text,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(body, style: bodyStyle),
-                ],
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: bodyStyle.copyWith(
+                color: AppColors.text,
+                fontWeight: FontWeight.w700,
               ),
             ),
-          ),
+            const SizedBox(height: 6),
+            Text(body, style: bodyStyle),
+          ],
         ),
       ),
     );
@@ -904,6 +926,8 @@ class _MlSectionState extends ConsumerState<_MlSection> {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
         child: Row(
+          // 同一行元素（文字/ⓘ/开关）垂直居中对齐
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Text(t(ref, labelKey), style: _labelStyle),
             const SizedBox(width: 6),
