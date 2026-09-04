@@ -37,6 +37,7 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/shared/widgets/back_glyph_button.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
+import 'package:visort_flutter/shared/widgets/glyph_icons.dart';
 import 'package:visort_flutter/shared/widgets/middle_ellipsis_text.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
 import 'package:visort_flutter/shared/widgets/rename_dialog.dart';
@@ -954,21 +955,22 @@ class _DetailPageState extends ConsumerState<DetailPage>
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
+                              // 底栏图标全换自绘 Glyph 形制（见 glyph_icons.dart
+                              // 文件头规范）：stock Material 满格 24 包络与
+                              // 顶栏细线家族风格断档。布局盒（IconButton 48）
+                              // 与间距不动，只换图形。
                               IconButton(
-                                icon: const Icon(
-                                  Icons.info_outline,
-                                  color: AppColors.text,
-                                ),
+                                // strokeWidth 1.7：底栏黑底高对比，1.9
+                                // 观感偏重（2026-09 真机反馈）
+                                icon: const InfoGlyphIcon(strokeWidth: 1.7),
                                 tooltip: t(ref, 'photo_details'),
                                 onPressed: _toggleDetails,
                               ),
                               // 回收站视图无收藏（系统相册式，网格批量栏同规则）
                               if (!file.isTrashed)
                                 IconButton(
-                                  icon: Icon(
-                                    file.isFavorite
-                                        ? Icons.favorite
-                                        : Icons.favorite_border,
+                                  icon: HeartGlyphIcon(
+                                    filled: file.isFavorite,
                                     color: file.isFavorite
                                         ? AppColors.danger
                                         : AppColors.text,
@@ -983,8 +985,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                 ),
                               // 垃圾桶挪到收藏右边（原先在最右；腾出原位放 ⋮）
                               IconButton(
-                                icon: const Icon(
-                                  Icons.delete_outline,
+                                icon: const TrashGlyphIcon(
                                   color: AppColors.danger,
                                 ),
                                 tooltip: t(ref, 'delete_photo'),
@@ -999,13 +1000,13 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                     ms: file.dateTrashedMs,
                                   ),
                                 ),
-                              // 回收站恢复按钮
+                              // 回收站恢复按钮：跑道形撤回图标（删除
+                              // toast 同款图形，2026-09 用户定稿）。size 24
+                              //（跑道含箭头包络 ~15 > 其他底栏图形 13——
+                              // 28 画布实测显大一圈，缩档后 ≈12.9 同档）。
                               if (file.isTrashed)
                                 IconButton(
-                                  icon: const Icon(
-                                    Icons.restore,
-                                    color: AppColors.accent,
-                                  ),
+                                  icon: const UndoTrackGlyphIcon(size: 24),
                                   tooltip: t(ref, 'action_restore'),
                                   onPressed: _restoreCurrent,
                                 ),
@@ -1017,10 +1018,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
                               if (!file.isTrashed)
                                 IconButton(
                                   key: _viewerMenuKey,
-                                  icon: const Icon(
-                                    Icons.more_vert,
-                                    color: AppColors.text,
-                                  ),
+                                  icon: const MoreVertGlyphIcon(),
                                   tooltip: t(ref, 'gallery_manage'),
                                   onPressed: _showViewerMenu,
                                 ),
@@ -2074,74 +2072,8 @@ class _DetailPageState extends ConsumerState<DetailPage>
   }
 }
 
-/// 跑道形撤回图标（自绘）：上/下两条直线 + 两端半圆弧的体育场跑道
-/// 轮廓，开放于左侧——路径从左下起（底线左端）→ 底直线 → 右端半圆弧
-/// → 顶直线 → 左上止，箭头在左上端指向行进方向（左）。线条风格同
-/// BackGlyphButton 自绘箭头（stroke 圆帽圆角）。
-class _UndoTrackIcon extends StatelessWidget {
-  const _UndoTrackIcon({this.size = 28});
-
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(
-      // 28px 画布（24 视口 × 28 画布，同 BackGlyphIcon 形制）：视觉分量
-      // 与顶栏返回/选项按钮一致（2026-09 用户要求）。
-      size: Size.square(size),
-      painter: _UndoTrackPainter(),
-    );
-  }
-}
-
-class _UndoTrackPainter extends CustomPainter {
-  const _UndoTrackPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.save();
-    canvas.scale(size.width / 24);
-    final paint = Paint()
-      ..color = AppColors.accent
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.9
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    // 几何（24 视口，形制对齐 BackGlyphIcon：stroke 1.9、字形 ~13×11）。
-    final yTop = 7.2, yBottom = 18.0; // 字形高 10.8 ≈ 返回箭头 11
-    final r = (yBottom - yTop) / 2; // 端弧半径 = 半高（两端正好半圆）
-    final cy = (yTop + yBottom) / 2;
-    const arcRightCx = 12.0; // 右弧圆心；最右缘 17.4 对齐返回横线右端
-    const xLeft = 6.4; // 跑道开口端（左）x
-
-    final track = Path()
-      ..moveTo(xLeft, yBottom) // 左下起点
-      ..lineTo(arcRightCx, yBottom) // 底直线 →
-      ..arcTo(
-        // 右端半圆：底部起经最右点到顶部（视觉逆时针）。
-        Rect.fromCircle(center: Offset(arcRightCx, cy), radius: r),
-        pi / 2,
-        -pi,
-        false,
-      )
-      ..lineTo(xLeft, yTop); // 顶直线 →（弧后笔已在右弧顶端）
-
-    // 箭头：尖在 (tipX, yTop) 指向左（行进方向），两翼后张。
-    const tipX = 4.2, wing = 2.6;
-    final arrow = Path()
-      ..moveTo(tipX + wing, yTop - wing)
-      ..lineTo(tipX, yTop)
-      ..lineTo(tipX + wing, yTop + wing);
-
-    canvas.drawPath(track, paint);
-    canvas.drawPath(arrow, paint);
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(_UndoTrackPainter oldDelegate) => false;
-}
+/// 跑道形撤回图标已上收为共享组件 UndoTrackGlyphIcon（glyph_icons.dart；
+/// 回收站批量栏「恢复」操作复用同款图形，size 22 缩小档）。
 
 /// 大图删除结果气泡：文案 + 撤回按钮（主题黄绿 undo icon）。
 ///
@@ -2248,7 +2180,7 @@ class _DeleteToastViewState extends State<_DeleteToastView>
                       borderRadius: BorderRadius.circular(6),
                       child: const Padding(
                         padding: EdgeInsets.symmetric(horizontal: 5, vertical: 3),
-                        child: _UndoTrackIcon(size: 28),
+                        child: UndoTrackGlyphIcon(size: 28),
                       ),
                     ),
                   ],

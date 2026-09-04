@@ -32,6 +32,7 @@ import 'package:visort_flutter/ui/screens/app_shell_android.dart'
 import 'package:visort_flutter/shared/widgets/app_bar_title.dart';
 import 'package:visort_flutter/shared/widgets/back_glyph_button.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
+import 'package:visort_flutter/shared/widgets/glyph_icons.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
 import 'package:visort_flutter/shared/widgets/rename_dialog.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
@@ -507,9 +508,22 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           ),
           actions: _selectMode
               ? [
-                  IconButton(
-                    icon: const Icon(Icons.select_all),
-                    tooltip: t(ref, 'select_all'),
+                  // 全选（自绘 Glyph 形制，见 glyph_icons.dart 文件头规范）：
+                  // dx +12 = 挤向右侧 ⋮（首页搜索按钮 dx+12.75 同构——
+                  // 左按钮贴右按钮、右按钮锚定屏缘 16dp 不动）。未调图形
+                  // 间隙 ~39dp（全选框包络 13.7 vs ⋮ 窄条 3.8），+12 后
+                  // ~27dp；顶栏基准 22dp，保守初值待真机复测回调
+                  //（首页同款调校历经 34.2→22 五轮真机反馈）。
+                  Transform.translate(
+                    offset: const Offset(12, 0),
+                    child: IconButton(
+                      // 框内勾 = 选择状态指示：≥1 项被勾选才显示（空框 =
+                      // 一项没勾，2026-09 用户定稿）。_selectedIds 是 State
+                      // 字段，勾/取消 setState 后此处随 build 刷新。
+                      icon: SelectAllGlyphIcon(
+                        checked: _selectedIds.isNotEmpty,
+                      ),
+                      tooltip: t(ref, 'select_all'),
                     // toggle：当前已全选（已加载页全部在选）→ 清空；否则全选。
                     // 判定与全选同用 photos（已加载页），语义自洽；未加载页
                     // 不参与，与全选动作的范围一致。
@@ -531,21 +545,25 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                         _syncSelection();
                       });
                     },
+                    ),
                   ),
                   // 勾选态右上：普通相册/收藏视图换 ⋮ 选项菜单（首页 ⋮ 同款），
                   // 复制到相册/移至相册/重命名入口；系统返回手势已可退出勾选态，
                   // 不再放「取消」叉号。回收站视图保留叉号——回收站项复制/移动/
                   // 重命名均无意义，菜单无项可放。
+                  // ⋮/✕ 均换自绘 Glyph（stock 满格 24 与左侧细线全选框风格
+                  // 断档）；⋮ 不做 Transform——窄条图形右缘距屏 ≈16dp，
+                  // 与内容区右缘对齐规则天然达标。
                   if (widget.trashedOnly)
                     IconButton(
-                      icon: const Icon(Icons.close),
+                      icon: const CloseGlyphIcon(),
                       tooltip: t(ref, 'batch_cancel'),
                       onPressed: _exitSelectMode,
                     )
                   else
                     IconButton(
                       key: _menuBtnKey,
-                      icon: const Icon(Icons.more_vert, color: AppColors.text),
+                      icon: const MoreVertGlyphIcon(),
                       tooltip: t(ref, 'gallery_manage'),
                       onPressed: _showBatchMenu,
                     ),
@@ -847,11 +865,21 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
 
   Widget _buildBatchBar(GalleryState gallery) {
     final enabled = _selectedIds.isNotEmpty && !_batchProcessing;
-    Widget op(IconData icon, String label, Color color, VoidCallback? onTap) =>
+    // icon 为 Widget（自绘 Glyph 与 Material 并存：恢复项用跑道形撤回
+    // 图标 UndoTrackGlyphIcon——与删除 toast 撤回按钮同款图形，size 22
+    // 缩小档（批量栏图标位 18dp，细线图形按包络补偿放大画布；
+    // 2026-09 用户定稿）；其余 Material 项维持 18。
+    // 图标统一 dy +1.2 光学补偿：图标几何居中而 CJK 文字视觉重心低
+    // ~1.4dp（AppBarTitleText 同实证），不补偿则图标显高、文字沉底
+    //——行内所有元素（图标/文字）视觉水平居中共线（2026-09 规范）。
+    Widget op(Widget icon, String label, Color color, VoidCallback? onTap) =>
         Expanded(
           child: TextButton.icon(
             onPressed: enabled ? onTap : null,
-            icon: Icon(icon, size: 18),
+            icon: Transform.translate(
+              offset: const Offset(0, 1.2),
+              child: icon,
+            ),
             label: Text(
               label,
               style: const TextStyle(fontSize: 12),
@@ -862,13 +890,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     final ops = widget.trashedOnly
         ? [
             op(
-              Icons.restore,
+              const UndoTrackGlyphIcon(size: 22),
               t(ref, 'action_restore'),
               AppColors.accent,
               _runBatchRestore,
             ),
             op(
-              Icons.delete_forever,
+              const Icon(Icons.delete_forever, size: 18),
               t(ref, 'delete_permanently'),
               AppColors.danger,
               _runBatchDelete,
@@ -877,13 +905,13 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
         : widget.favoritesOnly
         ? [
             op(
-              Icons.favorite_border,
+              const Icon(Icons.favorite_border, size: 18),
               t(ref, 'action_unfavorite'),
               AppColors.accent,
               _runBatchUnfavorite,
             ),
             op(
-              Icons.delete_outline,
+              const Icon(Icons.delete_outline, size: 18),
               t(ref, 'delete_photo'),
               AppColors.danger,
               _runBatchTrash,
@@ -895,19 +923,19 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
             // 已收藏保持）。回收藏视图不显示收藏（trashedOnly 分支）。
             _selectedAllFavorited(gallery)
                 ? op(
-                    Icons.favorite_border,
+                    const Icon(Icons.favorite_border, size: 18),
                     t(ref, 'action_unfavorite'),
                     AppColors.accent,
                     _runBatchUnfavorite,
                   )
                 : op(
-                    Icons.favorite_border,
+                    const Icon(Icons.favorite_border, size: 18),
                     t(ref, 'action_favorite'),
                     AppColors.accent,
                     _runBatchFavorite,
                   ),
             op(
-              Icons.delete_outline,
+              const Icon(Icons.delete_outline, size: 18),
               t(ref, 'delete_photo'),
               AppColors.danger,
               _runBatchTrash,

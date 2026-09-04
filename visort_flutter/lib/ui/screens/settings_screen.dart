@@ -21,6 +21,7 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/search/search_index_service.dart';
 import 'package:visort_flutter/shared/widgets/app_bar_title.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
+import 'package:visort_flutter/shared/widgets/glyph_icons.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/screens/app_shell_android.dart'
@@ -118,10 +119,11 @@ class SettingsScreen extends ConsumerWidget {
               // 图片删除提醒（仅安卓：大图删除是安卓相册路径）：关闭后
               // 大图界面删除不再弹应用内确认 sheet，直接移入回收站（仍
               // 可恢复；回收站内「彻底删除」恒确认，不受此开关影响）。
+              // 描述文案收纳进 ⓘ 弹窗（2026-09 用户定稿，行内不再常驻）。
               if (Platform.isAndroid)
                 _SwitchRow(
                   label: t(ref, 'settings_delete_confirm'),
-                  note: t(ref, 'settings_delete_confirm_note'),
+                  info: t(ref, 'settings_delete_confirm_note'),
                   value: config.deleteConfirmEnabled,
                   onChanged: (v) =>
                       _update(ref, deleteConfirmEnabled: v),
@@ -221,54 +223,156 @@ class _SwitchRow extends StatelessWidget {
     required this.label,
     required this.value,
     required this.onChanged,
-    this.note,
+    this.info,
   });
 
   final String label;
-  final String? note;
+
+  /// 说明弹窗内容（已翻译文本）：传了则 label 后显示 ⓘ 按钮，描述
+  /// 不再常驻副行（2026-09 用户定稿：描述收纳进弹窗）。
+  final String? info;
   final bool value;
   final ValueChanged<bool> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    final n = note;
+    final i = info;
     return InkWell(
       onTap: () => onChanged(!value),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Row(
+          // 同一行元素（文字/ⓘ/开关）垂直居中对齐
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Text(label,
+                style: const TextStyle(
+                  color: AppColors.text,
+                  fontFamily: 'Space Mono', height: 1.2,
+                  fontFamilyFallback: AppFonts.cjkFallback,
+                  fontSize: 14,
+                )),
+            if (i != null) ...[
+              const SizedBox(width: 6),
+              _InfoHintButton(title: label, body: i),
+            ],
+            const Spacer(),
+            Switch(
+              value: value,
+              activeColor: AppColors.accent,
+              onChanged: onChanged,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 行内 ⓘ 说明按钮（设置行 label 文字后）：点击从按钮正下方弹簧展开
+/// 小说明面板（与设置页选择器菜单 / 选项面板同一下拉家族）。
+/// 图形与顶栏说明按钮同一个 InfoGlyphIcon（含 accent 顶点，stroke 1.7
+/// 降档同款）；点击区 32×32——不用 IconButton（48 盒会撑破行内布局，
+/// 此处非 bar 按钮）。嵌在外层整行 InkWell 内：内层手势在竞技场胜出，
+/// 点 ⓘ 不会误触开关。
+class _InfoHintButton extends StatelessWidget {
+  const _InfoHintButton({required this.title, required this.body});
+
+  final String title;
+  final String body;
+
+  /// 点击 → 按钮正下方弹簧展开说明面板（锚点约定与 ViewOptionsToggle
+  /// 选项面板一致：弹簧起点 = 按钮中心 × 面板顶边，面板右缘离按钮
+  /// 右缘 8，越屏左移钳制，240 定宽）。
+  void _open(BuildContext context) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final pos = box.localToGlobal(Offset.zero);
+    final screen = MediaQuery.sizeOf(context);
+    // 小弹窗 200 定宽（240 占屏 2/3，观感横跨半屏——真机反馈）。
+    const menuWidth = 200.0;
+    const edgeMargin = 20.0;
+    final buttonCx = pos.dx + box.size.width / 2;
+    showSpringPopupFromAnchor<void>(
+      context: context,
+      barrierLabel: 'note_info',
+      // 弹簧起点 = 按钮中心 × 面板顶边：面板自按钮正下方长出来。
+      anchorGlobalDx: buttonCx,
+      anchorGlobalDy: pos.dy + box.size.height + 4,
+      // 面板水平中心对准按钮中心（按钮垂直于面板中心位置）。理想
+      // 位置直接算中心；仅在两侧间隙 < 20dp 的贴边风险时 clamp 钳制
+      //——按钮靠左 → 离左间隙小、离右间隙大，两边都不贴屏（直觉
+      // 定位，2026-09 用户定稿）。
+      menuLeft: (buttonCx - menuWidth / 2).clamp(
+        edgeMargin,
+        (screen.width - menuWidth - edgeMargin)
+            .clamp(edgeMargin, double.infinity),
+      ),
+      menuTop: pos.dy + box.size.height + 4,
+      menuWidth: menuWidth,
+      menuBuilder: (_) => _NoteInfoPanel(title: title, body: body),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 32,
+      height: 32,
+      child: InkWell(
+        onTap: () => _open(context),
+        // dy +1.2 光学补偿：CJK 字形视觉重心低于几何中心 ~1.4dp
+        //（AppBarTitleText 同实证），ⓘ 几何居中会显高于文字视觉
+        // 中线——下移贴齐（行内元素垂直居中对齐的视觉完成态）。
+        child: Center(
+          child: Transform.translate(
+            offset: const Offset(0, 1.2),
+            child: const InfoGlyphIcon(strokeWidth: 1.7),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 说明面板：标题 + 一段描述，从 ⓘ 按钮正下方弹簧展开（设置选择器
+/// 菜单同族卡片：surfaceElevated / 12 圆角 / elevation 3）。
+class _NoteInfoPanel extends StatelessWidget {
+  const _NoteInfoPanel({required this.title, required this.body});
+
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    const bodyStyle = TextStyle(
+      fontFamily: 'Space Mono',
+      height: 1.6,
+      fontFamilyFallback: AppFonts.cjkFallback,
+      fontSize: 12,
+      color: AppColors.muted,
+    );
+    return Material(
+      color: AppColors.surfaceElevated,
+      elevation: 3,
+      borderRadius: BorderRadius.circular(12),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        // 四周留白收敛（20 → 14，2026-09 真机反馈偏空）
+        padding: const EdgeInsets.all(14),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Text(label,
-                    style: const TextStyle(
-                      color: AppColors.text,
-                      fontFamily: 'Space Mono', height: 1.2,
-                      fontFamilyFallback: AppFonts.cjkFallback,
-                      fontSize: 14,
-                    )),
-                const Spacer(),
-                Switch(
-                  value: value,
-                  activeColor: AppColors.accent,
-                  onChanged: onChanged,
-                ),
-              ],
-            ),
-            if (n != null) ...[
-              const SizedBox(height: 2),
-              Text(
-                n,
-                style: const TextStyle(
-                  fontFamily: 'Space Mono',
-                  height: 1.3,
-                  fontFamilyFallback: AppFonts.cjkFallback,
-                  color: AppColors.muted,
-                  fontSize: 11,
-                ),
+            Text(
+              title,
+              style: bodyStyle.copyWith(
+                color: AppColors.text,
+                fontWeight: FontWeight.w700,
               ),
-            ],
+            ),
+            const SizedBox(height: 6),
+            Text(body, style: bodyStyle),
           ],
         ),
       ),
@@ -820,6 +924,7 @@ class _MlSectionState extends ConsumerState<_MlSection> {
   /// 开关逻辑组 = 一个 child（_SettingsCard 在 children 间自动插分隔线，
   /// 注释必须并入组内——拍平成独立 child 会让线穿过开关与其注释之间，
   /// 视觉混乱）。结构与 _CacheSection 的行组一致。
+  /// 描述文案（noteKey）2026-09 收纳进 ⓘ 弹窗，不再常驻副行。
   Widget _switchGroup({
     required String labelKey,
     required String noteKey,
@@ -830,22 +935,22 @@ class _MlSectionState extends ConsumerState<_MlSection> {
       onTap: () => onChanged(!value),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
+          // 同一行元素（文字/ⓘ/开关）垂直居中对齐
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Row(
-              children: [
-                Text(t(ref, labelKey), style: _labelStyle),
-                const Spacer(),
-                Switch(
-                  value: value,
-                  activeColor: AppColors.accent,
-                  onChanged: onChanged,
-                ),
-              ],
+            Text(t(ref, labelKey), style: _labelStyle),
+            const SizedBox(width: 6),
+            _InfoHintButton(
+              title: t(ref, labelKey),
+              body: t(ref, noteKey),
             ),
-            const SizedBox(height: 2),
-            Text(t(ref, noteKey), style: _noteStyle),
+            const Spacer(),
+            Switch(
+              value: value,
+              activeColor: AppColors.accent,
+              onChanged: onChanged,
+            ),
           ],
         ),
       ),

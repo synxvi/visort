@@ -34,6 +34,7 @@ import 'package:visort_flutter/shared/widgets/resume_button.dart';
 import 'package:visort_flutter/shared/widgets/spring_popup.dart'
     show showCenterDialog;
 import 'package:visort_flutter/shared/widgets/app_bar_title.dart';
+import 'package:visort_flutter/shared/widgets/glyph_icons.dart';
 import 'package:visort_flutter/shared/widgets/view_options_toggle.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/router.dart';
@@ -594,7 +595,8 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
           Transform.translate(
             offset: const Offset(11.6, 0),
             child: IconButton(
-              icon: const _HelpGlyphIcon(),
+              // strokeWidth 1.7（2026-09 真机反馈降档试看；默认 1.9）
+              icon: const InfoGlyphIcon(strokeWidth: 1.7),
               tooltip: t(ref, 'quick_sort_tips'),
               onPressed: _showTipsDialog,
             ),
@@ -2560,53 +2562,5 @@ class _QuickSortTipsDialog extends ConsumerWidget {
   }
 }
 
-/// 自绘「ⓘ」图标（快速整理页说明按钮用）：圆圈 + 倒感叹号，顶点用
-/// 主题 accent 黄绿提亮（用户定稿 2026-09）。
-///
-/// 形制对齐顶栏三图形（24 基准视口、stroke 1.9 圆头）：细线圆圈的
-/// 笔画密度低于搜索/筛选的多笔图形，数学包络同宽仍显小（用户实测
-/// 反馈）——圆圈放大到外缘 ~13.1，与侧栏图形（14）同档，视觉分量
-/// 对齐。
-class _HelpGlyphIcon extends StatelessWidget {
-  const _HelpGlyphIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(
-      size: const Size.square(28),
-      painter: _HelpGlyphPainter(),
-    );
-  }
-}
-
-class _HelpGlyphPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.save();
-    canvas.scale(size.width / 24);
-    final stroke = Paint()
-      ..color = AppColors.text
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.9
-      ..strokeCap = StrokeCap.round;
-    // 外圈：中心 (12,12) 半径 5.6，外缘直径 5.6×2+1.9 ≈ 13.1
-    //（Material info_outline 同比例：圆径 16/24 视口）。
-    canvas.drawCircle(const Offset(12, 12), 5.6, stroke);
-    // 倒感叹号：顶点 = accent 实心小圆（唯一彩色点缀）；短竖线下引，
-    // 点/线间留空隙（i 的字面结构）。
-    canvas.drawCircle(
-      const Offset(12, 9.4),
-      1.15,
-      Paint()..color = AppColors.accent,
-    );
-    canvas.drawLine(
-      const Offset(12, 12.1),
-      const Offset(12, 14.7),
-      stroke,
-    );
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(covariant _HelpGlyphPainter oldDelegate) => false;
-}
+/// 自绘「ⓘ」图标已上收为共享组件 InfoGlyphIcon（glyph_icons.dart，
+/// 2026-09 看图器底栏照片详情按钮复用同款；accent 顶点定稿保留）。
