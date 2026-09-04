@@ -32,6 +32,7 @@ import 'package:visort_flutter/ui/screens/app_shell_android.dart'
 import 'package:visort_flutter/shared/widgets/app_bar_title.dart';
 import 'package:visort_flutter/shared/widgets/back_glyph_button.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
+import 'package:visort_flutter/shared/widgets/glyph_icons.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
 import 'package:visort_flutter/shared/widgets/rename_dialog.dart';
 import 'package:visort_flutter/shared/widgets/toast.dart';
@@ -507,9 +508,17 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
           ),
           actions: _selectMode
               ? [
-                  IconButton(
-                    icon: const Icon(Icons.select_all),
-                    tooltip: t(ref, 'select_all'),
+                  // 全选（自绘 Glyph 形制，见 glyph_icons.dart 文件头规范）：
+                  // dx +12 = 挤向右侧 ⋮（首页搜索按钮 dx+12.75 同构——
+                  // 左按钮贴右按钮、右按钮锚定屏缘 16dp 不动）。未调图形
+                  // 间隙 ~39dp（全选框包络 13.7 vs ⋮ 窄条 3.8），+12 后
+                  // ~27dp；顶栏基准 22dp，保守初值待真机复测回调
+                  //（首页同款调校历经 34.2→22 五轮真机反馈）。
+                  Transform.translate(
+                    offset: const Offset(12, 0),
+                    child: IconButton(
+                      icon: const SelectAllGlyphIcon(),
+                      tooltip: t(ref, 'select_all'),
                     // toggle：当前已全选（已加载页全部在选）→ 清空；否则全选。
                     // 判定与全选同用 photos（已加载页），语义自洽；未加载页
                     // 不参与，与全选动作的范围一致。
@@ -531,21 +540,25 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                         _syncSelection();
                       });
                     },
+                    ),
                   ),
                   // 勾选态右上：普通相册/收藏视图换 ⋮ 选项菜单（首页 ⋮ 同款），
                   // 复制到相册/移至相册/重命名入口；系统返回手势已可退出勾选态，
                   // 不再放「取消」叉号。回收站视图保留叉号——回收站项复制/移动/
                   // 重命名均无意义，菜单无项可放。
+                  // ⋮/✕ 均换自绘 Glyph（stock 满格 24 与左侧细线全选框风格
+                  // 断档）；⋮ 不做 Transform——窄条图形右缘距屏 ≈16dp，
+                  // 与内容区右缘对齐规则天然达标。
                   if (widget.trashedOnly)
                     IconButton(
-                      icon: const Icon(Icons.close),
+                      icon: const CloseGlyphIcon(),
                       tooltip: t(ref, 'batch_cancel'),
                       onPressed: _exitSelectMode,
                     )
                   else
                     IconButton(
                       key: _menuBtnKey,
-                      icon: const Icon(Icons.more_vert, color: AppColors.text),
+                      icon: const MoreVertGlyphIcon(),
                       tooltip: t(ref, 'gallery_manage'),
                       onPressed: _showBatchMenu,
                     ),

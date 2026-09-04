@@ -37,6 +37,7 @@ import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/shared/widgets/back_glyph_button.dart';
 import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
+import 'package:visort_flutter/shared/widgets/glyph_icons.dart';
 import 'package:visort_flutter/shared/widgets/middle_ellipsis_text.dart';
 import 'package:visort_flutter/shared/widgets/non_modal_menu.dart';
 import 'package:visort_flutter/shared/widgets/rename_dialog.dart';
@@ -954,21 +955,20 @@ class _DetailPageState extends ConsumerState<DetailPage>
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
+                              // 底栏图标全换自绘 Glyph 形制（见 glyph_icons.dart
+                              // 文件头规范）：stock Material 满格 24 包络与
+                              // 顶栏细线家族风格断档。布局盒（IconButton 48）
+                              // 与间距不动，只换图形。
                               IconButton(
-                                icon: const Icon(
-                                  Icons.info_outline,
-                                  color: AppColors.text,
-                                ),
+                                icon: const InfoGlyphIcon(),
                                 tooltip: t(ref, 'photo_details'),
                                 onPressed: _toggleDetails,
                               ),
                               // 回收站视图无收藏（系统相册式，网格批量栏同规则）
                               if (!file.isTrashed)
                                 IconButton(
-                                  icon: Icon(
-                                    file.isFavorite
-                                        ? Icons.favorite
-                                        : Icons.favorite_border,
+                                  icon: HeartGlyphIcon(
+                                    filled: file.isFavorite,
                                     color: file.isFavorite
                                         ? AppColors.danger
                                         : AppColors.text,
@@ -983,8 +983,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                 ),
                               // 垃圾桶挪到收藏右边（原先在最右；腾出原位放 ⋮）
                               IconButton(
-                                icon: const Icon(
-                                  Icons.delete_outline,
+                                icon: const TrashGlyphIcon(
                                   color: AppColors.danger,
                                 ),
                                 tooltip: t(ref, 'delete_photo'),
@@ -1002,8 +1001,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
                               // 回收站恢复按钮
                               if (file.isTrashed)
                                 IconButton(
-                                  icon: const Icon(
-                                    Icons.restore,
+                                  icon: const RestoreGlyphIcon(
                                     color: AppColors.accent,
                                   ),
                                   tooltip: t(ref, 'action_restore'),
@@ -1017,10 +1015,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
                               if (!file.isTrashed)
                                 IconButton(
                                   key: _viewerMenuKey,
-                                  icon: const Icon(
-                                    Icons.more_vert,
-                                    color: AppColors.text,
-                                  ),
+                                  icon: const MoreVertGlyphIcon(),
                                   tooltip: t(ref, 'gallery_manage'),
                                   onPressed: _showViewerMenu,
                                 ),
