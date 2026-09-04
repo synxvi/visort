@@ -37,6 +37,8 @@ import 'group_type.dart';
 import 'sectioned_sliver_list.dart';
 import 'selected_files.dart';
 import 'selection_state.dart';
+import 'swipe_selection_wrapper.dart';
+import 'swipe_to_select_helper.dart';
 
 /// 相册网格主组件（ente Gallery 移植）。
 ///
@@ -96,6 +98,14 @@ class Gallery extends StatefulWidget {
   final ValueChanged<List<MsImageInfo>>? onGroupHeaderToggle;
   final ValueChanged<List<MsImageInfo>>? onGroupHeaderLongPress;
 
+  /// 滑动多选增量回调（ente SwipeToSelectHelper 适配）：拖选产生的
+  /// （选中，取消）增量交外层更新选择真源（visort 真源在 screen 层的
+  /// _selectedIds，不能由 Gallery 直改 selectedFiles——批量栏会不启用）。
+  /// 与 [selectedFiles] 同时非 null 才启用滑动多选；逐格触觉由 Gallery 层
+  /// helper 触发，外层勿重复震动。
+  final void Function(Set<MsImageInfo> toSelect, Set<MsImageInfo> toUnselect)?
+  onSelectionDelta;
+
   final ScrollController? scrollController;
 
   const Gallery({
@@ -118,6 +128,7 @@ class Gallery extends StatefulWidget {
     this.onFileLongPress,
     this.onGroupHeaderToggle,
     this.onGroupHeaderLongPress,
+    this.onSelectionDelta,
     super.key,
   });
 
@@ -141,6 +152,13 @@ class GalleryState extends State<Gallery> {
   double? groupHeaderExtent;
   GalleryGroups? galleryGroups;
   InheritedGalleryBoundaries? _boundariesProvider;
+
+  // ── 滑动多选（ente 同款）：helper 随分组重建（allFiles 与渲染序列严格
+  // 同步，否则 index 错位）；激活标志驱动 physics 切换 NeverScroll。──
+  SwipeToSelectHelper? _swipeHelper;
+  final _swipeActiveNotifier = ValueNotifier<bool>(false);
+  bool get _swipeSelectionEnabled =>
+      widget.onSelectionDelta != null && widget.selectedFiles != null;
 
   @override
   void initState() {
@@ -193,6 +211,11 @@ class GalleryState extends State<Gallery> {
       // 新增展示字段时须同步扩白名单，否则会被此短路吞掉刷新。
       needsRegroup = !_sameFileSequence(oldWidget.allFiles, widget.allFiles);
     }
+    // 滑动多选开关或选择器实例切换（enabled 边沿）→ 重建 helper。
+    if (oldWidget.onSelectionDelta != widget.onSelectionDelta ||
+        !identical(oldWidget.selectedFiles, widget.selectedFiles)) {
+      _updateSwipeHelper();
+    }
     if (needsRegroup && mounted) {
       _updateGalleryGroups();
     }
@@ -229,6 +252,8 @@ class GalleryState extends State<Gallery> {
     if (widget.scrollController == null) _scrollController.dispose();
     scrollBarInUseNotifier.dispose();
     _headerHeightNotifier.dispose();
+    _swipeHelper?.dispose();
+    _swipeActiveNotifier.dispose();
     super.dispose();
   }
 
@@ -257,9 +282,29 @@ class GalleryState extends State<Gallery> {
       onGroupHeaderToggle: widget.onGroupHeaderToggle,
       onGroupHeaderLongPress: widget.onGroupHeaderLongPress,
     );
+    _updateSwipeHelper();
     if (callSetState && mounted) {
       setState(() {});
     }
+  }
+
+  /// 滑动多选 helper 与渲染序列同步重建（ente _updateSwipeHelper 同款）。
+  void _updateSwipeHelper() {
+    final delta = widget.onSelectionDelta;
+    final selectedFiles = widget.selectedFiles;
+    _swipeHelper?.dispose();
+    if (delta == null || selectedFiles == null) {
+      _swipeHelper = null;
+      return;
+    }
+    // 不重置 _swipeActiveNotifier：didChangeDependencies 等触发重建时若正
+    // 拖选中，notifier 保持 true（physics 维持禁滚动），新 helper 未激活
+    // → tile 的 postFrame 兜底会以手指所在 tile 无缝重启会话，比中断好。
+    _swipeHelper = SwipeToSelectHelper(
+      allFiles: _allGalleryFiles,
+      selectedFiles: selectedFiles,
+      onSelectionDelta: delta,
+    );
   }
 
   @override
@@ -292,7 +337,7 @@ class GalleryState extends State<Gallery> {
             (widget.crossAxisCount - 1) * GalleryGroups.spacing) /
         widget.crossAxisCount;
 
-    final grid = GalleryContextState(
+    Widget grid = GalleryContextState(
       sortOrderAsc: _sortOrderAsc,
       inSelectionMode: widget.inSelectionMode,
       hideFavoriteBadge: widget.hideFavoriteBadge,
@@ -315,21 +360,24 @@ class GalleryState extends State<Gallery> {
           : Stack(
               clipBehavior: Clip.none,
               children: [
-                CustomScrollView(
-                  physics: const BouncingScrollPhysics(),
-                  controller: _scrollController,
-                  slivers: [
-                    SectionedListSliver<dynamic>(sectionLayouts: groups.groupLayouts),
-                    // [visort 追加] edge-to-edge：尾部补手势条 inset 占位——
-                    // 配合外层 SafeArea(bottom:false)，末行可滚进手势条区
-                    // （照片穿过手势条，系统相册/ente 行为），停稳时不被遮挡。
-                    SliverToBoxAdapter(
-                      child: SizedBox(
-                        height: MediaQuery.viewPaddingOf(context).bottom,
+                // 滑动多选激活期间禁滚动（ente 同款 physics 切换；active
+                // 仅在拖选起止翻转，重建成本可忽略）。
+                _swipeSelectionEnabled
+                    ? ValueListenableBuilder<bool>(
+                        valueListenable: _swipeActiveNotifier,
+                        builder: (context, active, _) => CustomScrollView(
+                          physics: active
+                              ? const NeverScrollableScrollPhysics()
+                              : const BouncingScrollPhysics(),
+                          controller: _scrollController,
+                          slivers: _gridSlivers(groups),
+                        ),
+                      )
+                    : CustomScrollView(
+                        physics: const BouncingScrollPhysics(),
+                        controller: _scrollController,
+                        slivers: _gridSlivers(groups),
                       ),
-                    ),
-                  ],
-                ),
                 if (groups.groupType.showGroupHeader())
                   PinnedGroupHeader(
                     scrollController: _scrollController,
@@ -382,11 +430,40 @@ class GalleryState extends State<Gallery> {
             ),
     );
 
+    // 滑动多选：wrapper 承担激活判定（长按拖动 / 勾选态水平轻扫）、激活期
+    // physics 切换的消费在上方 CustomScrollView、自动滚动与合成事件；并向
+    // tile 下发 helper（GallerySwipeHelper）。
+    if (_swipeSelectionEnabled) {
+      grid = SwipeSelectionWrapper(
+        swipeHelper: _swipeHelper,
+        selectedFiles: widget.selectedFiles,
+        isEnabled: true,
+        swipeActiveNotifier: _swipeActiveNotifier,
+        scrollController: _scrollController,
+        child: grid,
+      );
+    }
+
     // 多选时向下提供 SelectionState（外层未包时自足；外层已包则内层遮蔽同实例）。
     final selectedFiles = widget.selectedFiles;
     return selectedFiles == null
         ? grid
         : SelectionState(selectedFiles: selectedFiles, child: grid);
+  }
+
+  /// 网格 slivers（分组网格 + 手势条 inset 占位），供 physics 两分支复用。
+  List<Widget> _gridSlivers(GalleryGroups groups) {
+    return [
+      SectionedListSliver<dynamic>(sectionLayouts: groups.groupLayouts),
+      // [visort 追加] edge-to-edge：尾部补手势条 inset 占位——
+      // 配合外层 SafeArea(bottom:false)，末行可滚进手势条区
+      // （照片穿过手势条，系统相册/ente 行为），停稳时不被遮挡。
+      SliverToBoxAdapter(
+        child: SizedBox(
+          height: MediaQuery.viewPaddingOf(context).bottom,
+        ),
+      ),
+    ];
   }
 }
 
