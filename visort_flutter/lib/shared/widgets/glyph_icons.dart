@@ -19,10 +19,11 @@
 // 菜单行内小图标（16/18/20px 语义列表图标）不属于本规范，维持 Material。
 //
 // 线宽变体（2026-09 真机反馈）：看图器底栏纯黑背景高对比，同 1.9 线宽
-// 观感偏重——底栏场景（心形/垃圾桶/恢复/ⓘ）用 **stroke 1.7**；顶栏场景
+// 观感偏重——底栏场景（心形/垃圾桶/ⓘ）用 **stroke 1.7**；顶栏场景
 // 维持基准 1.9（ⓘ 说明按钮 strokeWidth 参数默认 1.9，底栏传 1.7）。
 // ⋮ 圆点两场景统一 r 1.7（实心点密度高于线，略细于线宽是合理搭配，
-// 参照三线筛选滑点 r1.75 vs 线 1.9 先例）。
+// 参照三线筛选滑点 r1.75 vs 线 1.9 先例）。恢复/撤回 = 跑道形
+// UndoTrackGlyphIcon（stroke 1.9，与 toast 撤回按钮同款同粗细）。
 
 import 'dart:math' show pi;
 
@@ -289,65 +290,9 @@ class _TrashGlyphPainter extends CustomPainter {
       oldDelegate.color != color;
 }
 
-/// 自绘恢复（看图器底栏回收站态）：逆时针大弧 + 左上向箭头翼
-/// （undo 语义；底尖弧与返回箭头的直线 chevron 区分）。
-class RestoreGlyphIcon extends StatelessWidget {
-  const RestoreGlyphIcon({super.key, this.color});
-
-  /// 线色；调用方传语义色（恢复位 AppColors.accent）。
-  final Color? color;
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(
-      size: const Size.square(28),
-      painter: _RestoreGlyphPainter(color),
-    );
-  }
-}
-
-class _RestoreGlyphPainter extends CustomPainter {
-  const _RestoreGlyphPainter(this.color);
-
-  final Color? color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.save();
-    canvas.scale(size.width / 24);
-    // 底栏黑底场景 stroke 1.7（1.9 在纯黑背景观感偏重，2026-09 真机反馈）
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.7
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..color = color ?? AppColors.text;
-    // 大弧：右下 (15.8,16.4) 逆时针经顶部到左下 (8.2,16.4)，
-    // 半径 5.6 → 圆心 (12,12)，弧顶 y 6.4（包络 ≈11 高）
-    final arc = Path()
-      ..moveTo(15.8, 16.4)
-      ..arcToPoint(
-        const Offset(8.2, 16.4),
-        radius: const Radius.circular(5.6),
-        clockwise: false,
-        largeArc: true,
-      );
-    canvas.drawPath(arc, paint);
-    // 箭头翼：终点处逆时针运动切向朝左上，两翼各张开 ~30°
-    final head = Path()
-      ..moveTo(8.2, 16.4)
-      ..lineTo(6.5, 15.9)
-      ..moveTo(8.2, 16.4)
-      ..lineTo(8.0, 14.6);
-    canvas.drawPath(head, paint);
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(_RestoreGlyphPainter oldDelegate) =>
-      oldDelegate.color != color;
-}
-
+/// 自绘恢复（看图器底栏回收站态）：已被跑道形撤回图标 UndoTrackGlyphIcon
+/// 取代（2026-09 用户定稿：恢复 = 删除 toast 撤回同款图形），本类删除。
+///
 /// 跑道形撤回图标（自绘）：上/下两条直线 + 右端半圆弧的体育场跑道
 /// 轮廓，开放于左侧——路径从左下起（底线左端）→ 底直线 → 右端半圆弧
 /// → 顶直线 → 左上止，箭头在左上端指向行进方向（左）。线条风格同

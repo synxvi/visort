@@ -1000,12 +1000,12 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                     ms: file.dateTrashedMs,
                                   ),
                                 ),
-                              // 回收站恢复按钮
+                              // 回收站恢复按钮：跑道形撤回图标（删除
+                              // toast 同款图形，2026-09 用户定稿）——28
+                              // 画布档与其他底栏 Glyph 一致，默认 accent。
                               if (file.isTrashed)
                                 IconButton(
-                                  icon: const RestoreGlyphIcon(
-                                    color: AppColors.accent,
-                                  ),
+                                  icon: const UndoTrackGlyphIcon(),
                                   tooltip: t(ref, 'action_restore'),
                                   onPressed: _restoreCurrent,
                                 ),
