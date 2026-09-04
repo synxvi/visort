@@ -93,6 +93,10 @@ const Map<String, String> stringsEn = {
   'settings_drawer_speed': 'Drawer animation',
   'drawer_speed_fast': 'Fast',
   'drawer_speed_comfortable': 'Comfortable',
+  // 设置-通用：图片删除提醒开关（关闭后大图删除直接进回收站）
+  'settings_delete_confirm': 'Delete confirmation',
+  'settings_delete_confirm_note':
+      'When off, deleting from the photo viewer skips confirmation and moves to trash directly',
   'home_hint_android':
       'Pick a directory. Images will be sorted into subfolders within it.',
   'pick_dir_android': 'Pick Directory',

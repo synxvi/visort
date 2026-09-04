@@ -92,6 +92,9 @@ const Map<String, String> stringsZh = {
   'settings_drawer_speed': '抽屉动画',
   'drawer_speed_fast': '快速',
   'drawer_speed_comfortable': '舒适',
+  // 设置-通用：图片删除提醒开关（关闭后大图删除直接进回收站）
+  'settings_delete_confirm': '图片删除提醒',
+  'settings_delete_confirm_note': '关闭后，在大图界面删除图片不再确认，直接移入回收站',
   'home_hint_android': '选择一个目录，图片将分类到其中的子文件夹。',
   'pick_dir_android': '选择目录',
   'auth_revoked': '目录访问权限已被撤销，请重新选择。',

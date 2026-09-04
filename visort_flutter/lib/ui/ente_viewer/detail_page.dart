@@ -75,10 +75,10 @@ const double _kThumbLineHeight = 44.0;
 /// 每个 item 的固定布局宽度(含间距)。
 const double _kThumbItemExtent = 32.0;
 
-/// 当前(中心)项宽:比普通项(23)大 ~48% = 34（槽 32 内居中溢出渲染）。
+/// 当前(中心)档宽:固定聚焦框外沿 34（含 1.5 边框；item 贴内沿 31）。
 const double _kThumbCenterW = 34.0;
 
-/// 当前项高:比普通项(32)大 ~30% = 42。
+/// 当前(中心)档高:固定聚焦框外沿 42（item 贴内沿 39）。
 const double _kThumbCenterH = 42.0;
 
 /// 普通项宽:正常大小。
@@ -270,7 +270,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
     });
     _selectedIndexNotifier = ValueNotifier(widget.initialIndex);
     _pageController = PageController(initialPage: widget.initialIndex);
-    _thumbScrollCtrl = ScrollController()..addListener(_onThumbScroll);
+    _thumbScrollCtrl = ScrollController(
+      // 初始定位直达目标格（initialIndex × 32，与 _thumbOffsetForCenter
+      // 同公式）：attach 帧即渲染在正确位置——消灭 offset=0 首帧闪现
+      //（打开末尾图片时目标 offset 大，首帧满条图片瞬间跳成右半空白
+      // = 「右半侧从右向左冲走」残影，真机实证）。
+      // _centerThumbOnce 的 jumpTo 保留为兜底（幂等，同值无害）。
+      initialScrollOffset: widget.initialIndex * _kThumbItemExtent,
+    )..addListener(_onThumbScroll);
     _thumbCenterIndex = ValueNotifier<int>(widget.initialIndex);
     // 沉浸模式：进入缩放（双击/双指放大）→ 隐藏顶/底栏/缩略图条；
     // 退出缩放 → 恢复进入前的显示状态（手动全屏过则保持全屏）。
@@ -1135,7 +1142,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
     if (_pageController.hasClients) _pageController.jumpToPage(newCenter);
   }
 
-  /// 缩略图条滚动停止（fling 减速结束）：吸附最近项到正中 + 联动主图。
+  /// 缩略图条滚动停止（fling 减速结束）：吸附兜底（格点物理
+  /// [_ThumbSnapPhysics] 常规路径已落格，此处防御非 ballistic 静止
+  /// 停位）+ 主图联动。
   void _onThumbScrollEnd() {
     if (_popping || _deletingInProgress) return;
     final ctrl = _thumbScrollCtrl;
@@ -1310,12 +1319,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
       _removeCurrentAndAdvance(t(ref, 'deleted'));
       return;
     }
-    // 普通视图：删除 = 移入回收站（与系统相册一致；回收站内可恢复/彻底删除）
-    final confirmed = await _showDeleteSheet(
-      title: t(ref, 'delete_confirm'),
-      desc: t(ref, 'delete_confirm_desc'),
-    );
-    if (confirmed != true) return;
+    // 普通视图：删除 = 移入回收站（与系统相册一致；回收站内可恢复/彻底删除）。
+    // 「图片删除提醒」开关（设置页，默认开）关闭时跳过应用内确认 sheet
+    // 直接执行——移入回收站仍可恢复，且系统层面 trash 仍有兜底确认；
+    // 回收站内的「彻底删除」不受此开关影响（不可恢复操作恒确认）。
+    final confirmed = !ref.read(configProvider).deleteConfirmEnabled ||
+        await _showDeleteSheet(
+          title: t(ref, 'delete_confirm'),
+          desc: t(ref, 'delete_confirm_desc'),
+        );
+    if (!confirmed) return;
     final err = await controller.trashPhoto(current.id);
     if (err != null) {
       // 用户取消系统弹窗是正常动作，静默返回；真实失败才提示
@@ -1325,7 +1338,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
       }
       return;
     }
-    _removeCurrentAndAdvance(t(ref, 'deleted'));
+    // undoPhoto：删除结果气泡带「撤回」（restorePhoto 恢复），仅普通视图
+    // 删除提供——回收站彻底删除不可恢复，不给撤回入口。文案用
+    // 'deleted_label'（已删除）而非 'deleted'（删除，批量/review 共用）。
+    _removeCurrentAndAdvance(t(ref, 'deleted_label'), undoPhoto: current);
   }
 
   /// 恢复当前照片（回收站视图底栏恢复按钮）。
@@ -1618,22 +1634,32 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   /// 删除/恢复成功后从列表移除当前项并跳到下一张（或末张），刷新栏位计数。
   ///
+  /// [undoPhoto] 非空（普通视图删除移入回收站）时结果气泡带「撤回」按钮
+  /// （见 [_showDeleteToast]）；null 走全局 toast（恢复/移动/彻底删除）。
+  ///
   /// 条动画 = 系统相册 PhotoPagerIndicator 同构（RecyclerView ItemAnimator
-  /// 位置动画）：
-  ///  1. 白框（center）立即翻到下一项（推入起点）；
-  ///  2. 被删项原地淡出（FadeTransition），后续项 Transform.translate
-  ///     平滑左移一格补位（位置动画，非 AnimatedList 布局重排——重排会
-  ///     在移除项占槽期间把高亮项排到右边一格 = "跳到第二个又弹回来"）；
+  /// 位置动画）。聚焦框固定在条正中（见 _ThumbLineStrip 固定框层）：
+  ///  1. center 翻到下一项延迟到补位后段（150ms）——B 进框途中才放大
+  ///     （120ms），两条动画同时收尾，不出现「框外先放大再推入」；
+  ///  2. 被删项保持放大态在固定框内原地淡出（框内置空），后续项
+  ///     Transform.translate 平滑左移一格补位（位置动画，非 AnimatedList
+  ///     布局重排——重排会在移除项占槽期间把高亮项排到右边一格 =
+  ///     "跳到第二个又弹回来"）；
   ///  3. 条动画完成（250ms）：数据左移 + center 对齐（同一项，无跳变）；
   ///  4. 主图在旧数据上 animateToPage(next) 滑动（300ms），完成后删数据
   ///     + pixels 校正（同帧）。
-  void _removeCurrentAndAdvance(String message) {
+  void _removeCurrentAndAdvance(String message, {MsImageInfo? undoPhoto}) {
     if (!mounted || _deletingInProgress) return;
     // 最后一张:直接退出,不 setState——否则 viewer 会先 rebuild 成空 Scaffold,
-    // 在 pop 动画期间露出一帧空白。
+    // 在 pop 动画期间露出一帧空白。气泡先挂（root Overlay 独立于路由，pop
+    // 后仍可撤回——controller 层恢复，相册页靠 ContentObserver 自动刷新）。
     if (_files.length <= 1) {
+      if (undoPhoto != null) {
+        _showDeleteToast(message, undoPhoto, 0);
+      } else {
+        toast(context, message);
+      }
       Navigator.pop(context);
-      toast(context, message);
       return;
     }
     final index = _selectedIndexNotifier.value;
@@ -1647,7 +1673,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
     // ─ 条：平移补位动画 ─
     _thumbDeleteIndex = index;
-    _thumbCenterIndex?.value = next; // 白框翻到下一项（推入起点）
+    // center 翻页延迟到补位**后段**（150ms）：立即切会让 B 在框外就完成
+    // 放大（120ms）再推入——放大先于进框，观感错序（真机反馈）。后段
+    // 切换 = B 进框途中放大（150+120 ≈ 补位 250ms 收尾，同时到达），
+    // 被删项全程保持放大态淡出（框内置空观感更强）。_thumbDeleteIndex
+    // 守卫防早到 timer 误切（理论上 300ms 删除窗口挡住连续删除，纯防御）。
+    Future.delayed(const Duration(milliseconds: 150), () {
+      if (mounted && _thumbDeleteIndex == index) {
+        _thumbCenterIndex?.value = next;
+      }
+    });
     unawaited(
       _thumbDeleteAnim.forward(from: 0).then((_) {
         if (!mounted) return;
@@ -1703,7 +1738,92 @@ class _DetailPageState extends ConsumerState<DetailPage>
             if (mounted) setState(() => _swipeLocked = false);
           }),
     );
-    toast(context, message);
+    if (undoPhoto != null) {
+      _showDeleteToast(message, undoPhoto, index);
+    } else {
+      toast(context, message);
+    }
+  }
+
+  // ─────────────── 删除结果气泡（带撤回） ───────────────
+
+  /// 当前删除撤回气泡（同时至多一条：连续删除先移除上一条）。
+  OverlayEntry? _deleteToastEntry;
+
+  /// 大图删除专用结果气泡：文案 + 撤回按钮（主题黄绿 undo icon）。
+  ///
+  /// 与全局 toast 的差异：
+  ///  - 位置：缩略图条**上方**（全局 toast bottomInset+76 压住缩略图条，
+  ///    真机反馈遮挡）；
+  ///  - 带撤回：[onUndo] → restorePhoto 恢复 + 插回列表跳回该张；
+  ///  - 生命周期独立于本页（挂 root Overlay，页面 pop 后 3.5s 内仍可撤回
+  ///    ——最后一张删除场景，恢复后相册页靠 ContentObserver 自动刷新）。
+  void _showDeleteToast(String message, MsImageInfo photo, int removedIndex) {
+    _deleteToastEntry?.remove();
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) => _DeleteToastView(
+        message: message,
+        onUndo: () {
+          // 先取 container 再 remove：remove 即 deactivate 气泡子树，
+          // 之后 ctx 失效（containerOf/inherited 查找会 assert）。
+          final container = ProviderScope.containerOf(ctx, listen: false);
+          entry.remove();
+          if (_deleteToastEntry == entry) _deleteToastEntry = null;
+          _undoDelete(container, photo, removedIndex);
+        },
+      ),
+    );
+    _deleteToastEntry = entry;
+    Overlay.of(context, rootOverlay: true).insert(entry);
+    Future.delayed(const Duration(milliseconds: 3500), () {
+      // 已被撤回/被下一条气泡顶替时 entry 已 remove，幂等守卫防二次移除。
+      if (_deleteToastEntry == entry) {
+        _deleteToastEntry = null;
+        entry.remove();
+      }
+    });
+  }
+
+  /// 撤回删除：restorePhoto 恢复 MediaStore 行；页面在世则插回
+  /// [_files]/[_thumbFiles] 原位置并跳回该张，已 pop 则到此为止（相册页
+  /// ContentObserver 自动刷新）。[container] 由气泡 ctx 在移除前取得——
+  /// 页面 dispose 后 ref 不可用，全局容器是唯一通道。
+  Future<void> _undoDelete(
+    ProviderContainer container,
+    MsImageInfo photo,
+    int removedIndex,
+  ) async {
+    // 删除补位动画窗口（300ms）防御：插回会与动画链的 removeAt 竞态。
+    // 气泡与动画同时出现，物理上点不到这么快，纯防御。
+    if (_deletingInProgress) return;
+    final controller = container.read(galleryControllerProvider.notifier);
+    final err = await controller.restorePhoto(photo.id);
+    if (err != null) {
+      // 用户取消系统恢复弹窗是正常动作，静默；真实失败才提示（页面已
+      // pop 时静默——恢复失败的照片仍在回收站，入口不丢）。
+      if (err != 'restore_cancelled' && mounted) {
+        toast(context, t(ref, 'restore_failed'));
+      }
+      return;
+    }
+    if (!mounted) return;
+    final restored = photo.copyWith(isTrashed: false);
+    setState(() {
+      final i = removedIndex.clamp(0, _files.length);
+      _files.insert(i, restored);
+      _thumbFiles.insert(
+        removedIndex.clamp(0, _thumbFiles.length),
+        restored,
+      );
+      _indexById = null; // 结构变更，查表重建
+    });
+    // 跳回恢复的那张：主图 + 选中态 + 缩略图条居中。
+    final newIndex = removedIndex.clamp(0, _files.length - 1);
+    _selectedIndexNotifier.value = newIndex;
+    widget.onIndexChanged?.call(newIndex);
+    if (_pageController.hasClients) _pageController.jumpToPage(newIndex);
+    _syncThumbTo(newIndex);
   }
 
   // ─────────────── 详情面板（主分支 Overlay 自有机制） ───────────────
@@ -1954,12 +2074,247 @@ class _DetailPageState extends ConsumerState<DetailPage>
   }
 }
 
+/// 跑道形撤回图标（自绘）：上/下两条直线 + 两端半圆弧的体育场跑道
+/// 轮廓，开放于左侧——路径从左下起（底线左端）→ 底直线 → 右端半圆弧
+/// → 顶直线 → 左上止，箭头在左上端指向行进方向（左）。线条风格同
+/// BackGlyphButton 自绘箭头（stroke 圆帽圆角）。
+class _UndoTrackIcon extends StatelessWidget {
+  const _UndoTrackIcon({this.size = 28});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      // 28px 画布（24 视口 × 28 画布，同 BackGlyphIcon 形制）：视觉分量
+      // 与顶栏返回/选项按钮一致（2026-09 用户要求）。
+      size: Size.square(size),
+      painter: _UndoTrackPainter(),
+    );
+  }
+}
+
+class _UndoTrackPainter extends CustomPainter {
+  const _UndoTrackPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 24);
+    final paint = Paint()
+      ..color = AppColors.accent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.9
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    // 几何（24 视口，形制对齐 BackGlyphIcon：stroke 1.9、字形 ~13×11）。
+    final yTop = 7.2, yBottom = 18.0; // 字形高 10.8 ≈ 返回箭头 11
+    final r = (yBottom - yTop) / 2; // 端弧半径 = 半高（两端正好半圆）
+    final cy = (yTop + yBottom) / 2;
+    const arcRightCx = 12.0; // 右弧圆心；最右缘 17.4 对齐返回横线右端
+    const xLeft = 6.4; // 跑道开口端（左）x
+
+    final track = Path()
+      ..moveTo(xLeft, yBottom) // 左下起点
+      ..lineTo(arcRightCx, yBottom) // 底直线 →
+      ..arcTo(
+        // 右端半圆：底部起经最右点到顶部（视觉逆时针）。
+        Rect.fromCircle(center: Offset(arcRightCx, cy), radius: r),
+        pi / 2,
+        -pi,
+        false,
+      )
+      ..lineTo(xLeft, yTop); // 顶直线 →（弧后笔已在右弧顶端）
+
+    // 箭头：尖在 (tipX, yTop) 指向左（行进方向），两翼后张。
+    const tipX = 4.2, wing = 2.6;
+    final arrow = Path()
+      ..moveTo(tipX + wing, yTop - wing)
+      ..lineTo(tipX, yTop)
+      ..lineTo(tipX + wing, yTop + wing);
+
+    canvas.drawPath(track, paint);
+    canvas.drawPath(arrow, paint);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_UndoTrackPainter oldDelegate) => false;
+}
+
+/// 大图删除结果气泡：文案 + 撤回按钮（主题黄绿 undo icon）。
+///
+/// 与全局 toast（toast.dart）同款皮肤（surface/border/圆角/阴影/淡入淡出
+/// 节奏），差异：
+///  - 定位在缩略图条**上方**（全局 toast 的 bottomInset+76 落在缩略图条
+///    区域内，真机反馈遮挡缩略图条）；
+///  - 文案区可点穿（不挡主图手势），撤回 icon 是唯一交互点。
+class _DeleteToastView extends StatefulWidget {
+  const _DeleteToastView({required this.message, required this.onUndo});
+
+  final String message;
+  final VoidCallback onUndo;
+
+  @override
+  State<_DeleteToastView> createState() => _DeleteToastViewState();
+}
+
+class _DeleteToastViewState extends State<_DeleteToastView>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
+    _controller.forward();
+    // 淡出节奏同全局 toast：2.5s 起淡出，3.5s 由页面侧移除 entry。
+    Future.delayed(const Duration(milliseconds: 2500), () {
+      if (mounted) _controller.reverse();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 底栏(64) + 缩略图条(44) + 12px 间隙——完全避开缩略图条。
+    final bottom =
+        MediaQuery.viewPaddingOf(context).bottom + _kBottomChromeHeight + _kThumbLineHeight + 12;
+    return Positioned(
+      bottom: bottom,
+      left: 0,
+      right: 0,
+      child: Center(
+        child: FadeTransition(
+          opacity: _controller,
+          child: Material(
+            color: Colors.transparent,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.sizeOf(context).width - 48,
+              ),
+              child: Container(
+                // 紧凑版（2026-09 用户要求整体缩小，文字字号不变）：
+                // 内边距/间距全面收紧，高度由按钮行主导。
+                padding: const EdgeInsets.only(left: 12, right: 5, top: 3, bottom: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(6),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: AppColors.shadowScrim,
+                      blurRadius: 12,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 文案区点穿：不挡下层主图手势（气泡悬浮在图片上）。
+                    IgnorePointer(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Text(
+                          widget.message,
+                          style: const TextStyle(
+                            fontFamily: 'Space Mono',
+                            height: 1.2,
+                            fontFamilyFallback: AppFonts.cjkFallback,
+                            fontSize: 13,
+                            color: AppColors.text,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    // 撤回按钮：跑道形撤回图标（自绘，主题黄绿）——
+                    // 上/下两条直线 + 两端半圆弧的跑道轮廓，路径从左下
+                    // 起（底线左端）→ 底直线 → 右端弧 → 顶直线 → 左上止，
+                    // 箭头指向行进方向（用户定稿形状；Material 的
+                    // undo/replay 均为纯弧线非此形）。
+                    InkWell(
+                      onTap: widget.onUndo,
+                      borderRadius: BorderRadius.circular(6),
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 5, vertical: 3),
+                        child: _UndoTrackIcon(size: 28),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 底栏缩略图条（主分支 _ThumbLineStrip 同款）。
 ///
 /// 横向 ListView + 固定紧凑 itemExtent,自由 fling(甩一下滚多张慢慢减速,非 PageView 的
 /// 一页一停)。居中即选中:[controller] 实时算离视口中心最近的项 → [centerIndex] 高亮;
 /// 滚动停止(fling 减速结束)→ [onScrollEnd] 吸附该项到正中 + 联动主图。点按单项 →
 /// [onTap] 跳转。
+/// 缩略图条格点吸附物理（2026-09 固定聚焦框配套）：聚焦框钉在条正中
+/// 后，摩擦滚动停在半格会让框内跨两个 item（「只显示部分」）；松手后
+/// 手动 snap 只有 1~15px 位移、肉眼无感（真机 [THUMB] 打点实证）——
+/// 观感即「吸附没了」。此物理把 ballistic 直接模拟到最近 32px 格点
+///（速度外推决定落哪格，甩得远跨多格，PageView 式档位感），item 永远
+/// 完整对进固定框。_onThumbScrollEnd 的手动 snap 保留为兜底（防御非
+/// ballistic 路径静止停位）+ 主图联动入口。
+class _ThumbSnapPhysics extends ScrollPhysics {
+  const _ThumbSnapPhysics({super.parent});
+
+  @override
+  _ThumbSnapPhysics applyTo(ScrollPhysics? ancestor) =>
+      _ThumbSnapPhysics(parent: buildParent(ancestor));
+
+  @override
+  Simulation? createBallisticSimulation(
+    ScrollMetrics position,
+    double velocity,
+  ) {
+    // 边界外（overscroll）交给父类（Android clamping 回边）。
+    if ((velocity > 0.0 && position.pixels > position.maxScrollExtent) ||
+        (velocity < 0.0 && position.pixels < position.minScrollExtent)) {
+      return super.createBallisticSimulation(position, velocity);
+    }
+    // 速度外推（PageScrollPhysics 同系数）：轻拖回最近格，甩动跨多格。
+    final tol = toleranceFor(position);
+    final projected = position.pixels + velocity * 0.125;
+    // maxScrollExtent = (n−1)×32（首尾 padding 设计保证），本身是格点。
+    final maxIdx = (position.maxScrollExtent / _kThumbItemExtent).round();
+    final target = ((projected / _kThumbItemExtent).round().clamp(0, maxIdx)) *
+        _kThumbItemExtent;
+    // 已在格点且无速度 → 静止（默认流程）。
+    if ((target - position.pixels).abs() < tol.distance &&
+        velocity.abs() < tol.velocity) {
+      return null;
+    }
+    // PageView 同款 spring（mass .5 / stiffness 100 / ratio 1.1）。
+    return ScrollSpringSimulation(
+      SpringDescription.withDampingRatio(mass: 0.5, stiffness: 100, ratio: 1.1),
+      position.pixels,
+      target,
+      velocity,
+      tolerance: tol,
+    );
+  }
+}
+
 class _ThumbLineStrip extends StatelessWidget {
   const _ThumbLineStrip({
     required this.photos,
@@ -2003,9 +2358,13 @@ class _ThumbLineStrip extends StatelessWidget {
           onScrollEnd();
           return false;
         },
-        child: ListView.builder(
+        child: Stack(
+          children: [
+            ListView.builder(
           controller: controller,
           scrollDirection: Axis.horizontal,
+          // 格点吸附（32px 对齐固定聚焦框）：ballistic 落格，见类注释。
+          physics: const _ThumbSnapPhysics(),
           itemExtent: _kThumbItemExtent,
           padding: EdgeInsets.symmetric(horizontal: pad),
           itemCount: photos.length,
@@ -2087,7 +2446,8 @@ class _ThumbLineStrip extends StatelessWidget {
             final anim = deleteAnim;
             if (anim != null && deleteIndex >= 0) {
               if (i == deleteIndex) {
-                // 被删项：原地淡出（白框已翻到下一项）。
+                // 被删项：原地缩小淡出（固定聚焦框内置空——框不跟
+                // item 走，见 _ThumbLineStrip 固定框层注释）。
                 item = FadeTransition(
                   opacity: Tween<double>(begin: 1, end: 0).animate(anim),
                   child: item,
@@ -2108,27 +2468,50 @@ class _ThumbLineStrip extends StatelessWidget {
             return item;
           },
         ),
+            // 固定聚焦框（2026-09 用户定稿）：白框钉在条正中**不跟 item
+            // 走**——删除时被删项在框内缩小淡出（框内先置空），后续项
+            // 推入框内；滚动时框稳定居中、放大项随滚动切换。此前白框是
+            // center 项自带 border，删除时框瞬间跳到还在右侧的下一项上
+            // 随其滑入，且放大（120ms）与补位位移（250ms）两条时间线
+            // 不一致 = 残影感来源。z 序在 ListView 之上（框线压图外缘）。
+            IgnorePointer(
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Container(
+                  width: _kThumbCenterW,
+                  height: _kThumbCenterH,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(_kThumbRadiusCenter),
+                    border: Border.all(color: AppColors.text, width: 1.5),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
 /// 缩略图条单项渲染。
+///
+/// 高亮 = 尺寸/透明度差异（无白框——白框是 [_ThumbLineStrip] 的固定
+/// 装饰层，不跟 item 走）：中心项贴固定框【内沿】（外沿 34/42 − 边框
+/// 1.5×2 = 31/39）。
 Widget _buildStripItem(
   MsImageInfo info,
   ValueListenable<int> centerIndex,
   int i, {
   VoidCallback? onTap,
-  bool fading = false,
 }) {
   return ValueListenableBuilder<int>(
     valueListenable: centerIndex,
     builder: (_, center, _) {
-      final isCenter = !fading && i == center;
-      final w = isCenter ? _kThumbCenterW : _kThumbNormalW;
-      // 中心项方形(矮),普通项竖条(高出一截):尺寸对比代替间距对比。
-      final h = isCenter ? _kThumbCenterH : _kThumbItemH;
-      final r = isCenter ? _kThumbRadiusCenter : _kThumbRadiusNormal;
+      final isCenter = i == center;
+      // 中心项贴固定白框内沿（31×39），普通项 23×32。
+      final w = isCenter ? _kThumbCenterW - 3 : _kThumbNormalW;
+      final h = isCenter ? _kThumbCenterH - 3 : _kThumbItemH;
       // 固定 itemExtent 宽（AnimatedList 无 itemExtent 参数）——
       // 居中偏移 _thumbOffsetForCenter = i × _kThumbItemExtent 依赖此。
       return SizedBox(
@@ -2138,22 +2521,22 @@ Widget _buildStripItem(
           behavior: HitTestBehavior.opaque,
           child: Align(
             alignment: Alignment.bottomCenter,
-            child: Opacity(
-              opacity: isCenter ? 1.0 : 0.5,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 120),
-                width: w,
-                height: h,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(r),
-                  border: isCenter
-                      ? Border.all(color: AppColors.text, width: 1.5)
-                      : null,
-                ),
+            // 底基准 = 固定框【内沿底】（框底贴条底 − 边框 1.5）：普通项与
+            // center 项统一垫底 1.5——center 项 39 高正好与内沿重合（不垫
+            // 的话图片底压边框线、顶部比内沿顶低 1.5 → 框内上沿露黑边，
+            // 真机实证）；普通项整排底线上移 1.5 无感，且与框内沿对齐
+            // 更整齐。
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 1.5),
+              child: Opacity(
+                opacity: isCenter ? 1.0 : 0.5,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 120),
+                  width: w,
+                  height: h,
                 // 图片裁剪圆角：中心项贴白框【内沿】（外沿 4.0 − 边框 1.5 =
                 // 2.5），普通项 = 自身 r（2.5）——两者数值一致，高亮切换无
-                // 跳变。BoxDecoration 的 borderRadius 只画边框不裁 child，
-                // 不 clip 的话图片直角穿出圆角边框（四角不统一）。
+                // 跳变。不 clip 的话图片直角穿出圆角观感（四角不统一）。
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(
                     isCenter ? _kThumbRadiusCenter - 1.5 : _kThumbRadiusNormal,
@@ -2185,6 +2568,7 @@ Widget _buildStripItem(
             ),
           ),
         ),
+      ),
       );
     },
   );
