@@ -960,7 +960,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
                               // 顶栏细线家族风格断档。布局盒（IconButton 48）
                               // 与间距不动，只换图形。
                               IconButton(
-                                icon: const InfoGlyphIcon(),
+                                // strokeWidth 1.7：底栏黑底高对比，1.9
+                                // 观感偏重（2026-09 真机反馈）
+                                icon: const InfoGlyphIcon(strokeWidth: 1.7),
                                 tooltip: t(ref, 'photo_details'),
                                 onPressed: _toggleDetails,
                               ),

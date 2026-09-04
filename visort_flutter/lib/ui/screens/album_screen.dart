@@ -517,7 +517,12 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                   Transform.translate(
                     offset: const Offset(12, 0),
                     child: IconButton(
-                      icon: const SelectAllGlyphIcon(),
+                      // 框内勾 = 选择状态指示：≥1 项被勾选才显示（空框 =
+                      // 一项没勾，2026-09 用户定稿）。_selectedIds 是 State
+                      // 字段，勾/取消 setState 后此处随 build 刷新。
+                      icon: SelectAllGlyphIcon(
+                        checked: _selectedIds.isNotEmpty,
+                      ),
                       tooltip: t(ref, 'select_all'),
                     // toggle：当前已全选（已加载页全部在选）→ 清空；否则全选。
                     // 判定与全选同用 photos（已加载页），语义自洽；未加载页

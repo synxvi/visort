@@ -17,13 +17,25 @@
 // Icons.info_outline/favorite(+border)/delete_outline/restore/more_vert
 // ——stock Material 图标满格 24 包络，与细线家族并排显粗显大（风格断档）。
 // 菜单行内小图标（16/18/20px 语义列表图标）不属于本规范，维持 Material。
+//
+// 线宽变体（2026-09 真机反馈）：看图器底栏纯黑背景高对比，同 1.9 线宽
+// 观感偏重——底栏场景（心形/垃圾桶/恢复/ⓘ）用 **stroke 1.7**；顶栏场景
+// 维持基准 1.9（ⓘ 说明按钮 strokeWidth 参数默认 1.9，底栏传 1.7）。
+// ⋮ 圆点两场景统一 r 1.7（实心点密度高于线，略细于线宽是合理搭配，
+// 参照三线筛选滑点 r1.75 vs 线 1.9 先例）。
 
 import 'package:flutter/material.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 
-/// 自绘全选框（勾选态顶栏）：圆角方框 + 框内勾。
+/// 自绘全选框（勾选态顶栏）：圆角方框 +（[checked] 时）框内勾。
+///
+/// 勾 = 选择状态指示（2026-09 用户定稿）：当前一项都没勾 → 空框；
+/// 勾了任意一项及以上 → 框内显示小勾。
 class SelectAllGlyphIcon extends StatelessWidget {
-  const SelectAllGlyphIcon({super.key, this.color});
+  const SelectAllGlyphIcon({super.key, this.checked = false, this.color});
+
+  /// true = 框内显示小勾（已有 ≥1 项被勾选）。
+  final bool checked;
 
   /// 线色；null 用默认 AppColors.text。
   final Color? color;
@@ -32,14 +44,15 @@ class SelectAllGlyphIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     return CustomPaint(
       size: const Size.square(28),
-      painter: _SelectAllGlyphPainter(color),
+      painter: _SelectAllGlyphPainter(checked, color),
     );
   }
 }
 
 class _SelectAllGlyphPainter extends CustomPainter {
-  const _SelectAllGlyphPainter(this.color);
+  const _SelectAllGlyphPainter(this.checked, this.color);
 
+  final bool checked;
   final Color? color;
 
   @override
@@ -60,21 +73,24 @@ class _SelectAllGlyphPainter extends CustomPainter {
       ),
       paint,
     );
-    // 框内勾（三折，端点圆头）
-    final check = Path()
-      ..moveTo(8.7, 12.2)
-      ..lineTo(10.9, 14.4)
-      ..lineTo(15.3, 9.6);
-    canvas.drawPath(check, paint);
+    // 框内勾（三折，端点圆头）——仅选中态显示
+    if (checked) {
+      final check = Path()
+        ..moveTo(8.7, 12.2)
+        ..lineTo(10.9, 14.4)
+        ..lineTo(15.3, 9.6);
+      canvas.drawPath(check, paint);
+    }
     canvas.restore();
   }
 
   @override
   bool shouldRepaint(_SelectAllGlyphPainter oldDelegate) =>
-      oldDelegate.color != color;
+      oldDelegate.checked != checked || oldDelegate.color != color;
 }
 
-/// 自绘 ⋮（选项菜单）：三枚实心圆点竖排（点径 3.8 ≈ morph 滑点 1.75×2）。
+/// 自绘 ⋮（选项菜单）：三枚实心圆点竖排（点 r 1.7——实心点密度高于
+/// 线，略细于线宽是合理搭配，参照 morph 滑点 r1.75 先例）。
 class MoreVertGlyphIcon extends StatelessWidget {
   const MoreVertGlyphIcon({super.key, this.color});
 
@@ -103,9 +119,9 @@ class _MoreVertGlyphPainter extends CustomPainter {
       ..style = PaintingStyle.fill
       ..color = color ?? AppColors.text;
     // 竖排 y 7.2/12/16.8 与 morph ✕ 端点同档（包络 ≈13.4 高）
-    canvas.drawCircle(const Offset(12, 7.2), 1.9, paint);
-    canvas.drawCircle(const Offset(12, 12), 1.9, paint);
-    canvas.drawCircle(const Offset(12, 16.8), 1.9, paint);
+    canvas.drawCircle(const Offset(12, 7.2), 1.7, paint);
+    canvas.drawCircle(const Offset(12, 12), 1.7, paint);
+    canvas.drawCircle(const Offset(12, 16.8), 1.7, paint);
     canvas.restore();
   }
 
@@ -184,9 +200,10 @@ class _HeartGlyphPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     canvas.save();
     canvas.scale(size.width / 24);
+    // 底栏黑底场景 stroke 1.7（1.9 在纯黑背景观感偏重，2026-09 真机反馈）
     final paint = Paint()
       ..style = filled ? PaintingStyle.fill : PaintingStyle.stroke
-      ..strokeWidth = 1.9
+      ..strokeWidth = 1.7
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..color = color ?? AppColors.text;
@@ -234,9 +251,10 @@ class _TrashGlyphPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     canvas.save();
     canvas.scale(size.width / 24);
+    // 底栏黑底场景 stroke 1.7（1.9 在纯黑背景观感偏重，2026-09 真机反馈）
     final paint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.9
+      ..strokeWidth = 1.7
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..color = color ?? AppColors.text;
@@ -295,9 +313,10 @@ class _RestoreGlyphPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     canvas.save();
     canvas.scale(size.width / 24);
+    // 底栏黑底场景 stroke 1.7（1.9 在纯黑背景观感偏重，2026-09 真机反馈）
     final paint = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.9
+      ..strokeWidth = 1.7
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..color = color ?? AppColors.text;
@@ -333,7 +352,12 @@ class _RestoreGlyphPainter extends CustomPainter {
 /// 圆圈外径 ~13.1 与侧栏图形（14）同档（细线图形数学包络同宽仍显小，
 /// 放大一档对齐视觉分量——单笔细圈低于多笔图形的笔画密度）。
 class InfoGlyphIcon extends StatelessWidget {
-  const InfoGlyphIcon({super.key, this.color, this.accentDot = true});
+  const InfoGlyphIcon({
+    super.key,
+    this.color,
+    this.accentDot = true,
+    this.strokeWidth = 1.9,
+  });
 
   /// 线色；null 用默认 AppColors.text。
   final Color? color;
@@ -341,20 +365,25 @@ class InfoGlyphIcon extends StatelessWidget {
   /// 感叹号顶点是否用 accent 点（说明/详情按钮均为 true，保留定稿）。
   final bool accentDot;
 
+  /// 线宽：顶栏基准 1.9（默认，快速整理页说明按钮）；看图器底栏黑底
+  /// 高对比场景传 1.7（2026-09 真机反馈 1.9 偏重）。
+  final double strokeWidth;
+
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
       size: const Size.square(28),
-      painter: _InfoGlyphPainter(color, accentDot),
+      painter: _InfoGlyphPainter(color, accentDot, strokeWidth),
     );
   }
 }
 
 class _InfoGlyphPainter extends CustomPainter {
-  const _InfoGlyphPainter(this.color, this.accentDot);
+  const _InfoGlyphPainter(this.color, this.accentDot, this.strokeWidth);
 
   final Color? color;
   final bool accentDot;
+  final double strokeWidth;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -363,7 +392,7 @@ class _InfoGlyphPainter extends CustomPainter {
     final stroke = Paint()
       ..color = color ?? AppColors.text
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.9
+      ..strokeWidth = strokeWidth
       ..strokeCap = StrokeCap.round;
     // 外圈：中心 (12,12) 半径 5.6，外缘直径 5.6×2+1.9 ≈ 13.1
     canvas.drawCircle(const Offset(12, 12), 5.6, stroke);
@@ -384,5 +413,7 @@ class _InfoGlyphPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_InfoGlyphPainter oldDelegate) =>
-      oldDelegate.color != color || oldDelegate.accentDot != accentDot;
+      oldDelegate.color != color ||
+      oldDelegate.accentDot != accentDot ||
+      oldDelegate.strokeWidth != strokeWidth;
 }
