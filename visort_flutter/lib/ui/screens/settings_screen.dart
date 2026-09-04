@@ -289,18 +289,24 @@ class _InfoHintButton extends StatelessWidget {
     if (box == null) return;
     final pos = box.localToGlobal(Offset.zero);
     final screen = MediaQuery.sizeOf(context);
-    const menuWidth = 240.0;
+    // 小弹窗 200 定宽（240 占屏 2/3，观感横跨半屏——真机反馈）。
+    const menuWidth = 200.0;
+    const edgeMargin = 20.0;
+    final buttonCx = pos.dx + box.size.width / 2;
     showSpringPopupFromAnchor<void>(
       context: context,
       barrierLabel: 'note_info',
-      anchorGlobalDx: pos.dx + box.size.width / 2,
+      // 弹簧起点 = 按钮中心 × 面板顶边：面板自按钮正下方长出来。
+      anchorGlobalDx: buttonCx,
       anchorGlobalDy: pos.dy + box.size.height + 4,
-      // 面板左缘对齐按钮左缘（设置行按钮在左半区，右缘对齐算式会把
-      // 面板钳到屏幕边缘贴边——2026-09 真机反馈）；两侧各留 12dp
-      // 安全边距，越屏时钳制。
-      menuLeft: pos.dx.clamp(
-        12.0,
-        (screen.width - menuWidth - 12).clamp(12.0, double.infinity),
+      // 面板水平中心对准按钮中心（按钮垂直于面板中心位置）。理想
+      // 位置直接算中心；仅在两侧间隙 < 20dp 的贴边风险时 clamp 钳制
+      //——按钮靠左 → 离左间隙小、离右间隙大，两边都不贴屏（直觉
+      // 定位，2026-09 用户定稿）。
+      menuLeft: (buttonCx - menuWidth / 2).clamp(
+        edgeMargin,
+        (screen.width - menuWidth - edgeMargin)
+            .clamp(edgeMargin, double.infinity),
       ),
       menuTop: pos.dy + box.size.height + 4,
       menuWidth: menuWidth,
