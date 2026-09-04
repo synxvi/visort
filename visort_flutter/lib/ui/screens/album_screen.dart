@@ -198,6 +198,25 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     );
   }
 
+  /// 滑动多选增量（ente SwipeToSelectHelper 回调）：拖选产生的（选中，
+  /// 取消）批量增量。真源 _selectedIds 增量变更 + 渲染层 SelectedFiles
+  /// 增量同步（selectAll/unSelectAll，免全表 _syncSelection 重扫——拖选
+  /// 逐格触发，万级列表全扫会掉帧）。触觉已由 Gallery 层 helper 逐批触发，
+  /// 此处勿再震。
+  void _onSelectionDelta(Set<MsImageInfo> toSelect, Set<MsImageInfo> toUnselect) {
+    if (toSelect.isEmpty && toUnselect.isEmpty) return;
+    setState(() {
+      for (final f in toSelect) {
+        _selectedIds.add(f.id);
+      }
+      for (final f in toUnselect) {
+        _selectedIds.remove(f.id);
+      }
+      if (toSelect.isNotEmpty) _selection.selectAll(toSelect);
+      if (toUnselect.isNotEmpty) _selection.unSelectAll(toUnselect);
+    });
+  }
+
   /// 切换沉浸网格/日期分组视图。切到日期视图时强制按创建日期排序
   /// （日期分组依赖 dateCreated 顺序；切回沉浸保留原排序偏好）。
   void _toggleViewMode() {
@@ -746,10 +765,11 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                 : _openViewer(context, gallery, photos, i, null);
           },
           onFileLongPress: (file) {
-            if (!_selectMode) _enterSelectMode(file.id);
+            if (!_selectMode || _selectedIds.isEmpty) _enterSelectMode(file.id);
           },
           onGroupHeaderToggle: _toggleGroupSelection,
           onGroupHeaderLongPress: _longPressGroupToSelect,
+          onSelectionDelta: _onSelectionDelta,
         ),
       ),
     );
@@ -806,10 +826,11 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
                 : _openViewer(context, gallery, photos, i, null);
           },
           onFileLongPress: (file) {
-            if (!_selectMode) _enterSelectMode(file.id);
+            if (!_selectMode || _selectedIds.isEmpty) _enterSelectMode(file.id);
           },
           onGroupHeaderToggle: _toggleGroupSelection,
           onGroupHeaderLongPress: _longPressGroupToSelect,
+          onSelectionDelta: _onSelectionDelta,
         ),
       ),
     );
