@@ -31,6 +31,7 @@ class ScrollDragHandle extends StatefulWidget {
     this.topInset = 0,
     this.labelBuilder,
     this.snapOffset,
+    this.dragInUseNotifier,
   });
 
   final ScrollController controller;
@@ -59,6 +60,9 @@ class ScrollDragHandle extends StatefulWidget {
   final String? Function(double pixels)? labelBuilder;
   /// 松手吸附目标（aves 同款：吸附到最近分组头）；null 时不吸附。
   final double? Function(double pixels)? snapOffset;
+  /// 拖动中标志（外层传入）：拖动开始置 true、结束置 false——PinnedGroupHeader
+  /// 据此在拖拽跨组时触发轻震（普通滚动不震）。null 时不通知。
+  final ValueNotifier<bool>? dragInUseNotifier;
 
   @override
   State<ScrollDragHandle> createState() => _ScrollDragHandleState();
@@ -147,6 +151,9 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
 
   void _onVerticalDragEnd() {
     setState(() => _dragging = false);
+    // 先撤拖动标志再吸附：吸附 animateTo 的平滑滚动不触发跨组震动
+    //（PinnedGroupHeader 只在标志为 true 时震，松手吸附不该震）。
+    widget.dragInUseNotifier?.value = false;
     // 松手吸附（aves 同款）：滚到最近分组头，组头标题对齐视口顶。
     // 到底/到顶豁免：拖到底（最后一张）松手不吸附——回到最近组头会
     // 从最末项回弹一眼（用户反馈：到底回弹到最后一个分组标题不合理）。
@@ -268,10 +275,16 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
                   width: 19,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onVerticalDragStart: (_) =>
-                        setState(() => _dragging = true),
+                    onVerticalDragStart: (_) {
+                      widget.dragInUseNotifier?.value = true;
+                      setState(() => _dragging = true);
+                    },
                     onVerticalDragUpdate: _onVerticalDragUpdate,
                     onVerticalDragEnd: (_) => _onVerticalDragEnd(),
+                    // 拖动被系统打断（来电/切后台等）走 cancel 不走 end：
+                    // 不撤标志则 _dragging 残留（气泡/放大态常亮）且
+                    // dragInUse=true 会让之后的普通滚动误触跨组震动。
+                    onVerticalDragCancel: _onVerticalDragEnd,
                     child: AnimatedOpacity(
                       opacity: _shouldShow ? 1.0 : 0.0,
                       duration: const Duration(milliseconds: 180),

@@ -1127,6 +1127,13 @@ class _DetailPageState extends ConsumerState<DetailPage>
     if (ctrl == null || ci == null || !ctrl.hasClients) return;
     final newCenter = _thumbComputeCenter();
     if (newCenter == ci.value) return;
+    // 跨档轻震（系统相册同款）：手指在条上慢扫每跨一档 tick 一次；甩动
+    // fling 连续跨档 → 连续 tick、随减速自然降频。程序滚动（主图翻页联动
+    // _syncThumbTo / 点按吸附 _onThumbTap 置 _thumbSyncing）与删除流程
+    // （_suppressThumbScroll）期间不震——tick 只属于用户在条上的真实滑动。
+    if (!_thumbSyncing && !_suppressThumbScroll) {
+      HapticFeedback.selectionClick();
+    }
     ci.value = newCenter; // 高亮跟手（含删除推入动画：白框翻到滚入项）
     // 程序滚动（_thumbSyncing）与删除流程（_suppressThumbScroll）：
     // 只跟手高亮，不回打主图（主图有自己的滑动动画）。
