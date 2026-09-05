@@ -77,5 +77,17 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- 分享（大图查看器收藏右邻按钮）：Android 11+ package visibility 下
+             resolveActivity 需声明才能解析到无 launcher 图标的分享目标
+             （带图标的微信/QQ 等本就自动可见，Aves 未声明也能跑；此声明
+             覆盖无图标目标，官方分享最佳实践建议）。 -->
+        <intent>
+            <action android:name="android.intent.action.SEND"/>
+            <data android:mimeType="image/*"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND_MULTIPLE"/>
+            <data android:mimeType="image/*"/>
+        </intent>
     </queries>
 </manifest>

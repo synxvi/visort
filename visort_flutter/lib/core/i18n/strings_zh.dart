@@ -207,6 +207,9 @@ const Map<String, String> stringsZh = {
   'photo_type': '类型',
   'photo_filename': '文件名',
   'photo_details': '详情',
+  'share_photo': '分享',
+  'share_no_app': '没有可接收分享的应用',
+  'share_failed': '分享失败',
   'delete_photo': '删除',
   'delete_confirm': '确认删除这张图片？',
 

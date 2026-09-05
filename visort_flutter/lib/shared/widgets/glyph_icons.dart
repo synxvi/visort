@@ -441,3 +441,64 @@ class _InfoGlyphPainter extends CustomPainter {
       oldDelegate.accentDot != accentDot ||
       oldDelegate.strokeWidth != strokeWidth;
 }
+
+/// 自绘分享（看图器底栏收藏右邻）：三圆圈节点图——左侧居中一枚空心圆，
+/// 右侧上下两枚，两条连线从左圆分别连右上/右下圆（Material share 经典
+/// 布局，Android 系统分享图形；微信同形）。2026-09 用户定稿：弃 iOS
+/// 风格箭头出框（疏朗大轮廓观感偏大），也弃 share-2 倒三角布点——
+/// 用户点名「左一右二」；首版 r1.8/包络 13×14.3 真机反馈仍偏大，缩
+/// r1.6/包络 ~12.2×13.3（三圆是实体轮廓，视觉分量重于线形图标，数值
+/// 需再低 ⓘ 一档才平衡）。
+///
+/// 包络 x 6.2~18.4（12.2）× y 5.4~18.6（13.3），与 ⓘ（13.1）齐档。
+class ShareGlyphIcon extends StatelessWidget {
+  const ShareGlyphIcon({super.key, this.color, this.strokeWidth = 1.9});
+
+  /// 线色；null 用默认 AppColors.text。
+  final Color? color;
+
+  /// 线宽：顶栏基准 1.9（默认）；看图器底栏黑底高对比场景传 1.7
+  /// （2026-09 真机反馈 1.9 偏重，与 ⓘ/心形同规则）。
+  final double strokeWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: const Size.square(28),
+      painter: _ShareGlyphPainter(color, strokeWidth),
+    );
+  }
+}
+
+class _ShareGlyphPainter extends CustomPainter {
+  const _ShareGlyphPainter(this.color, this.strokeWidth);
+
+  final Color? color;
+  final double strokeWidth;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 24);
+    final paint = Paint()
+      ..color = color ?? AppColors.text
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round;
+    // 三枚空心圆：左 (8.6,12) 垂直居中，右上 (15.9,7.8)、右下 (15.9,16.2)
+    // 上下对称，半径 1.6（外径 4.9，含 stroke）。
+    canvas.drawCircle(const Offset(8.6, 12), 1.6, paint);
+    canvas.drawCircle(const Offset(15.9, 7.8), 1.6, paint);
+    canvas.drawCircle(const Offset(15.9, 16.2), 1.6, paint);
+    // 两条连线：左圆分别连右上/右下圆（上下对称；右侧两圆之间不连）。
+    // 端点距圆心 1.8（半径 1.6 + 间隙 0.2），线端 round cap 与圆线
+    // 边缘相接不侵入圆内。
+    canvas.drawLine(const Offset(10.2, 11.1), const Offset(14.3, 8.7), paint);
+    canvas.drawLine(const Offset(10.2, 12.9), const Offset(14.3, 15.3), paint);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_ShareGlyphPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.strokeWidth != strokeWidth;
+}

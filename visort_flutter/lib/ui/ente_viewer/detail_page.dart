@@ -10,7 +10,7 @@
 //
 // UI 组件样式完全采用 visort 主分支（photo_viewer.dart）：
 //   - 顶栏：返回 + 文件名(MiddleEllipsisText 中段省略) + 序号，实心黑底
-//   - 底栏：info 详情 + 收藏 + 删除日期(回收站) + 恢复(回收站) + 删除，实心黑底
+//   - 底栏：info 详情 + 收藏 + 分享 + 删除日期(回收站) + 恢复(回收站) + 删除，实心黑底
 //   - 缩略图长条(filmstrip)：底栏上方横滑 ListView，居中放大高亮 + 手写吸附 +
 //     与主图双向联动（跟手 jumpToPage / 点按 animateToPage / 主图翻页程序滚动）
 //   - 详情面板：Overlay 自有实现(_panelCtrl + _panelExtent，无路由无 DSS)，
@@ -31,6 +31,7 @@ import 'package:visort_flutter/core/fs/cache_perf.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/service_policy.dart' show RequestPriority;
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
+import 'package:visort_flutter/core/fs/share_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart' show configProvider, t;
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
@@ -938,6 +939,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                   ),
                                   onPressed: _toggleFavoriteCurrent,
                                 ),
+                              // 分享（收藏右邻，Aves 同款）：系统分享面板
+                              //（ACTION_SEND，MediaStore URI 授权接收方读）。
+                              // 回收站项不显示（与收藏/⋮ 菜单同规则——
+                              // trashed URI 对接收方不可靠）。
+                              if (!file.isTrashed)
+                                IconButton(
+                                  icon: const ShareGlyphIcon(strokeWidth: 1.7),
+                                  tooltip: t(ref, 'share_photo'),
+                                  onPressed: _shareCurrent,
+                                ),
                               // 垃圾桶挪到收藏右边（原先在最右；腾出原位放 ⋮）
                               IconButton(
                                 icon: const TrashGlyphIcon(
@@ -1219,6 +1230,22 @@ class _DetailPageState extends ConsumerState<DetailPage>
       }
     });
     toast(context, t(ref, file.isFavorite ? 'unfavorited' : 'favorited'));
+  }
+
+  /// 分享当前图：系统分享面板（Aves 同款链路——Dart 松弛 MIME，原生
+  /// ACTION_SEND + MediaStore content URI + FLAG_GRANT_READ_URI_PERMISSION，
+  /// 见 share_channel.dart / SharePlugin.kt）。
+  Future<void> _shareCurrent() async {
+    final file = _selectedFile;
+    if (file == null) return;
+    try {
+      final started = await shareImages([file]);
+      if (!mounted) return;
+      // false = 无应用能接收（Aves showNoMatchingAppDialog 的轻量版）
+      if (!started) toast(context, t(ref, 'share_no_app'));
+    } on ShareException {
+      if (mounted) toast(context, t(ref, 'share_failed'));
+    }
   }
 
   Future<void> _deleteCurrent() async {

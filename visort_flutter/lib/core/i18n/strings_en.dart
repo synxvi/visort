@@ -218,6 +218,9 @@ const Map<String, String> stringsEn = {
   'photo_type': 'Type',
   'photo_filename': 'Filename',
   'photo_details': 'Details',
+  'share_photo': 'Share',
+  'share_no_app': 'No app can receive this share',
+  'share_failed': 'Failed to share',
   'delete_photo': 'Delete',
   'delete_confirm': 'Delete this photo?',
 
