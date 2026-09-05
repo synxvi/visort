@@ -146,6 +146,7 @@ void main() {
       }
     }
     expect(gap8, 2, reason: '聚焦项左右各一个 8px 间隙');
+    expect(gap5, greaterThan(0), reason: '普通项间 5px 间隙应存在');
   });
 
   testWidgets('Filmstrip 末项聚焦居中（右侧 padding 补 origin）', (tester) async {
@@ -172,6 +173,9 @@ void main() {
   testWidgets('Filmstrip 拖动停稳后聚焦图回到白框中心（吸附修正幂等）', (
     tester,
   ) async {
+    // 用户真实拖动必须上报（主图跟手联动依赖它）——防「程序滚动静默」
+    // 修复误伤手势路径。
+    var reported = <int>[];
     await tester.pumpWidget(
       _wrap(
         Filmstrip(
@@ -179,6 +183,7 @@ void main() {
           initialIndex: 10,
           center: ValueNotifier<int>(10),
           thumbnail: (i) => MemoryImage(_png),
+          onCenterChanged: reported.add,
         ),
       ),
     );
@@ -188,6 +193,11 @@ void main() {
     // ——聚焦图会偏出框右 4px）。
     await tester.fling(find.byType(ListView), const Offset(-250, 0), 600);
     await tester.pumpAndSettle();
+    expect(
+      reported,
+      isNotEmpty,
+      reason: '用户拖动的跨档上报必须保留（主图跟手联动依赖它）',
+    );
 
     final img = _centerImageRect(tester);
     expect(
@@ -195,5 +205,48 @@ void main() {
       lessThan(0.5),
       reason: '吸附停稳后聚焦图应居中（曾因 snap/修正来回拉扯偏右 4px）',
     );
+  });
+
+  testWidgets('程序滚动全程（含打断竞态）不得回调 onCenterChanged/回写 center', (
+    tester,
+  ) async {
+    // 模拟主图拖动中 onPageChanged 连续写 center（拖过半页→拖回→再过）：
+    // 条程序滚动动画互相打断——任何窗口里上报 = 宿主 jumpToPage 把
+    // 未松手的主图程序跳页（真机实证 bug）。
+    var reported = <int>[];
+    var settled = <int>[];
+    final center = ValueNotifier<int>(10);
+    await tester.pumpWidget(
+      _wrap(
+        Filmstrip(
+          itemCount: 30,
+          initialIndex: 10,
+          center: center,
+          thumbnail: (i) => MemoryImage(_png),
+          onCenterChanged: reported.add,
+          onSettled: settled.add,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 连续写 + 动画中打断（旧动画 .then 错误复位 _syncing 的窗口）。
+    center.value = 11;
+    await tester.pump(const Duration(milliseconds: 60)); // 动画中
+    center.value = 12;
+    await tester.pump(const Duration(milliseconds: 40)); // 又打断
+    center.value = 10;
+    await tester.pump(const Duration(milliseconds: 50));
+    center.value = 13;
+    await tester.pumpAndSettle();
+
+    expect(
+      reported,
+      isEmpty,
+      reason: '程序滚动（外部 center 指令）全程不得上报 onCenterChanged——'
+          '上报会被宿主当作用户滚动执行 jumpToPage，打断主图拖动',
+    );
+    expect(settled, isEmpty, reason: '程序滚动不得触发 onSettled');
+    expect(center.value, 13, reason: '组件不得回写 center（回声自标记失效）');
   });
 }

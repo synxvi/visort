@@ -201,14 +201,24 @@ class _FilmstripState extends State<Filmstrip> {
 
   // ─────────────── 联动 ───────────────
 
+  /// 程序滚动代际：animateTo 互相打断时旧动画的 .then 会晚于新动画启动
+  /// 执行——无代际防护的话旧 then 把 _syncing 错误复位为 false，新动画
+  /// 余程的跨档被当作用户滚动上报 → 宿主 jumpToPage 把未松手的主图程序
+  /// 跳页（主图拖动中 onPageChanged 连续写 center 即触发，真机实证）。
+  int _syncToken = 0;
+
   /// 滚动中：实时算最近项，跨档上报（tick + 宿主跟手联动主图）。
   void _onScroll() {
     if (_isFrozen) return;
+    // ⚠️ 程序滚动全程静默（含 _syncing 被打断竞态弄丢的窗口——token 防
+    // 护）：上报只属于用户真实滚动。程序滚动上报会让宿主 jumpToPage
+    // （打断主图拖动/与其 onPageChanged 打架），tick 震动也只属于手势。
+    if (_syncing) return;
     final c = _nearestCenter();
     if (c == _selfCenter) return;
     // 跨档轻震（系统相册同款）：用户拖动慢扫每跨一档 tick 一次，甩动
-    // fling 连续跨档随减速降频；程序滚动不震——tick 只属于真实滑动。
-    if (!_syncing) HapticFeedback.selectionClick();
+    // fling 连续跨档随减速自然降频。
+    HapticFeedback.selectionClick();
     _selfCenter = c;
     // 上报宿主（先自标记：center 写入触发自身监听时按回声忽略）。
     widget.center.value = c;
@@ -241,13 +251,18 @@ class _FilmstripState extends State<Filmstrip> {
     _focused.value = true;
     if (!_ctrl.hasClients) return;
     _syncing = true;
+    // 代际 token：本动画若被下一个 animateTo 打断，旧 then 的复位被
+    // 忽略（只有最新代际能关 _syncing），见 _syncToken 注释。
+    final token = ++_syncToken;
     _ctrl
         .animateTo(
           _offsetFor(i, focused: true),
           duration: duration,
           curve: Curves.easeOut,
         )
-        .then((_) => _syncing = false);
+        .then((_) {
+          if (token == _syncToken) _syncing = false;
+        });
   }
 
   // ─────────────── 滚动事件 ───────────────
@@ -289,14 +304,18 @@ class _FilmstripState extends State<Filmstrip> {
       final target = _offsetFor(i, focused: true);
       if ((_ctrl.offset - target).abs() > 0.5) {
         // 未落格（防御非 ballistic 静止停位）也由此一并带到聚焦格点。
+        // 代际 token 同 _animateToCenter（被打断时不复位 _syncing）。
         _syncing = true;
+        final token = ++_syncToken;
         _ctrl
             .animateTo(
               target,
               duration: kFilmstripFocusDuration,
               curve: Curves.linear, // 与 AnimatedContainer 撑开同步（默认 linear）
             )
-            .then((_) => _syncing = false);
+            .then((_) {
+              if (token == _syncToken) _syncing = false;
+            });
       }
     }
     widget.onSettled?.call(i);
