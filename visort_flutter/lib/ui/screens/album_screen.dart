@@ -20,6 +20,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart';
 import 'package:visort_flutter/core/fs/cache_perf.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
+import 'package:visort_flutter/ui/ente_viewer/detail_page_state.dart'
+    show kFilmstripThumbLoadSize;
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/fs/service_policy.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart';
@@ -1274,21 +1276,15 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   void _onViewerIndexChanged(int index) {
     final photos = ref.read(galleryControllerProvider).photos;
     if (index < 0 || index >= photos.length) return;
-    // 翻页时立即滚动网格到当前行(jumpTo 无动画):Hero pop 时 cell 必须在视口
-    // (GridView lazy build,视口外 cell 无 RenderObject → Hero 找不到飞回目标)。
-    // viewer 盖住网格,滚动用户无感;返回时 cell 已在正确位置 + 缩略图已预加载。
-    if (_viewerIndexThrottleTimer != null) {
-      // 节流窗内：只记末次目标，窗口到期统一落位。
-      _pendingViewerIndex = index;
-      return;
-    }
-    _scrollToCellRow(index);
-    _viewerIndexThrottleTimer = Timer(const Duration(milliseconds: 150), () {
-      _viewerIndexThrottleTimer = null;
-      final pending = _pendingViewerIndex;
-      _pendingViewerIndex = null;
-      if (pending != null) _onViewerIndexChanged(pending);
-    });
+    // 【翻页期间零网格重定位】只记 pending，jumpTo 移到 pop reverse 起点
+    // 一次性冲刷（_flushViewerIndexReposition，Hero 目标行在 flight manifest
+    // 构建前就位即可）。旧「翻页中 leading 节流 jumpTo」在每次翻页触发
+    // 网格整屏重布局 → 一批 346 档解码灌进引擎 io worker 池（与所有
+    // 缩略图/full 的帧解码共用）→ 当前页 full 的 getNextFrame 被压在
+    // 队尾（真机实测 page→full 上屏恒定 ~730ms，期间 Dart isolate 全程
+    // 空闲在等 Future =「翻页解码慢」主体）。pop 时 viewer 关闭、解码池
+    // 空闲，目标行一批 cell 几十 ms 出图，落位不闪。
+    _pendingViewerIndex = index;
   }
 
   /// 立即冲刷节流中的 pending 网格定位（viewer pop reverse 起点调用）。
@@ -1308,7 +1304,15 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     _pendingViewerIndex = null;
     _viewerIndexThrottleTimer?.cancel();
     _viewerIndexThrottleTimer = null;
-    if (pending != null) _scrollToCellRow(pending);
+    if (pending != null) {
+      // 网格即将 jumpTo 重定位：pop flight 的 manifest 必须在重定位 layout
+      // 之后构建（HeroController 同步读取只见旧 band——to hero 缺失 = 返回
+      // 「淡出」；cacheExtent 内 cell 旧 bounds = 飞错终点）。置 SDK 补丁的
+      // defer 标志（本冲刷在 reverse listener 序中先于 HeroController 的
+      // flight 启动，标志必被读到；启动路径读后即复位）。
+      HeroController.deferNextPopFlight = true;
+      _scrollToCellRow(pending);
+    }
   }
 
   /// 滚动网格让目标行可见。返回定位规则（对标系统相册）：
@@ -1419,6 +1423,26 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       buildImageProvider(imgRef, targetWidth: openTw),
       context,
     );
+    // 缩略图条中心预热（±3）：tap 帧只发 3 个小请求（大扫幅预热会把
+    // native FIFO 队列灌满，反把 full 的解码挤后——真机实证更卡）；条
+    // 其余条目由自身 build 渐进出图。key 与条目严格一致。
+    {
+      final lo = index - 3 < 0 ? 0 : index - 3;
+      final hi = index + 3 > photos.length - 1 ? photos.length - 1 : index + 3;
+      for (var n = lo; n <= hi; n++) {
+        precacheImage(
+          buildThumbnailProvider(
+            imageRefFromMediaStoreId(
+              photos[n].id,
+              extension: extOf(photos[n].name),
+            ),
+            size: kFilmstripThumbLoadSize,
+            squareCrop: true,
+          ),
+          context,
+        );
+      }
+    }
     final route = PageRouteBuilder<void>(
       // [ente 移植] 完全复刻 ente routeToPage（navigation_util _buildPageRoute）：
       // Align + FadeTransition 200ms + opaque:false。无黑遮罩、无门控——
