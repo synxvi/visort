@@ -24,12 +24,49 @@ import 'package:window_manager/window_manager.dart';
 import 'core/fs/image_loader.dart' show initMaxDecodePixels;
 import 'app.dart';
 import 'core/db/database_service.dart';
+import 'core/diag/probe_log.dart';
 import 'features/search/search_data_store.dart';
 import 'core/i18n/i18n.dart';
 import 'core/window/window_state.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ──────────── 时序排查日志环（接管 debugPrint → cache/probe.log） ────────────
+  // 真机复现后事后拉取完整时间线（logcat 窗口与用户操作时序解耦）：
+  //   adb shell su -c 'cat /data/user/0/com.synxvi.visort/cache/probe.log'
+  ProbeLog.init();
+
+  // ──────────── [FPS] 长帧打点（排查期临时，与 kCachePerfLog 同批撤） ────────────
+  // 翻页解码期间条冻结嫌疑 = UI/raster 长帧或全管线停摆：这里打 >48ms 帧的
+  // build/raster 分解与帧间隔，logcat 与 [CACHE]/[SP] 对时间轴。
+  WidgetsBinding.instance.addTimingsCallback((timings) {
+    for (final t in timings) {
+      final total = t.totalSpan.inMilliseconds;
+      if (total > 48) {
+        debugPrint(
+          '[FPS] long #${t.frameNumber} '
+          'build=${t.buildDuration.inMilliseconds}ms '
+          'raster=${t.rasterDuration.inMilliseconds}ms',
+        );
+      }
+    }
+  });
+
+  // ──────────── [TICK] UI isolate 事件循环心跳（排查期临时） ────────────
+  // 停摆鉴别器：两轮 release 实测存在 1.0s 级「零日志零帧提交」窗口。
+  // Timer 回调与日志同在 UI isolate 事件循环——TICK 断档 = 事件循环被
+  // 同步任务/GC pause 占死（vs isolate 空转无帧，两种病根不同治法）。
+  // 停摆窗口对齐 [B] 函数边界打点：断点后无 out 的函数 = 同步占死元凶；
+  // 全部边界完整 = 不在任何 Dart 函数内 = GC 实锤。
+  int _lastTick = 0;
+  Timer.periodic(const Duration(milliseconds: 150), (t) {
+    final now = DateTime.now().microsecondsSinceEpoch ~/ 1000;
+    final gap = _lastTick == 0 ? 0 : now - _lastTick;
+    _lastTick = now;
+    // 正常 150ms；>400ms 的恢复行单独标注（GC/同步停摆后的第一跳）。
+    debugPrint('[TICK] t=$now${gap > 400 ? ' GAP=${gap}ms' : ''}');
+  });
 
   // ──────────── 全局错误兜底（必须先于一切 await 安装） ────────────
   // 原先装在 config/SQLite/字体等多个 await 之后——窗口期内的异步异常
