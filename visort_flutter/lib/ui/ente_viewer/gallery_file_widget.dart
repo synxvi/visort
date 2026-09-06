@@ -15,16 +15,41 @@
 //     GallerySwipeHelper 激活时 enter→start/update、hover→起点兜底；长按
 //     进入选择态后不松手直接拖 = 连续勾选（_handleLongPressForSwipe）。
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
+import 'package:visort_flutter/ui/screens/album_common.dart' show extOf;
 
+import 'detail_page_state.dart'
+    show kLiveViewerProviders, kViewerLargeThumbSize;
 import 'gallery_context_state.dart';
 import 'gallery_groups.dart' show GalleryGroups;
 import 'gallery_swipe_helper.dart';
+import 'package:visort_flutter/core/fs/image_cache_state.dart';
 import 'selected_files.dart';
 import 'thumbnail_widget.dart';
 import 'touch_cross_detector.dart';
+
+/// 从 Hero child widget 挖裸 Image 的 provider（相册封面端 child =
+/// ClipRRect(Image) 固定两层结构）。挖到 = 封面↔网格链路（封面图正在
+/// 显示、provider 必 completed，可直接做飞行图源同步出图）；挖不到 =
+/// 网格↔viewer 链路（PhotoViewCore / ThumbnailWidget 为 stateful，
+/// provider 藏在各 build 里，由此天然区分两条几何不同的链路）。
+ImageProvider? _heroChildImageProvider(Widget? widget) {
+  Widget? w = widget;
+  while (w != null) {
+    if (w is Image) return w.image;
+    if (w is ClipRRect) {
+      w = w.child;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
 
 /// 网格单元格：缩略图 + Hero 飞行层 + 选中态遮罩/勾选圈。
 ///
@@ -88,7 +113,7 @@ class _GalleryFileWidgetState extends State<GalleryFileWidget> {
     );
     if (swipeHelper == null || swipeActiveNotifier == null) {
       return GestureDetector(
-        onTap: () => widget.onTap(widget.file),
+        onTap: _handleTap,
         onLongPress: () => widget.onLongPress(widget.file),
         child: _buildFileContent(context),
       );
@@ -147,7 +172,7 @@ class _GalleryFileWidgetState extends State<GalleryFileWidget> {
         );
       },
       child: GestureDetector(
-        onTap: () => widget.onTap(widget.file),
+        onTap: _handleTap,
         onLongPress: _onLongPress,
         child: _buildFileContent(context),
       ),
@@ -181,6 +206,10 @@ class _GalleryFileWidgetState extends State<GalleryFileWidget> {
     swipeHelper.startSelection(widget.file, forceSelecting: true);
   }
 
+  void _handleTap() {
+    widget.onTap(widget.file);
+  }
+
   Widget _buildFileContent(BuildContext context) {
     final String heroTag = 'photo_${widget.file.id}';
     // [visort 适配] 缩略图尺寸：cell 逻辑宽 × dpr（clamp 160~512），与
@@ -205,11 +234,15 @@ class _GalleryFileWidgetState extends State<GalleryFileWidget> {
     );
     final Widget hero = Hero(
       tag: heroTag,
-      // 飞行内容取 viewer 端 Hero 的 child（PhotoViewCore 的裸 Image，
-      // fit: contain）——首帧即"完整等比图 contain 于飞行框"，与网格的
-      // cover 裁切显示有一次内容切换（系统相册同款），但几何比例与
-      // 终点/落位全程一致（缩略图等比请求框保证，见 MediaStoreRepository
-      // readThumbnail 注释）。
+      // [immich 同款] 飞行内容 push 取网格端（from）child、pop 取 to（to
+      // 在 pop 时也是网格端）——两个方向全程显示本端方形 cover 裁剪。
+      // push：飞行框从方形 lerp 到 viewer 端原比例 contain 框，cover 裁剪
+      // 逐渐展开露出被遮部分，终点框=原比例 → cover 零裁剪，与落位图
+      // 无缝衔接（viewer 端 hero rect 恒为原比例框，见 zoomable_image
+      // _aspectHeroFrame）。无旧方案（shuttle 恒取 viewer contain child）
+      // 首帧"方形裁剪→等比 letterbox"的跳变。飞行线路（rect tween）不变。
+      // 参考 immich thumbnail_tile.widget.dart flightShuttleBuilder：
+      // direction == push ? from.widget : to.widget。
       flightShuttleBuilder:
           (
             flightContext,
@@ -217,7 +250,108 @@ class _GalleryFileWidgetState extends State<GalleryFileWidget> {
             flightDirection,
             fromHeroContext,
             toHeroContext,
-          ) => (toHeroContext.widget as Hero).child,
+          ) {
+            final bool isPush = flightDirection == HeroFlightDirection.push;
+            // 起点端 child：push=from（网格 cell / 相册封面）、pop=to（网格
+            // cell / 封面）。链路分流（两条链路几何完全不同）：
+            //  ① 网格↔viewer（cover 展开）：图源 live 注册表（正在显示的
+            //     provider，同步出图、不受 evict/LRU 影响）→ 探测链兜底；
+            //  ② 封面↔网格（两端方形 cover）：挖起点端裸 Image 的 provider
+            //     （封面图正在显示，同步出图）。
+            // 飞行层恒为裸 cover Image：无徽标/红心/占位图标。
+            final heroChild =
+                ((isPush ? fromHeroContext.widget : toHeroContext.widget)
+                    as Hero).child;
+            final mq = MediaQuery.of(context);
+            final ref = imageRefFromMediaStoreId(
+              widget.file.id,
+              extension: extOf(widget.file.name),
+            );
+            final cache = PaintingBinding.instance.imageCache;
+            // live（viewer 正在显示的 provider）只对【pop】有效——push 时
+            // viewer 端尚未显示，命中的是【上次会话的残留】（opaque:false
+            // 路由 dispose 延迟，kLiveViewerProviders 未清，真机日志实证
+            // 3/5 次 push 被劫持且全程低档不升级 = 「飞行动画分辨率低」）。
+            // push 一律走 full-pending 探测链（_openViewer 已发起 full
+            // precache，~40ms 出图）。
+            final live = isPush
+                ? null
+                : kLiveViewerProviders[widget.file.id];
+            final coverProvider = _heroChildImageProvider(heroChild);
+            final grid = buildThumbnailProvider(
+              ref,
+              size: thumbSize,
+              squareCrop: true,
+            );
+            final ImageProvider chosen;
+            final Widget? loadingUnderlay;
+            if (live != null) {
+              chosen = live;
+              loadingUnderlay = null;
+              // pop 落位预热：拖拽浏览多张大图后 ImageCache 常被 full 档
+              //（~18MB/张×3 预取）挤爆、网格档被 LRU 逐出 → 落位时 tile 重
+              // 解码（黑格→出图）。起飞瞬间即预热网格档（346px 解码几十
+              // ms，飞行 ~200ms 内完成）→ 落位即图。completed 时立即返回。
+              unawaited(precacheImage(grid, context));
+            } else if (coverProvider != null) {
+              // 封面链路：封面档方形裁剪图（显示中必 completed）。
+              chosen = coverProvider;
+              loadingUnderlay = null;
+            } else if (!isPush) {
+              // viewer 缺席的 pop（极罕见，如 viewer 全加载失败态直接
+              // 返回）：原样 child（ente 旧机制，GlobalKey reparent）。
+              return heroChild;
+            } else {
+              // 网格→viewer push 且 viewer 首帧未出图（远距离/切后台后首开
+              // 等比档全 miss）：等比档兜底（方形 grid 源在原比例终点框会
+              // 二次裁剪 → 落位视野跳变，长截图尤其明显，不可用作主图），
+              // 解码等待期用网格方形档垫底——等待时飞行框仍近方形，方形源
+              // 与等比源 cover 显示内容一致（同为中央方形裁剪），等比档
+              // 到达后的切换无感，随后裁剪随框展开。
+              final full = buildImageProvider(
+                ref,
+                targetWidth: computeViewerTargetWidth(
+                  mq.size.width * mq.devicePixelRatio,
+                ),
+              );
+              final large = buildThumbnailProvider(
+                ref,
+                size: kViewerLargeThumbSize,
+                squareCrop: false,
+              );
+              bool anyState(ImageProvider p) {
+                // 同 imageCacheState 的三态判定（含 live，见其注释）。
+                final s = cache.statusForKey(p);
+                return s.live || s.keepAlive || s.pending;
+              }
+
+              if (imageCacheState(full) == 'complete') {
+                chosen = full;
+              } else if (imageCacheState(large) == 'complete') {
+                chosen = large;
+              } else if (anyState(full)) {
+                chosen = full;
+              } else {
+                chosen = large;
+              }
+              loadingUnderlay = imageCacheState(grid) == 'complete'
+                  ? Image(image: grid, fit: BoxFit.cover)
+                  : const ColoredBox(color: Colors.black);
+            }
+            return ClipRRect(
+              borderRadius: borderRadius,
+              child: Image(
+                image: chosen,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                loadingBuilder: loadingUnderlay == null
+                    ? null
+                    : (_, child, _) => loadingUnderlay!,
+                errorBuilder: (_, _, _) =>
+                    const ColoredBox(color: AppColors.surface),
+              ),
+            );
+          },
       transitionOnUserGestures: true,
       child: ClipRRect(borderRadius: borderRadius, child: thumbnailWidget),
     );

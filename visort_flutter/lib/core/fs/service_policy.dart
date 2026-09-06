@@ -39,10 +39,13 @@ abstract final class RequestPriority {
   /// 网格清晰层（256/512）：快滚中挂起，停稳/慢滚时集中补。
   static const int sizedThumbnail = 200;
 
-  /// 快甩「盘缓存直通」full（zoomable_image 探测命中后发起）：排条占位
-  /// (100) 之后、清晰层 (200) 之前——掠过页不等 150ms 延迟窗直接加载盘
-  /// 就绪的 full（盘读 22-46ms/张）。只对盘缓存命中图发起（exists 前置
-  /// 门），miss 零请求，无洪泛；停稳页经 bumpPriority 插队到 50。
+  /// 快甩「盘缓存直通」full（备用档，当前无调用方）：排条占位 (100) 之后、
+  /// 清晰层 (200) 之前。2026-09-06 起 zoomable_image 的直通探测带
+  /// _isCurrentPage 守卫（只对当前页发起），「掠过页 p120」场景消失——
+  /// 探测/预取的当前页 full 一律直接 [viewerImage]（p50）+ 入队即 bump
+  ///（见 zoomable_image._bumpFullToViewerPriority：precacheImage 同 key
+  /// 合并 listener 改不了已入队任务的优先级，p120 合并进早先 p250 任务
+  /// 会卡预取级）。若未来恢复「途经页不等延迟窗直通」再启用本档。
   static const int passthroughFull = 120;
 
   /// 空闲预缓存（全相册 screenNail 预生成）：比一切用户请求低——任何
@@ -77,7 +80,7 @@ int nowMicros() => DateTime.now().microsecondsSinceEpoch;
 /// 为入队瞬间队列深度（洪泛指标）。
 /// 排查实证（2026-08-28 快甩卡顿）：开启后真机复现一轮，wait/q 直接
 /// 定位 resolve-洪泛根因；修复后同操作 avgWait 1701ms→0ms、maxQ 431→24。
-const bool kServicePolicyPerfLog = false; // 排查期临时开启（缓存性能专项）
+const bool kServicePolicyPerfLog = true; // 排查期临时开启（翻页解码慢 + 条冻结）
 
 void _perfLog(_Task<dynamic> task, int startAt) {
   if (!kServicePolicyPerfLog) return;

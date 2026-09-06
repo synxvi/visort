@@ -866,13 +866,22 @@ class HeroController extends NavigatorObserver {
   /// overlay entry 重插到飞行层之上，栏保持原消失时机）。单 viewer 路由。
   static void Function()? onPopFlightStarted;
 
+  /// visort patch: app 侧冲刷网格重定位（viewer 翻页后返回的 jumpTo）时
+  /// 置位——下次 pop flight 无条件延到帧末启动。SliverList 的 band 重建
+  /// 发生在本帧 layout 阶段，同步构建 manifest 只能读到上一帧 element 树
+  ///（to hero 缺失 = 返回淡出；或 cell 在 cacheExtent 内读到旧 bounds =
+  /// 飞错终点）。启动路径读取后即复位。
+  static bool deferNextPopFlight = false;
+
   @override
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
     if (route is! PageRoute<dynamic> || previousRoute is! PageRoute<dynamic>) {
       return;
     }
+    debugPrint('[HERO-CTL] didPop ${route.settings.name}');
     final Animation<double>? anim = route.animation;
     if (anim == null) return;
+    _armPopPlaceholderCleanup(route, previousRoute, anim);
     if (anim.status == AnimationStatus.reverse) {
       _startPopFlight(route, previousRoute);
       return;
@@ -880,6 +889,53 @@ class HeroController extends NavigatorObserver {
     _popRoute = route;
     _popPreviousRoute = previousRoute;
     anim.addStatusListener(_handlePopAnimationStatus);
+  }
+
+  // visort patch: pop 完成时的 placeholder 残留兜底。push flight 结束会把
+  // from hero 置 keepPlaceholder（child 藏进 Offstage），恢复依赖 pop flight
+  // 启动并覆盖该 tag（配对或 _startHeroTransition 末尾的 endFlight 循环）。
+  // flight 缺席/未覆盖的任何路径（deferred 启动被守卫跳过、toHero 在启动
+  // 后因 HeroMode/数据变化移出收集集等）都会让 placeholder 永久残留 =
+  // 「返回后缩略图黑块 + 卡片点击失效」（hero child 含手势/内容全被藏）。
+  // 在 route 动画 dismissed（pop 真正完成、to 页为终态）时对 to 路由全体
+  // hero 强制 endFlight()：幂等——无 placeholder 的 hero 无操作，正常飞行
+  // 已恢复的同样式无操作，只救残留。
+  void _armPopPlaceholderCleanup(
+    PageRoute<dynamic> route,
+    PageRoute<dynamic> previousRoute,
+    Animation<double> anim,
+  ) {
+    void cleanup(AnimationStatus status) {
+      if (status != AnimationStatus.dismissed) return;
+      anim.removeStatusListener(cleanup);
+      final NavigatorState? nav = navigator;
+      final BuildContext? toCtx = previousRoute.subtreeContext;
+      if (nav == null || toCtx == null) return;
+      // raw 遍历（不走 _allHeroesFor）：HeroMode 屏蔽/tag 过滤一概绕过——
+      // app 侧 tag 门控 bug（flightTag 清成 '' 而非 null）曾把全部 tile 的
+      // HeroMode 永久关死，_allHeroesFor 收集为空 → 兜底空转 → 黑块残留
+      //（真机实证 heroes=0）。endFlight 幂等：无 placeholder 的 hero 无操作。
+      var rescued = 0;
+      void visitor(Element element) {
+        if (element.widget is Hero) {
+          final hero = element as StatefulElement;
+          if (Navigator.of(hero) == nav) {
+            (hero.state as _HeroState).endFlight();
+            rescued++;
+          }
+        }
+        element.visitChildren(visitor);
+      }
+      toCtx.visitChildElements(visitor);
+      debugPrint('[HERO-CTL] pop-cleanup ${route.settings.name} heroes=$rescued');
+    }
+
+    if (anim.status == AnimationStatus.dismissed) {
+      // 动画瞬完（挂 listener 已收不到 dismissed）：直接跑。
+      cleanup(AnimationStatus.dismissed);
+      return;
+    }
+    anim.addStatusListener(cleanup);
   }
 
   void _handlePopAnimationStatus(AnimationStatus status) {
@@ -896,11 +952,36 @@ class HeroController extends NavigatorObserver {
 
   void _startPopFlight(PageRoute<dynamic> route, PageRoute<dynamic> previousRoute) {
     _popFlightHandled = route;
+    debugPrint('[HERO-CTL] startPopFlight ${route.settings.name}');
     // 直接 _startHeroTransition（跳过 _maybeStartHeroTransition 的 postFrame 延迟）：
     // pop 时 toRoute(album) 一直保持布局（maintainState），Hero bounds 已就绪，
     // 无需等下一帧。postFrame 会让 pop 第一帧出现"viewer 已隐藏(opacity 0)但
     // shuttle 未创建"的间隙——网格直接露出 1 帧 = 概率性闪烁（frame timing 决定
     // 有时同帧丝滑、有时差帧闪烁）。同步创建 → shuttle 与 transitionsBuilder 同帧。
+    //
+    // visort patch: 上述同步路径仅当 to hero 已就位才成立。viewer 翻多张后返回
+    // 时 app 在更早的 reverse listener 里冲刷网格重定位（jumpTo），band 重建在
+    // 本帧 layout 阶段——同步 manifest 读到的是上一帧 element 树：目标 cell
+    // 缺失 → manifest 为空 → 不飞。此场景（app 置 deferNextPopFlight）延到
+    // 帧末启动：layout 完成、新 cell bounds 正确。
+    //
+    // 其余场景一律同步跑（2026-09 真机实证两轮）：
+    //  - 相册→首页：app 的 exit 清桶与 pop 同帧，网格 rebuild 换血会销毁
+    //    配对 cell（第一张）——同步启动抢在换血前配对即飞（defer 会错过
+    //    → 飞行被吃）；
+    //  - 配对 cell 已滚出视口（无 flight 可建）：同步 _startHeroTransition
+    //    的末尾循环在 pop 第 0 帧（to 页尚不可见）恢复 push 时留下的
+    //    placeholder = 安静淡出（系统相册同款行为；defer 会让恢复推迟到
+    //    动画中后段 = 缩略图"闪烁一次"）。
+    // 「无配对」不做 defer 判定——它与「band 重建中」无法从 HeroController
+    // 区分，只有 app 的 flag 是可靠信号。
+    final bool flag = deferNextPopFlight;
+    deferNextPopFlight = false;
+    if (flag) {
+      debugPrint('[HERO-CTL] pop-flight defer (flag)');
+      _scheduleDeferredPopFlight(route, previousRoute);
+      return;
+    }
     _startHeroTransition(
       route,
       previousRoute,
@@ -910,6 +991,65 @@ class HeroController extends NavigatorObserver {
     // visort patch: flight overlay 已插到最上 → 同步通知 app 重插 chrome
     // entry（同帧回到飞行层之上，无首帧闪烁）。
     onPopFlightStarted?.call();
+  }
+
+  /// visort patch: deferred pop flight 的帧末启动（带就位重试）。to 侧
+  /// hero 尚收集不到而 from 侧有 hero 时再等一帧（上限 3 次）：首页
+  /// IndexedStack 各页的 HeroMode(enabled: 活动页) 由 didChangeTop 驱动
+  /// app rebuild，落地在下一帧——若在 rebuild 前启动，toHeroes 收不到
+  /// 配对项，_startHeroTransition 末尾的 toHero.endFlight() 兜底恢复循环
+  /// 空转 → push 时 keepPlaceholder 的卡片 child 永久 Offstage（缩略图
+  /// 黑块 + 卡片手势失效）。to 页本来无 hero 时不再等待（空等无意义，
+  /// flight 本就不存在）。
+  void _scheduleDeferredPopFlight(
+    PageRoute<dynamic> route,
+    PageRoute<dynamic> previousRoute, {
+    int attemptsLeft = 3,
+    bool isUserGestureTransition = false,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((Duration value) {
+      if (route.navigator == null || previousRoute.navigator == null) {
+        return;
+      }
+      if (attemptsLeft > 0 && _deferredTargetsPending(route, previousRoute)) {
+        debugPrint('[HERO-CTL] pop-flight retry (attempts=$attemptsLeft)');
+        _scheduleDeferredPopFlight(
+          route,
+          previousRoute,
+          attemptsLeft: attemptsLeft - 1,
+          isUserGestureTransition: isUserGestureTransition,
+        );
+        return;
+      }
+      debugPrint('[HERO-CTL] pop-flight start-deferred ${route.settings.name}');
+      _startHeroTransition(
+        route,
+        previousRoute,
+        HeroFlightDirection.pop,
+        isUserGestureTransition,
+      );
+      if (!isUserGestureTransition) {
+        // visort patch: flight overlay 已插到最上 → 同步通知 app 重插 chrome
+        // entry（同帧回到飞行层之上，无首帧闪烁）。
+        onPopFlightStarted?.call();
+      }
+    }, debugLabel: 'HeroController.deferredPopFlight');
+  }
+
+  /// deferred 启动的就位判定：from 有 hero 而 to 侧一个都收集不到
+  ///（HeroMode 未 rebuild / band 未建）。to 非空但有缺项不算——那是常态
+  ///（网格 viewport 内配不上 tag 的 hero 一大把），等了也不会变。
+  bool _deferredTargetsPending(PageRoute<dynamic> from, PageRoute<dynamic> to) {
+    final NavigatorState? nav = navigator;
+    final BuildContext? fromCtx = from.subtreeContext;
+    final BuildContext? toCtx = to.subtreeContext;
+    if (nav == null || fromCtx == null || toCtx == null) {
+      return false;
+    }
+    if (Hero._allHeroesFor(fromCtx, false, nav).isEmpty) {
+      return false;
+    }
+    return Hero._allHeroesFor(toCtx, false, nav).isEmpty;
   }
 
   @override
@@ -925,6 +1065,7 @@ class HeroController extends NavigatorObserver {
       if (previousTopRoute == _popFlightHandled) {
         // visort patch: 该 pop 已在动画开头由 didPop 启动 flight（见 didPop），
         // didChangeTop 在动画结束后触发，跳过避免 divert 闪烁。
+        debugPrint('[HERO-CTL] skip-stale-pop ${previousTopRoute.settings.name}');
         _popFlightHandled = null;
         return;
       }
@@ -1004,13 +1145,17 @@ class HeroController extends NavigatorObserver {
       switch (flightType) {
         case HeroFlightDirection.pop:
           if (fromRoute.animation!.value == 0.0) {
+            debugPrint('[HERO-CTL] early-return pop-value0');
             return;
           }
         case HeroFlightDirection.push:
           if (toRoute.animation!.value == 1.0) {
+            debugPrint('[HERO-CTL] early-return push-value1');
             return;
           }
       }
+    } else {
+      debugPrint('[HERO-CTL] no-flightType $fromRoute -> $toRoute');
     }
 
     // For pop transitions driven by a user gesture: if the "to" page has
@@ -1024,6 +1169,17 @@ class HeroController extends NavigatorObserver {
         flightType == HeroFlightDirection.pop &&
         toRoute.maintainState &&
         hasValidSize) {
+      // visort patch: 手势返回的同步启动同样只在 to hero 就位时成立——
+      // viewer 翻多张后返回，目标 cell 可能尚未构建（app 的网格重定位
+      // 冲刷由动画 value 首降触发，晚于本方法）→ manifest 为空 = 淡出。
+      // 缺失（或 app 已声明将重定位）时延到帧末：手势起步帧动画几乎未
+      // 动，shuttle 晚一帧无感；届时冲刷已完成、新 bounds 正确。
+      if (deferNextPopFlight) {
+        deferNextPopFlight = false;
+        debugPrint('[HERO-CTL] gesture pop-flight defer');
+        _scheduleDeferredPopFlight(fromRoute, toRoute, isUserGestureTransition: true);
+        return;
+      }
       _startHeroTransition(fromRoute, toRoute, flightType, isUserGestureTransition);
     } else {
       // Otherwise, delay measuring until the end of the next frame to allow
@@ -1115,8 +1271,6 @@ class HeroController extends NavigatorObserver {
       // Only proceed with a valid manifest. Otherwise abort the existing
       // flight, and call endFlight when this for loop finishes.
       if (manifest != null && manifest.isValid) {
-        }
-      if (manifest != null && manifest.isValid) {
         toHeroes.remove(tag);
         if (existingFlight != null) {
           existingFlight.divert(manifest);
@@ -1124,6 +1278,14 @@ class HeroController extends NavigatorObserver {
           _flights[tag] = _HeroFlight(_handleFlightEnded)..start(manifest);
         }
       } else {
+        // hasTo=false 是常态（网格 viewport 内配不上 viewer tag 的 hero），
+        // 只在"有 toHero 却无效"（真正异常）时打点。
+        if (toHero != null) {
+          debugPrint(
+            '[HERO-CTL] invalid-manifest tag=$tag type=$flightType '
+            'valid=${manifest?.isValid}',
+          );
+        }
         existingFlight?.abort();
       }
     }

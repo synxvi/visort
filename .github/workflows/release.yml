@@ -38,7 +38,7 @@ jobs:
         #（归档于 flutter-sdk-patches/）；官方 SDK 无此 API，不打补丁
         # analyze/编译直接 error。--forward 幂等（缓存 SDK 已打过则跳过）。
         run: |
-          patch -d "$FLUTTER_ROOT" -p1 --forward < flutter-sdk-patches/heroes-pop-flight_v3.44.patch \
+          patch -d "$FLUTTER_ROOT" -p1 --forward < flutter-sdk-patches/heroes-pop-flight_v3.47.patch \
             || { echo "::error::SDK patch 应用失败（heroes.dart context 漂移？需重制补丁）"; exit 1; }
 
       - name: Install dependencies

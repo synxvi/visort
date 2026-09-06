@@ -110,7 +110,11 @@ class _ThumbnailWidgetState extends State<ThumbnailWidget> {
       size: widget.thumbnailSize,
       squareCrop: true,
     );
-    if (PaintingBinding.instance.imageCache.containsKey(provider)) {
+    // containsKey 漏 live 态（切后台 clear 后在屏图 completer 仍活）→
+    // 假 miss 触发占位+重解码；statusForKey 三态任一命中即安全 setState
+    //（live 时 Image resolve 在 putIfAbsent 内零解码复活，同步出图）。
+    final status = PaintingBinding.instance.imageCache.statusForKey(provider);
+    if (status.live || status.keepAlive || status.pending) {
       cachePerfProbe(cacheLevelThumb(widget.thumbnailSize, true), true);
       setState(() {
         _imageProvider = provider;

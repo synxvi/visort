@@ -78,6 +78,14 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
   /// monotonicExtent 模式：滚动中见过的最大 maxScrollExtent（只增不减）。
   double _maxEverExtent = 0.0;
 
+  /// 几何结构变化（列数/行高切换）待重置单调基准。
+  /// monotonic 只防【同结构】滚动中的估算抖动；跨结构（切列数 →
+  /// maxScrollExtent 整体改变，可能变小）沿用旧基准 = 手柄位置恒按旧
+  /// 几何计算——切列数手柄不动，滚动一次被 _refreshMaxEver 纠正且只在
+  /// 变高方向纠正（2026-09-06 真机实证）。totalItems 变化【不】重置：
+  /// loadMore 阶梯暴涨的防回跳语义保留。
+  bool _geoDirty = false;
+
   /// 刷新单调分母（monotonicExtent 模式用）。
   void _refreshMaxEver() {
     final c = widget.controller;
@@ -140,6 +148,18 @@ class _ScrollDragHandleState extends State<ScrollDragHandle> {
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller.removeListener(_update);
       widget.controller.addListener(_update);
+    }
+    // 列数/行高变化：新几何要到本帧布局后才反映进 maxScrollExtent
+    //（didUpdateWidget 时仍 是旧值），帧末重建单调基准并重算手柄位置。
+    if (oldWidget.rowExtent != widget.rowExtent ||
+        oldWidget.columns != widget.columns) {
+      _geoDirty = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_geoDirty) return;
+        _geoDirty = false;
+        _maxEverExtent = 0;
+        _update(); // _refreshMaxEver 重建基准 + setState 重算位置
+      });
     }
   }
 

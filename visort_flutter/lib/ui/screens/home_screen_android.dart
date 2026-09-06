@@ -1873,7 +1873,7 @@ class _HomeBucketTile extends StatefulWidget {
   /// 父级飞行目标 tag（点击相册瞬间非 null，用于 HeroMode 屏蔽本 tile）。
   final String? flightTag;
   /// 点击时通知父级置位飞行目标（父级 setState 后本 tile rebuild）。
-  final ValueChanged<String>? onFlightStart;
+  final ValueChanged<String?>? onFlightStart;
   final bool grid;
 
   /// 本组已进入选择模式（至少一个相册被勾选）：此时点击 tile 改为勾选/取消本相册，
@@ -2138,7 +2138,7 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
         'bucketCount': widget.bucket.count,
       };
       await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
-      if (mounted) widget.onFlightStart?.call(''); // 清除
+      if (mounted) widget.onFlightStart?.call(null); // 清除（null 而非 ''——判定是 flightTag == null，'' 会永久屏蔽全部 tile 的 HeroMode）
       // 从相册返回：刷新封面/数量（相册内可能删除了图片/改了排序）
       widget.onAlbumReturned?.call();
     } finally {
@@ -2338,9 +2338,16 @@ class _CoverThumb extends StatelessWidget {
       enabled: heroEnabled,
       child: Hero(
       tag: heroTag ?? 'photo_$coverId',
+      // [immich 同款] push 取 from、pop 取 to（pop 时 to 也是封面/网格端）
+      // ——两端皆方形 cover，行为与旧恒取 to 一致，统一写法（见
+      // gallery_file_widget 注释）。
       flightShuttleBuilder:
-          (flightContext, animation, type, fromHeroContext, toHeroContext) =>
-              (toHeroContext.widget as Hero).child,
+          (flightContext, animation, flightDirection, fromHeroContext, toHeroContext) =>
+              ((flightDirection == HeroFlightDirection.push
+                      ? fromHeroContext.widget
+                      : toHeroContext.widget)
+                  as Hero)
+                  .child,
       transitionOnUserGestures: true,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(6),

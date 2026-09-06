@@ -42,6 +42,14 @@ const int kFilmstripThumbLoadSize = 96;
 /// 单点定义防漂移。
 const int kViewerLargeThumbSize = 640;
 
+/// viewer 端正在显示的图源注册表（photoId → provider）。zoomable_image
+/// build 时写入、dispose 时移除、detail_page dispose 时整体兜底清空。
+/// 飞行层（Hero shuttle）第一优先级图源：正在显示的 provider 其
+/// completer 必然存活，resolve 同步出图——不受 ImageCache evict/LRU
+/// 影响（pop 时被 evictViewerImageCache/逐出的档位照常可用），push 首帧
+/// 与 viewer 端落位图完全同源。
+final Map<String, ImageProvider> kLiveViewerProviders = {};
+
 // ───────────────── [visort 追加] 沉浸退出后恢复无背景系统栏 ─────────────────
 // 手势条（小横条）无背景：导航栏透明色用 alpha=0 但 RGB 非零的 workaround
 // （部分 ROM 把全零当「未设置」而回退半透明 scrim；同 main.dart
@@ -75,6 +83,12 @@ class InheritedDetailPageState extends InheritedWidget {
   final ValueNotifier<String?> showingThumbnailFallbackNotifier;
   final ValueNotifier<bool> isZoomedNotifier;
 
+  /// 当前选中页索引（PageView/条联动）——子页 ZoomableImage 用它判断
+  /// 自己是否为当前显示页：预建途经页（allowImplicitScrolling ±1）跳过
+  /// 重加载/盘缓存探测/条 heavy 预取，翻到时 build 自然重排（push 窗口
+  /// 请求收敛，对齐 immich 打开只发当前页请求的模型）。
+  final ValueNotifier<int> selectedIndexNotifier;
+
   /// [顶层双击路由] pageIndex → 该页双击处理（global 坐标）。
   /// Scrollable ballistic 中 ignorePointer 屏蔽页内 tap，双击由
   /// DetailPage 顶层捕获后按当前页索引分发。
@@ -92,6 +106,7 @@ class InheritedDetailPageState extends InheritedWidget {
     required this.isInSharedCollectionNotifier,
     required this.showingThumbnailFallbackNotifier,
     required this.isZoomedNotifier,
+    required this.selectedIndexNotifier,
     required this.doubleTapHandlers,
     required this.zoomTransformNotifier,
     this.onImageTap,
@@ -149,5 +164,6 @@ class InheritedDetailPageState extends InheritedWidget {
       oldWidget.showingThumbnailFallbackNotifier !=
           showingThumbnailFallbackNotifier ||
       oldWidget.isZoomedNotifier != isZoomedNotifier ||
+      oldWidget.selectedIndexNotifier != selectedIndexNotifier ||
       oldWidget.zoomTransformNotifier != zoomTransformNotifier;
 }
