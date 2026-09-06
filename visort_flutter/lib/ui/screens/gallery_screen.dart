@@ -736,9 +736,16 @@ class _CoverThumb extends StatelessWidget {
         enabled: heroEnabled,
         child: Hero(
           tag: heroTag ?? 'photo_$coverId',
+          // [immich 同款] push 取 from、pop 取 to（pop 时 to 也是封面/网格端）
+          // ——两端皆方形 cover，行为与旧恒取 to 一致，统一写法（见
+          // gallery_file_widget 注释）。
           flightShuttleBuilder:
-              (flightContext, animation, type, fromHeroContext, toHeroContext) =>
-                  (toHeroContext.widget as Hero).child,
+              (flightContext, animation, flightDirection, fromHeroContext, toHeroContext) =>
+                  ((flightDirection == HeroFlightDirection.push
+                          ? fromHeroContext.widget
+                          : toHeroContext.widget)
+                      as Hero)
+                      .child,
           transitionOnUserGestures: true,
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),

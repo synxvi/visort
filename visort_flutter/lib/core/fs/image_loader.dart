@@ -105,6 +105,12 @@ void evictViewerImageCache(String mediaStoreId, int targetWidth) {
   final results = <bool>[
     cache.evict(_AndroidBytesImageProvider(ref: ref)),
     cache.evict(_AndroidBytesImageProvider(ref: ref, targetWidth: targetWidth)),
+    // large640 等比档（= detail_page_state.kViewerLargeThumbSize，core 层
+    // 不可 import UI 常量故写字面值）：此前只进不出，长会话逐张累积
+    //（竖图 ~2.9MB/条）挤占网格档 → pop 落位黑格的元凶之一，一并清理。
+    cache.evict(
+      _AndroidThumbnailProvider(ref: ref, size: 640, squareCrop: false),
+    ),
   ];
   cachePerfEvict('viewer', mediaStoreId, results);
 }
@@ -180,6 +186,33 @@ class _AndroidBytesImageProvider
     _AndroidBytesImageProvider key,
     ImageDecoderCallback decode,
   ) {
+    // 【raw 直路】viewer full（targetWidth 非 GIF）：native readSampledImage
+    // 返回的已是最终 ARGB 像素——decodeImageFromPixels 同步建 ui.Image，
+    // 完全绕开 ImageDescriptor.raw→codec→getNextFrame 的引擎 io worker
+    // 解码队列。真机实证（2026-09-06）：盘缓存 30ms 出像素后，帧生产在
+    // codec 队列排 ~700ms =「翻页糊半秒以上」的根因（窗口内 Dart isolate
+    // 全程空闲在等 getNextFrame 的 Future）；raw 描述符的 desc/buffer
+    // 生命周期纠缠（855ms 停摆事件，见下方注释）也一并消除。
+    // GIF/全分辨率（HD 放大）路径保持 MultiFrame（多帧语义必须 codec）。
+    final tw = key.targetWidth;
+    final isRawPath =
+        tw != null && tw > 0 && key.ref.extension.toLowerCase() != '.gif';
+    if (isRawPath) {
+      return _RawImageStreamCompleter(
+        _loadRawImage(key, decode),
+        // [RAW] 排查打点标识（id）。
+        debugLabel: 'id: ${key.ref.relativePath}',
+        informationCollector: () sync* {
+          yield ErrorDescription('id: ${key.ref.relativePath}');
+        },
+      );
+    }
+    // 【initialImage 同步回退机制已撤销】试验版在真机上引发"第二次打开
+    // 同图时 855ms 全管线停摆"（帧数据：两线程 busy 均 <10ms 但 855ms
+    // 无帧提交，停摆窗内零日志）——高度疑似回退帧与 640 档 completer
+    // 共享 ui.Image 的生命周期纠缠（evict/换帧 double-dispose → raster
+    // 层阻塞恢复）。immich 的 OneFrame completer 体系自管理帧生命周期，
+    // 直接嫁接到 MultiFrame completer 上不可行，需整套移植才安全。
     return MultiFrameImageStreamCompleter(
       codec: _loadAsync(key, decode),
       scale: 1.0,
@@ -189,59 +222,85 @@ class _AndroidBytesImageProvider
     );
   }
 
+  /// raw 直路的帧生产（与 _loadAsync 的 raw 分支同源，但直接产 ui.Image）：
+  /// readSampledImage（ServicePolicy 限流）→ decodeImageFromPixels 同步建帧；
+  /// 失败（超时/channel/解码）回退 readBytes + decode codec 单帧转 image。
+  Future<ui.Image> _loadRawImage(
+    _AndroidBytesImageProvider key,
+    ImageDecoderCallback decode,
+  ) async {
+    final tw = key.targetWidth!;
+    try {
+      // [RAW] 排查打点：channel 回传时刻（与 [SP] 的任务完成时刻对齐——
+      // 二者应同刻；[RAW] px 晚于 [SP] done = Dart→native 发起或回传被延迟）。
+      final rawT0 = DateTime.now().microsecondsSinceEpoch ~/ 1000;
+      final r = await ServicePolicy.instance
+          .run(
+            key.priority,
+            () => _msChannel.readSampledImage(
+              key.ref.relativePath,
+              targetWidth: tw,
+            ),
+            tag: 'full${tw}:${key.ref.id}',
+          )
+          .timeout(const Duration(seconds: 5));
+      debugPrint(
+        '[RAW] px id=${key.ref.id} dt=${(DateTime.now().microsecondsSinceEpoch ~/ 1000) - rawT0}ms t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
+      );
+      // 同步直建（decodeImageFromPixelsSync）：不走 instantiateCodec/
+      // getNextFrame 的引擎 io worker 队列（decodeImageFromPixels 异步版
+      // 内部仍是 codec+getNextFrame，绕不开）；像素拷贝在当前线程
+      //（~3MB 几 ms）。
+      final img = ui.decodeImageFromPixelsSync(
+        r.pixels,
+        r.width,
+        r.height,
+        ui.PixelFormat.rgba8888,
+      );
+      cachePerfDecode(
+        cacheLevelFull(tw),
+        key.ref.id,
+        r.width,
+        r.height,
+        via: 'direct',
+      );
+      return img;
+    } catch (_) {
+      cachePerfEvent('fallback L=${cacheLevelFull(tw)} id=${key.ref.id}');
+    }
+    // 兜底：readBytes 全图 + dart 侧下采样解码（codec 单帧转 image；非
+    // GIF——GIF 已在 loadImage 分流到 MultiFrame 路径）。
+    final bytes = await _fs.readBytes(key.ref);
+    final buffer = await ui.ImmutableBuffer.fromUint8List(
+      bytes is Uint8List ? bytes : Uint8List.fromList(bytes),
+    );
+    final codec = await decode(
+      buffer,
+      getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
+        cachePerfDecodeIntrinsic(
+          '${cacheLevelFull(tw)}FB',
+          key.ref.id,
+          intrinsicWidth,
+          intrinsicHeight,
+        );
+        return ui.TargetImageSize(width: tw);
+      },
+    );
+    final frame = await codec.getNextFrame();
+    return frame.image;
+  }
+
   Future<ui.Codec> _loadAsync(
     _AndroidBytesImageProvider key,
     ImageDecoderCallback decode,
   ) async {
+    // raw ARGB 路径（targetWidth 非 GIF）已在 loadImage 分流到
+    // _loadRawImage 直路——本方法只剩 GIF 多帧与全分辨率（HD）两类。
     final tw = key.targetWidth;
     // GIF:跳过 readSampledImage——Kotlin 侧 BitmapFactory 采样解码只取首帧,
     // 返回 raw ARGB 单帧,MultiFrameImageStreamCompleter 拿到的 codec 无后续帧
     // → viewer 里 GIF 永远停在第一帧。走 readBytes 全量 + dart 解码保持多帧。
     final isGif = key.ref.extension == '.gif';
-    // targetWidth 指定(viewer 全图):优先走 native readSampledImage(下采样解码,快)。
-    // 失败(超时/channel/解码异常)→ 回退 readBytes 全图,保证可用(诊断期)。
-    if (tw != null && tw > 0 && !isGif) {
-      try {
-        // raw ARGB 像素(不经 JPEG):ImmutableBuffer + ImageDescriptor.raw 直接
-        // instantiateCodec,跳过 dart 侧二次 JPEG 解码(原 P0 根因)。
-        // ServicePolicy 优先级 150:用户正看的大图,压过网格清晰层(200),
-        // 不低于占位层(100)。
-        final r = await ServicePolicy.instance
-            .run(
-              key.priority,
-              () => _msChannel.readSampledImage(
-                key.ref.relativePath,
-                targetWidth: tw,
-              ),
-              tag: 'full${tw}:${key.ref.id}',
-            )
-            .timeout(const Duration(seconds: 5));
-        final sBuffer = await ui.ImmutableBuffer.fromUint8List(r.pixels);
-        final desc = ui.ImageDescriptor.raw(
-          sBuffer,
-          width: r.width,
-          height: r.height,
-          pixelFormat: ui.PixelFormat.rgba8888,
-        );
-        // 必须 await：否则 instantiateCodec 的异步错误逃出 catch，
-        // 不落 readBytes 兜底（3.47 unawaited_return_in_try_block 揪出）。
-        final codec = await desc.instantiateCodec();
-        // ⚠️ 此处不可 dispose desc/sBuffer（真机实证 2026-09-02）：raw
-        // 描述符的 codec 惰性引用像素，解码发生在 io worker 线程——
-        // dispose 后 codec 下一次 getNextFrame 解引用已清零的内部结构
-        // → SIGSEGV(addr 0x20, libflutter.so io.worker)。SDK 的
-        // instantiateImageCodecWithSize 敢在 finally 里 dispose buffer，
-        // 只因那条路是 ImageDescriptor.encoded（数据已被拷贝消费）；
-        // painting.dart:8939 的「保留至所有持有者 dispose」保护网不
-        // 覆盖 codec 对 raw 像素的引用。代价：每张全图多滞留 w×h×4
-        // 原生内存至 GC 终结器回收（审查 P1，两害相权取其轻）。
-        cachePerfDecode(cacheLevelFull(tw), key.ref.id, r.width, r.height);
-        return codec;
-      } catch (_) {
-        // readSampledImage 失败(超时/channel/解码)→ 落到下面 readBytes 兜底
-        cachePerfEvent('fallback L=${cacheLevelFull(tw)} id=${key.ref.id}');
-      }
-    }
     final bytes = await _fs.readBytes(key.ref);
     final buffer = await ui.ImmutableBuffer.fromUint8List(
       bytes is Uint8List ? bytes : Uint8List.fromList(bytes),
@@ -311,6 +370,61 @@ class _AndroidBytesImageProvider
 
 /// 全局 FS 实例（避免每个 ImageProvider 重复创建）
 final FileSystemRepository _fs = AndroidMediaStoreFileSystem();
+
+/// raw ARGB 单帧 completer（viewer full 直路，见 _AndroidBytesImageProvider
+/// .loadImage 的 raw 直路注释）：Future<ui.Image> 完成 → setImage 同步通知。
+/// 生命周期沿用基类协议（listeners 空 + keepAlive 0 → onDisposed 释放
+/// ui.Image；各 listener 拿的是 clone，dispose 只减引用计数）。
+class _RawImageStreamCompleter extends ImageStreamCompleter {
+  /// ⚠️ ui.Image 所有权归基类：setImage 传入的实例存入基类 `_currentImage`，
+  /// 基类 `_maybeDispose()` 在 onDisposed() **之前**已 `_currentImage?.dispose()`
+  ///（image_stream.dart:709-712）——子类不得再持引用二次 dispose（真机切后台
+  /// 实证 "native peer has been collected" 崩溃，抛在帧回调里中断当帧回调链）。
+  /// 迟到图（completer 已 dispose 时 future 才完成）自行释放防泄漏。
+  _RawImageStreamCompleter(
+    Future<ui.Image> image, {
+    String? debugLabel,
+    InformationCollector? informationCollector,
+  }) : _informationCollector = informationCollector {
+    image.then(
+      (img) {
+        if (_dead) {
+          img.dispose(); // completer 已回收：无人接盘，自释放防泄漏
+          return;
+        }
+        // [RAW] 排查打点：setImage 实际生效时刻（与 [RAW] px 间隔 = future
+        // 续体延迟；与 [PROBE] 行对齐看翻页 740ms 窗口内它落在哪）。
+        debugPrint(
+          '[RAW] set id=$debugLabel t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
+        );
+        setImage(ImageInfo(image: img));
+      },
+      onError: (Object exception, StackTrace stackTrace) {
+        reportError(
+          context: ErrorDescription('解析 raw ARGB 图片'),
+          exception: exception,
+          stack: stackTrace,
+          informationCollector: _informationCollector,
+          silent: true,
+        );
+      },
+    );
+  }
+
+  final InformationCollector? _informationCollector;
+
+  /// 已 dispose（onDisposed 置位）：迟到的 future 结果丢弃。
+  bool _dead = false;
+
+  @override
+  void onDisposed() {
+    _dead = true;
+    debugPrint(
+      '[RAW] disposed t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
+    );
+    super.onDisposed();
+  }
+}
 
 /// 全局 MediaStoreChannel 实例（缩略图用）
 const MediaStoreChannel _msChannel = MediaStoreChannel();

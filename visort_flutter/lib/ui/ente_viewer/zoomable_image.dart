@@ -235,10 +235,35 @@ class _ZoomableImageState extends State<ZoomableImage> {
       _notifyReadyOnce();
     }
     _inherited = InheritedDetailPageState.maybeOf(context);
+    // 翻页升级链的即时驱动（见 _onSelectedChanged doc）：sel listener 必须挂
+    // ——快甩 ballistic ~700ms 期间 ZoomableImage.build 不会重跑（外层
+    // ValueListenableBuilder 只包 HeroMode，sel 变化不触发本 State.build），
+    // 不监听的话显示升级被压到滚动停止后 = 翻页糊图期恒等于惯性时长
+    //（真机实测恒定 ~720ms，2026-09-06）。先摘再加：didChangeDependencies
+    // 可重跑（MediaQuery 变化），防重复挂载。
+    _inherited?.selectedIndexNotifier.removeListener(_onSelectedChanged);
+    _inherited?.selectedIndexNotifier.addListener(_onSelectedChanged);
     final idx = widget.pageIndex;
     if (idx != null) {
       _inherited?.doubleTapHandlers[idx] = _handleTopDoubleTap;
     }
+  }
+
+  /// 本页成为当前显示页的瞬间（selectedIndexNotifier == pageIndex）：
+  /// 立即发起显示升级链（盘缓存探测 / heavy 加载），不等 build 潮。
+  ///
+  /// 为什么必须监听：升级链（_probePassThrough / _fireHeavyLoads）挂在
+  /// build() 里，而 PageView 翻页时 sel 变化只重建外层 HeroMode 壳——
+  /// ZoomableImage.build 不重跑；下一次全页 build 要等 PageView 滚动
+  /// 完全停止（_pageGapVisible setState），FastScrollPhysics(speedFactor 4)
+  /// 甩动惯性 ~700ms = 「翻页糊图 0.5~1s」根因（真机 zbuild 时间线实证：
+  /// page→build潮恒定 715-725ms，updfl 与潮同刻）。
+  void _onSelectedChanged() {
+    if (!mounted || !_isCurrentPage) return;
+    if (_loadedFinalImage || _loadingFinalImage) return;
+    // 与 build 同链（probe 直通 → p50 full → updfl），一图一次守卫在
+    // _probePassThrough 内（_passThroughProbed）。
+    _loadLocalImage(context);
   }
 
   /// 初始 provider 按 ImageCache 分级取最高可用级（原图 > 512 > cell）。
@@ -257,6 +282,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// _loading=false → Hero 在树。pending 一律不选，回落 cell（正在网格
   /// 显示中 = live 条目，必已完成）。
   void _pickCachedProvider({bool allowCellThumb = true}) {
+    final _tIn = DateTime.now().microsecondsSinceEpoch ~/ 1000;
+    debugPrint('[B] pick-in t=$_tIn');
     final full = buildImageProvider(
       _ref,
       targetWidth: computeViewerTargetWidth(
@@ -323,6 +350,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 会阻塞对应分支的 precache，又没有实际加载在跑 → 缩略图永不清晰）。
     _loadingFinalImage = false;
     cachePerfEvent('pick id=${_photo.id} L=$picked${allowCellThumb ? '' : ' noCell'}');
+    debugPrint('[B] pick-out t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}');
   }
 
   /// 探测 provider 在 ImageCache 中是否已有【已完成】的解码条目。
@@ -340,8 +368,14 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// listener 无论同步/异步/出错触发都立即摘除，不留悬挂监听（挂着的
   /// listener 会阻止 completer 释放）。
   bool _probeSyncComplete(ImageProvider provider) {
-    if (!PaintingBinding.instance.imageCache.containsKey(provider)) {
-      return false; // 缓存外：不发起新加载
+    // containsKey 不查 liveImages：切后台 onTrimMemory→imageCache.clear()
+    // 后，在屏图的 completer 仍在 liveImages 里活着，但 containsKey=false
+    // → 探测假 miss（切后台回来首开黑块/网格全冷的根因）。statusForKey
+    // 含 live 态；live 命中时 resolve 会在 putIfAbsent 内零解码复活该
+    // completer（同步出图），无新解码副作用。
+    final status = PaintingBinding.instance.imageCache.statusForKey(provider);
+    if (!status.live && !status.keepAlive && !status.pending) {
+      return false; // 三态皆空：不发起新加载
     }
     final stream = provider.resolve(const ImageConfiguration());
     final completer = stream.completer;
@@ -366,6 +400,29 @@ class _ZoomableImageState extends State<ZoomableImage> {
     _coreKey.currentState?.doubleTapZoom(box.globalToLocal(globalPosition));
   }
 
+  /// 本页是否为当前显示页（PageView/条联动 selectedIndex）：预建途经页
+  /// 跳过重加载与盘缓存探测——push 窗口请求收敛（对齐 immich：打开只发
+  /// 当前页请求，邻页翻到时再发）。翻到时 PageView 为该页重新 build →
+  /// 探测与 timer 自然重排。信息缺失（pageIndex/inherited 不可得）不拦截。
+  bool get _isCurrentPage {
+    final sel = _inherited?.selectedIndexNotifier.value;
+    final idx = widget.pageIndex;
+    if (sel == null || idx == null) return true;
+    return sel == idx;
+  }
+
+  /// 回退/加载态 Hero 的原比例紧框：cover 展开式飞行（immich，shuttle
+  /// 取网格端方形 cover child）要求 viewer 端 hero rect 恒为原比例
+  /// contain 框（与 PhotoViewCore 态的 hero rect 同尺寸，飞行终点框与
+  /// 落位图框一致）——Center 会被父约束撑成全屏 → 飞行终点错位。
+  /// AspectRatio 在任意父约束下取最大等比容纳框；宽高元数据缺失兜底居中。
+  Widget _aspectHeroFrame(Widget child) {
+    final w = _photo.width;
+    final h = _photo.height;
+    if (w <= 0 || h <= 0) return Center(child: child);
+    return AspectRatio(aspectRatio: w / h, child: Center(child: child));
+  }
+
   void _subscribeToZoomStream() {
     _zoomStreamSubscription = _photoViewController.outputStateStream.listen((
       value,
@@ -388,6 +445,10 @@ class _ZoomableImageState extends State<ZoomableImage> {
 
   @override
   void dispose() {
+    _inherited?.selectedIndexNotifier.removeListener(_onSelectedChanged);
+    if (kLiveViewerProviders[_photo.id] == _imageProvider) {
+      kLiveViewerProviders.remove(_photo.id);
+    }
     // 路过页被扫过销毁：重加载延迟取消（快甩守门的关键路径——timer 内
     // gen/mounted 双校验本也能拦，主动取消少一次唤醒）。
     _heavyLoadTimer?.cancel();
@@ -408,7 +469,18 @@ class _ZoomableImageState extends State<ZoomableImage> {
 
   @override
   Widget build(BuildContext context) {
+    // [B] 排查打点：本页 build 潮时刻 + 当时选中页（selectedIndex 已更新
+    // 而本页 build 晚到 = 显示升级的真正起点延迟）。
+    debugPrint(
+      '[B] zbuild idx=${widget.pageIndex} sel=${_inherited?.selectedIndexNotifier.value} '
+      't=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
+    );
     _loadLocalImage(context);
+    // 飞行层图源注册（见 kLiveViewerProviders doc）：正在显示的 provider，
+    // Hero shuttle 第一优先级取用（同步出图，不受 evict/LRU 影响）。
+    if (_imageProvider != null) {
+      kLiveViewerProviders[_photo.id] = _imageProvider!;
+    }
     Widget content;
 
     if (_imageProvider != null) {
@@ -457,12 +529,13 @@ class _ZoomableImageState extends State<ZoomableImage> {
               screenRelativeImageWidth = screenWidth;
               screenRelativeImageHeight = screenHeight;
             }
-            return Center(
-              child: SizedBox(
-                width: screenRelativeImageWidth,
-                height: screenRelativeImageHeight,
-                child: const _DelayedLoadingIndicator(),
-              ),
+            // 原比例紧框（不套 Center——Center 会把 hero rect 撑成全屏，
+            // cover 展开式飞行终点错位，见 _aspectHeroFrame）：本框即
+            // wrappers loading 分支 Hero 的 rect，与 PhotoViewCore 态一致。
+            return SizedBox(
+              width: screenRelativeImageWidth,
+              height: screenRelativeImageHeight,
+              child: const Center(child: _DelayedLoadingIndicator()),
             );
           },
         ),
@@ -475,8 +548,10 @@ class _ZoomableImageState extends State<ZoomableImage> {
       content = Hero(
         tag: 'photo_${_photo.id}',
         transitionOnUserGestures: true,
-        child: Center(
-          child: Image(
+        // 原比例紧框（_aspectHeroFrame）：hero rect 与 PhotoViewCore 态
+        // 同为原比例 contain 框，cover 展开式飞行的终点框不错位。
+        child: _aspectHeroFrame(
+          Image(
             // 等比（同 large key），错误兜底显示也不裁切变形。
             image: buildThumbnailProvider(
               _ref,
@@ -495,10 +570,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
     } else {
       // 加载态（连 strip/cell 都未就绪的极短窗口）：同上补 Hero——快甩到
       // 远处立即返回时源端有 Hero，pop 飞行照常起飞（显示网格缩略图飞回）。
+      // 同样用 _aspectHeroFrame 原比例紧框保终点框一致。
       content = Hero(
         tag: 'photo_${_photo.id}',
         transitionOnUserGestures: true,
-        child: const Center(child: _DelayedLoadingIndicator()),
+        child: _aspectHeroFrame(const _DelayedLoadingIndicator()),
       );
     }
 
@@ -544,29 +620,70 @@ class _ZoomableImageState extends State<ZoomableImage> {
     if (!Platform.isAndroid) return; // 盘缓存在 MediaStore 侧
     if (_photo.mime == 'image/gif') return; // GIF 走 readBytes 多帧，不读盘缓存
     if (_loadedFinalImage || _loadingFinalImage) return;
+    // 仅当前显示页：预建途经页（allowImplicitScrolling ±1）不发盘探测——
+    // push 窗口请求收敛（对齐 immich 打开只发当前页请求的模型）；翻到时
+    // PageView 重新 build → 本方法重跑（_passThroughProbed 仍 false）。
+    if (!_isCurrentPage) return;
     _passThroughProbed = true;
     final gen = _loadGeneration;
     final tw = computeViewerTargetWidth(
       MediaQuery.sizeOf(context).width *
           MediaQuery.devicePixelRatioOf(context),
     );
+    // full 已在 ImageCache completed（预取/回看命中）：零等待直接升级显示。
+    // 盘缓存探测是 channel 往返，解码洪峰下回调可延迟数百 ms（真机实测
+    // page→pass hit 369-743ms，期间 full 明明已在缓存）——缓存命中场景
+    // 无需任何探测，build 同步帧即上屏。
+    final cachedFull = buildImageProvider(_ref, targetWidth: tw);
+    if (_probeSyncComplete(cachedFull)) {
+      _loadingFinalImage = true;
+      _updateViewWithFinalImage(cachedFull);
+      return;
+    }
+    // [PROBE] 排查打点：缓存命中失败的条目三态（live=在屏 / keep=缓存持有
+    // / pend=解码在途）——full 明明解码完成（[SP] 行）却未同步命中时，
+    // 此行指认条目真实状态。
+    final st = PaintingBinding.instance.imageCache.statusForKey(cachedFull);
+    debugPrint(
+      '[PROBE] id=${_photo.id} miss live=${st.live} keep=${st.keepAlive} '
+      'pend=${st.pending} t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
+    );
+    // 探测在即：无论本页 full 任务由谁发起（150ms 窗的 _fireHeavyLoads /
+    // onPageChanged 的邻居预取），先把队列中该任务升到当前页级 p50——
+    // precacheImage 同 key 只合并 listener，改不了已入队任务的优先级
+    //（连续翻页时 onPageChanged 同步段先入队的 p250 会赢下 load，后续
+    // 直通 resolve 全是合并 → 不 bump 就以预取级排在 640 清晰层 p200
+    // 后面，当前页 full 反而最后跑）。bump 只动未启动任务，已跑/已完
+    // 任务不受影响。
+    _bumpFullToViewerPriority(tw);
     // ImageConfiguration 在 async gap 前捕获：exists 回调里预热不再触碰
     // BuildContext（precacheImage 的 context 也只在同步首行构 config 用）。
     final config = createLocalImageConfiguration(context);
+    // [PROBE] 排查打点：exists channel 往返时长（同步化修复后应 ~几 ms；
+    // 数百 ms = Kotlin 侧仍被阻塞）。
+    final existsT0 = DateTime.now().microsecondsSinceEpoch ~/ 1000;
     MediaStoreChannel()
         .fullCacheExists(_photo.id, targetWidth: tw)
         .then((hit) {
+      debugPrint(
+        '[PROBE] exists-back id=${_photo.id} dt=${(DateTime.now().microsecondsSinceEpoch ~/ 1000) - existsT0}ms '
+        'hit=$hit t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
+      );
       if (!mounted || gen != _loadGeneration) return;
       if (!hit || _loadedFinalImage || _loadingFinalImage) return;
       _loadingFinalImage = true;
       _passThroughInFlight = true;
       cachePerfEvent('pass hit id=${_photo.id} tw=$tw');
+      // p120「掠过页」语义已随 _isCurrentPage 守卫消失（探测只对当前页
+      // 发起）——盘 miss 回退下采样原图同样发生在用户正盯着的页，直接
+      // 当前页级 p50；探测入口的 bump 已覆盖「合并进早先 p250 任务」。
       final full = buildImageProvider(
         _ref,
         targetWidth: tw,
-        priority: RequestPriority.passthroughFull,
+        priority: RequestPriority.viewerImage,
       );
-      _precacheWithConfig(full, config).then((_) {
+      _precacheWithConfig(full, config, probeTag: 'pass id=${_photo.id}')
+          .then((_) {
         if (gen != _loadGeneration) return;
         _passThroughInFlight = false;
         if (!mounted) return;
@@ -580,18 +697,40 @@ class _ZoomableImageState extends State<ZoomableImage> {
     });
   }
 
+  /// 把本页 full 的队列任务（任意发起者）升到当前页级 p50。precacheImage
+  /// 同 key 合并 listener 改不了已入队任务的优先级——bump 是唯一插队手段
+  ///（service_policy.bumpPriority doc）。tag 与 _loadRawImage 的入队 tag
+  /// 同格式（full$tw:$id）。
+  void _bumpFullToViewerPriority(int tw) {
+    ServicePolicy.instance.bumpPriority(
+      (t) => t.tag == 'full$tw:${_photo.id}',
+      RequestPriority.viewerImage,
+    );
+  }
+
   /// precacheImage 的 context-free 变体（语义对齐 SDK：resolve + 首帧/
   /// 错误均 complete + 帧末摘 listener），供 async gap 后预热——gap 前把
   /// ImageConfiguration 捕获好，回调里不再触碰 BuildContext。
+  /// [probeTag]：[PROBE] 打点标识（onImage 到达时刻/是否同步）。
   Future<void> _precacheWithConfig(
     ImageProvider provider,
-    ImageConfiguration config,
-  ) {
+    ImageConfiguration config, {
+    String? probeTag,
+  }) {
     final completer = Completer<void>();
+    final t0 = probeTag == null
+        ? 0
+        : DateTime.now().microsecondsSinceEpoch ~/ 1000;
     final stream = provider.resolve(config);
     late final ImageStreamListener listener;
     listener = ImageStreamListener(
       (ImageInfo? image, bool sync) {
+        if (probeTag != null) {
+          debugPrint(
+            '[PROBE] onImage $probeTag sync=$sync dt=${t0 == 0 ? -1 : (DateTime.now().microsecondsSinceEpoch ~/ 1000) - t0}ms '
+            't=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
+          );
+        }
         if (!completer.isCompleted) completer.complete();
         // 帧末再摘 listener（给 ImageCache live 追踪留一帧窗口，同 SDK）。
         SchedulerBinding.instance.addPostFrameCallback((_) {
@@ -619,7 +758,12 @@ class _ZoomableImageState extends State<ZoomableImage> {
         !_loadedLargeThumbnail &&
         !_loadedFinalImage) {
       final cellThumb = buildThumbnailProvider(_ref, size: _cellThumbSize(), squareCrop: true);
-      final cellHit = PaintingBinding.instance.imageCache.containsKey(cellThumb);
+      // 同 _probeSyncComplete：containsKey 漏 live 态（切后台 clear 后在屏
+      // 图仍活），statusForKey 三态任一命中即可安全 resolve。
+      final cellStatus =
+          PaintingBinding.instance.imageCache.statusForKey(cellThumb);
+      final cellHit =
+          cellStatus.live || cellStatus.keepAlive || cellStatus.pending;
       cachePerfProbe(cacheLevelThumb(_cellThumbSize(), true), cellHit);
       if (cellHit) {
         _imageProvider = cellThumb;
@@ -642,6 +786,10 @@ class _ZoomableImageState extends State<ZoomableImage> {
 
   /// 延迟窗结束真正发起 512 + 原图 precache（页仍在树上 = 观众还在）。
   void _fireHeavyLoads(BuildContext context) {
+    debugPrint('[B] heavy-in t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}');
+    // 仅当前显示页（见 _probePassThrough 同款守卫注释）：途经页 150ms
+    // 窗到点时若已被翻过/未翻到则不发；翻到时 build 重排 timer。
+    if (!_isCurrentPage) return;
     if (!_loadingLargeThumbnail &&
         !_loadedLargeThumbnail &&
         !_loadedFinalImage) {
@@ -678,21 +826,25 @@ class _ZoomableImageState extends State<ZoomableImage> {
     );
     if (_passThroughInFlight) {
       // 直通在途而页已存活过延迟窗（停稳/翻页预建）：把队列中该图的
-      // p120 直通任务升级到当前页级插队——快甩积压的其它直通不再排在
-      // 它前面，「停稳即清晰」不回归。同 key 的 precacheImage 合并
-      // listener 改不了已入队任务的优先级，bump 是唯一插队手段；已在跑
-      // 的不动（盘读 22-46ms 本就秒完）。
-      ServicePolicy.instance.bumpPriority(
-        (t) => t.tag == 'full$fullTw:${_photo.id}',
-        RequestPriority.viewerImage,
-      );
+      // 直通任务升级到当前页级插队（探测入口已 bump 过一次，此处是
+      // 防御性兜底——快甩积压的其它任务不再排在它前面，「停稳即清晰」
+      // 不回归）。已在跑的不动（盘读 22-46ms 本就秒完）。
+      _bumpFullToViewerPriority(fullTw);
     } else if (!_loadingFinalImage && !_loadedFinalImage) {
       _loadingFinalImage = true;
       final gen = _loadGeneration;
+      // [PROBE] 排查打点：full 重加载起跳（150ms 延迟窗后）——与 page 行
+      // 的间隔 = 当前页 build 潮实际到达本方法的延迟。
+      debugPrint(
+        '[PROBE] fire-full id=${_photo.id} t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
+      );
       final full = buildImageProvider(
         _ref,
         targetWidth: fullTw,
       );
+      // 同 key 合并防御（见 _probePassThrough 的 bump 注释）：早先 p250
+      // 预取任务可能已带着本 key 在队，precache 改不了它的优先级。
+      _bumpFullToViewerPriority(fullTw);
       precacheImage(full, context)
           .then((_) {
             if (!mounted || gen != _loadGeneration) return;
@@ -711,9 +863,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
             }
           });
     }
+    debugPrint('[B] heavy-out t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}');
   }
 
   Future<void> _updateViewWithFinalImage(ImageProvider imageProvider) async {
+    debugPrint('[B] updfl-in t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}');
     // 仅【真放大态】（用户主动 zoomedIn）才做 ente 式尺寸修正保持视角；
     // 其余态静默把 scaleState 归位 initial（setInvisibly 无通知、零副作用）。
     //

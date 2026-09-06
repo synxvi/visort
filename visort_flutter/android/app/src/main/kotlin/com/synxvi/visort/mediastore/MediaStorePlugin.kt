@@ -943,14 +943,17 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             result.error(MsError.InvalidArg("id 缺失").code, null, null); return
         }
         val targetWidth = call.argument<Int>("targetWidth") ?: 1152
-        ioExecutor.execute {
-            val hit = try {
-                repo.fullCacheExists(id, targetWidth)
-            } catch (e: Exception) {
-                false
-            }
-            mainHandler.post { result.success(hit) }
+        // 同步执行（不进 ioExecutor）：探测 = 两次 stat（exists + mtime），
+        // µs 级；而 ioExecutor 同时承载全部缩略图/大图解码——exists 进队
+        // 会被翻页窗口的解码任务压在队尾（真机实测回调延迟 369-743ms，
+        // = 「翻页解码慢」主体——解码本身 22-44ms 早已完成，显示升级
+        // 被探测回调卡住）。stat 在调用线程（platform）同步跑无感。
+        val hit = try {
+            repo.fullCacheExists(id, targetWidth)
+        } catch (e: Exception) {
+            false
         }
+        result.success(hit)
     }
 
     private fun handleSetFullCacheQuota(call: MethodCall, result: Result) {
