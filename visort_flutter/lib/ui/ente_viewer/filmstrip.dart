@@ -94,8 +94,14 @@ const Duration _kShrinkDuration = Duration(milliseconds: 180);
 /// 条还要等近 1s」，故定时）。
 const Duration _kTravelDuration = Duration(milliseconds: 260);
 
-/// fling 速度钳（逻辑 px/s；对标系统 ±12000 物理 px @3x 密度）。
-const double _kMaxFlingVelocity = 4200.0;
+/// fling 速度钳（逻辑 px/s）。2000 ≈ 46 档/s 峰值（43.5px/档）：快甩过图
+/// 率与「逐张可辨认」的平衡点——真机 A/B 实证 4200（96 档/s，9ms/档）时
+/// 任务发起 192 个/s 硬灌 6 并发门（占用 80%+），预取恒 miss，掠过页全落
+/// 96px 糊图+占位闪黑；用户实测系统相册同幅度快甩「每张都能清晰地过去」
+/// （人眼逐张可辨认上限 ~15-20 页/s，即系统真实视觉过图率必然在此量级，
+/// 且「多次滑动过图速度反而降下来」= 系统存在解码背压）。降钳后任务率
+/// 减半、每页驻留 22ms × ±3 窗口 = 66ms 领先 > 640 解码 35ms，预取可命中。
+const double _kMaxFlingVelocity = 2000.0;
 
 /// 视口两侧多构建的缓冲（px）。
 const double _kCullBuffer = 90.0;
@@ -119,6 +125,7 @@ class Filmstrip extends StatefulWidget {
     this.deleteIndex = -1,
     this.pagePos,
     this.pagerDriven,
+    this.flingLimit,
   });
 
   final int itemCount;
@@ -157,6 +164,11 @@ class Filmstrip extends StatefulWidget {
 
   /// 主图正被条程序驱动（宿主 animateToPage 进行中）：锁步让位。
   final ValueListenable<bool>? pagerDriven;
+
+  /// fling 速度钳（逻辑 px/s）的动态覆写（宿主背压驱动）：持续快甩时
+  /// 宿主降此值 → 下一轮 fling 起跑更慢 → 预取领先量翻倍（解码背压，
+  /// 系统相册「多轮快甩过图反而变慢」的同构行为）。null 恒用默认钳。
+  final ValueListenable<double>? flingLimit;
 
   @override
   State<Filmstrip> createState() => _FilmstripState();
@@ -403,7 +415,8 @@ class _FilmstripState extends State<Filmstrip>
 
   void _onDragEnd(double velocity) {
     if (_isFrozen) return;
-    final v = velocity.clamp(-_kMaxFlingVelocity, _kMaxFlingVelocity);
+    final limit = widget.flingLimit?.value ?? _kMaxFlingVelocity;
+    final v = velocity.clamp(-limit, limit);
     if (v.abs() < 50) {
       _settle();
     } else {

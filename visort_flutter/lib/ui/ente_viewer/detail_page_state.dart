@@ -42,6 +42,13 @@ const int kFilmstripThumbLoadSize = 96;
 /// 单点定义防漂移。
 const int kViewerLargeThumbSize = 640;
 
+/// viewer 远邻清晰档（物理 px）：条快甩 dist1~2 预取/掠过页显示档，走
+/// readSampledImage 自产通道（readFullCache blob 秒读 + 尺寸精确）。
+/// 对齐系统相册 THUMB 档 0.625×屏宽（1440 屏 = 900px）。此前用 MediaStore
+/// thumb 通道的 640 请求——真机实证尺寸不可控（同请求返回 240x320 mini
+/// 污染 59%、360x792 欠采样），360px 上 1440 屏 = 「过渡还是糊」的根因。
+const int kViewerMidThumbSize = 900;
+
 /// viewer 端正在显示的图源注册表（photoId → provider）。zoomable_image
 /// build 时写入、dispose 时移除、detail_page dispose 时整体兜底清空。
 /// 飞行层（Hero shuttle）第一优先级图源：正在显示的 provider 其

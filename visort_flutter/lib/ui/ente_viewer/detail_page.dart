@@ -136,16 +136,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 条→主图 drive 代际：兜底 timer 只清当前 drive 的 flag（P3）。
   int _thumbDriveToken = 0;
 
-  /// 条快甩节流跳页（见 _jumpToPageThrottled / _onThumbCenterChanged doc）。
-  /// 60ms：真机实证 120ms（8 页/秒）观感明显慢于系统相册的连续切换——
-  /// 系统靠 smooth 跳页动画 + ±3 窗口预取领先实现快且清晰；visort 窗口
-  /// 每跨档推进（不受节流影响），60ms/页下 dist3 提前 180ms > 解码 ~100ms，
-  /// 跳到的页仍同步命中。
-  static const Duration _kJumpThrottle = Duration(milliseconds: 60);
-  DateTime _lastThumbJumpAt = DateTime(2000);
-  int? _pendingThumbJump;
-  Timer? _thumbJumpTimer;
-
   /// 条最近一次「选区主张」（跟手跨档/停稳/点按的汇聚记录）：时间 + 索引。
   /// onPageChanged 的迟到回声守卫用——条跟手 jumpToPage 连射的中间页通知
   /// 可能晚到（实测 settle 后 971ms 到达 idx=旧主张−1），无守卫时
@@ -438,12 +428,15 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 其余随走随清，pop 时缓存主体仍是网格缩略图。
   void _trimDistantViewerCache(int currentIndex) {
     final tw = _viewerTargetWidthPx;
-    if (tw == null || _viewedFullIds.length <= 8) return;
+    // 窗口 14 张（±6 + 当前）与 _prefetchPageNeighbors 的预取窗口 ±5 对齐
+    //（留 1 档裕量）：±5 版真机实证 trim 仍按旧 ±3 清——dist4~5 刚解码
+    // 入缓存即被驱逐（预取白跑 27ms、页到达重解）= 快甩残余 miss 主因。
+    if (tw == null || _viewedFullIds.length <= 14) return;
     final indexById = _idIndex; // F19：O(1) 查表替线性扫
     final distant = <String>[];
     for (final id in _viewedFullIds) {
       final i = indexById[id];
-      if (i == null || (i - currentIndex).abs() > 3) distant.add(id);
+      if (i == null || (i - currentIndex).abs() > 6) distant.add(id);
     }
     for (final id in distant) {
       evictViewerImageCache(id, tw);
@@ -484,8 +477,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
     _heavyStripGateTimer = null;
     _chromeInsertTimer?.cancel();
     _chromeInsertTimer = null;
-    _thumbJumpTimer?.cancel();
-    _thumbJumpTimer = null;
     // 菜单浮层挂 rootOverlay（不随本页 dispose），主动收回防残留。
     _viewerMenuCtl?.close();
     _viewerMenuScrolling.dispose();
@@ -521,6 +512,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
     _thumbDeleteAnim.dispose();
     _thumbPagePos.dispose();
     _pagerDrivenN.dispose();
+    _flingLimit.dispose();
     super.dispose();
   }
 
@@ -1201,6 +1193,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                 deleteIndex: _thumbDeleteIndex,
                                 pagePos: _thumbPagePos,
                                 pagerDriven: _pagerDrivenN,
+                                flingLimit: _flingLimit,
                               ),
                       ),
                     ),
@@ -1214,58 +1207,60 @@ class _DetailPageState extends ConsumerState<DetailPage>
     );
   }
 
-  /// 条滚动跨档（Filmstrip.onCenterChanged，实时）：sel/预取窗口即时跟随，
-  /// 大图跳页节流。2026-09-07 对齐系统相册机制（反编译实证 PhotoThumbLine
-  /// Section：条甩动只移「加载窗口焦点」持续推进 ±3 预取，大图跳页是停稳
-  /// /点按的一次跳转——跳到时目标 ±3 早已解码完 = 第一帧清晰）。此前
-  /// 「每跨档 jumpToPage 一次」把停稳一跳变成甩动中跳 N 次：快甩 14-30ms/
-  /// 页的驻留 < full 解码 30-45ms，显示物理上追不上 = 「快甩掠过的大图
-  /// 模糊」根因（真机日志三轮实证：pick 恒落 strip96、页到达才发起的解码
-  /// 永远迟到）。慢甩（跨档间隔 > 节流窗）每档都到点即跳 = 全程跟随体验
-  /// 不变。pop/删除冻结已由 frozen 桥在组件内挡。
+  /// 条滚动跨档（Filmstrip.onCenterChanged，实时）：sel/大图逐档硬跳 +
+  /// 预取窗口推进。2026-09-07 smali 级考古修正（此前「条甩动不跳大图、
+  /// 停稳一次跳转」系误读）：系统相册 ds70.F 尾部直接 PhotoPagerSection
+  /// .w0(pos, smooth=false) → RecyclerView.scrollToPosition——条甩动期间
+  /// 【每帧硬跳】大图（100-136 档/s，无任何时间窗合并），跳到即清晰靠的
+  /// 是并行加载滑窗的距离分级预解码（见 _prefetchPageNeighbors）。visort
+  /// 同构：跨档即 jumpToPage（60ms 节流已删——节流把切换拖慢到 16 页/s，
+  /// 即「系统切换比我们快很多」的直接原因；糊的根因是掠过页显示档落
+  /// strip96，与跳页频率无关）。pop/删除冻结由 frozen 桥在组件内挡。
   void _onThumbCenterChanged(int i) {
     _claimStripIndex(i);
     if (i == _selectedIndexNotifier.value) return;
     _selectedIndexNotifier.value = i;
     widget.onIndexChanged?.call(i);
-    _jumpToPageThrottled(i);
-    // 预取窗口每次跨档都推进（不等跳页）：sel 已指新页，dist1~3 的 full
-    // 提前 1~3 档（快甩 30-70ms/档）≈ 提前 90-210ms > 解码总耗时，跳到
-    // 时 pick 同步命中。
+    if (_pageController.hasClients) {
+      _pageController.jumpToPage(i);
+    }
+    _pumpFlingBackpressure();
     _prefetchPageNeighbors(i);
   }
 
-  /// 快甩节流跳页：距上次跳 < [_kJumpThrottle] 时挂起，到期跳最新 center；
-  /// 连续跨档时合并为到期一跳（系统相册「停稳一跳」的甩动期近似）。
-  void _jumpToPageThrottled(int i) {
-    if (!_pageController.hasClients) return;
+  // ─── fling 背压（系统相册「多轮快甩过图反而变慢」的同构机制） ───
+  /// 跨档时间窗（1s 内跨档数 = 过图率）：持续快甩（>25 档/s 连续）时逐档
+  /// 调低条 fling 钳制（2000→最低 1000，下一轮甩动生效）——过图率降半，
+  /// dist3 预取领先量 65→130ms >> run 27ms，fling 段命中推向 100%。停稳
+  /// （_onThumbSettled）清窗恢复全速。轻扫/慢速不达阈值不受影响。
+  static const int _kBackpressureCrossPerSec = 25;
+  static const double _kFlingLimitMin = 1000.0;
+  final ValueNotifier<double> _flingLimit = ValueNotifier(2000.0);
+  final List<DateTime> _crossTimes = <DateTime>[];
+
+  void _pumpFlingBackpressure() {
     final now = DateTime.now();
-    final sinceLast = now.difference(_lastThumbJumpAt);
-    if (sinceLast >= _kJumpThrottle) {
-      _lastThumbJumpAt = now;
-      _pendingThumbJump = null;
-      _thumbJumpTimer?.cancel();
-      _pageController.jumpToPage(i);
-      return;
+    _crossTimes.add(now);
+    while (_crossTimes.isNotEmpty &&
+        now.difference(_crossTimes.first) > const Duration(seconds: 1)) {
+      _crossTimes.removeAt(0);
     }
-    _pendingThumbJump = i;
-    _thumbJumpTimer?.cancel();
-    _thumbJumpTimer = Timer(_kJumpThrottle - sinceLast, () {
-      final target = _pendingThumbJump;
-      _pendingThumbJump = null;
-      if (target == null || !mounted || !_pageController.hasClients) return;
-      _lastThumbJumpAt = DateTime.now();
-      _pageController.jumpToPage(target);
-    });
+    if (_crossTimes.length > _kBackpressureCrossPerSec &&
+        _flingLimit.value > _kFlingLimitMin) {
+      _flingLimit.value =
+          (_flingLimit.value - 250).clamp(_kFlingLimitMin, 2000.0);
+    }
   }
 
   /// 条停稳吸附/点按单项（Filmstrip.onSettled/onTap，组件已完成吸附
-  /// 聚焦）：主图跟随动画。冲掉节流挂起——停稳的 animateToPage 是最终
-  /// 落位，晚到的节流 timer 再 jump 会跳过动画终点。
+  /// 聚焦）：主图跟随动画。逐档硬跳下 center 多已同步（同值早退），
+  /// 此处收口吸附微调（_underCenter 最近项 ≠ 最后一档时 animateToPage
+  /// 对齐）。停稳即解除背压恢复全速；并补一发 ±5 宽窗预取——下一轮
+  /// 起跑前 5 档已就绪，消起跑冷启动 miss（起跑瞬间 dist3 任务刚入队
+  /// 未完成的结构性 miss）。
   void _onThumbSettled(int i) {
-    _thumbJumpTimer?.cancel();
-    _thumbJumpTimer = null;
-    _pendingThumbJump = null;
+    _crossTimes.clear();
+    if (_flingLimit.value != 2000.0) _flingLimit.value = 2000.0;
     _onThumbPageChanged(i);
   }
 
@@ -1289,22 +1284,30 @@ class _DetailPageState extends ConsumerState<DetailPage>
     }
   }
 
-  /// 主图页驱动预取（翻页 onPageChanged / 条跟手联动的汇聚点）：聚焦页
-  /// ±3 的 full（详见方法体注释）。受 _heavyStripPrefetch 延迟门控制
-  ///（push 首帧洪峰防护，300ms）。
-  void _prefetchPageNeighbors(int idx) {
+  /// 主图页驱动预取（翻页 onPageChanged / 条跟手联动的汇聚点）：档位按
+  /// 距离分级（smali 考古对齐系统相册 r5c0.b：dist0=PRESENT /
+  /// dist1=CONTENT(screenNail) / dist2~3=THUMB(0.625/0.375×屏宽) / 出窗
+  /// =DATA 不加载）。visort 三轮真机迭代定案：
+  ///  - dist0：full1152 p50——跳到页 ~70ms 内 fit 屏全清。
+  ///  - dist1~5：**full1152 p250**（窗口 ±5 终版）——全库预缓存 blob 秒
+  ///    读（run 27ms 实测 96% < 50ms），显示档即 fit 屏全清档。任务发起
+  ///    率不变（每跨档仍 1 个新任务：46 档/s × 28ms / 6 门 ≈ 21% 门占用，
+  ///    wait 0.5ms 实测零积压），±3→±5 纯粹把领先量拉到 109-217ms >> run
+  ///    27ms——±3 时稳态超快段 full 命中 91%（miss 59/729 均匀散布 =
+  ///    折返/起跑/峰值的领先不足），±5 收口。
+  ///    ⚠️ 曾试 mid900 自产档（readSampledImage 现场生成）：blob 无预缓存
+  ///    覆盖，每张首解 80-150ms——轻扫 dist1 都 miss（真机「轻扫就糊」
+  ///    实证）；且 MediaStore thumb 640 尺寸不可控（59% 吐 240x320 mini、
+  ///    余下 360x792 欠采样）两条路都堵死，full 直发是最短路径。900 档
+  ///    保留在 pick 链（kViewerMidThumbSize）接住历史已生成条目。
+  /// GIF 无 full 直通（readBytes 多帧）保持 640 等比 thumb。受
+  /// _heavyStripPrefetch 延迟门控制（push 首帧洪峰防护，300ms）。
+  void _prefetchPageNeighbors(int idx, {int radius = 5}) {
     if (!mounted || !_heavyStripPrefetch) return;
-    // ±3 滑窗全预取 full（2026-09-07 对齐系统相册：PhotoPagerSection 窗口
-    // 7 页（低内存 5），±1 CONTENT、±2~3 THUMB 全是 screenNail 档——fit 屏
-    // 显示档就是清晰档，不为邻居解中间档/全图。静态图去掉 large640 预取
-    // ——中间档只加任务不改善首帧；GIF 无 full 直通（readBytes 多帧）保
-    // 640 等比档）。聚焦页 p50：节流跳页下 sel 先于跳页前移，此处即「即将
-    // 到达页」的提前解码；dist1~3 保持 p250 预取级（同 key 合并下 sel 页
-    // 直通先入队则已被 bump p50）。洪泛核算：窗口滑动每跨档仅 1 个新任务
-    //（~45ms run × 快甩 30-70ms/档 ≈ 1~1.5 槽，并发门 6 足够）。
     final tw = computeViewerTargetWidth(View.of(context).physicalSize.width);
-    for (var n = idx - 3; n <= idx + 3; n++) {
+    for (var n = idx - radius; n <= idx + radius; n++) {
       if (n < 0 || n >= _thumbFiles.length) continue;
+      final dist = (n - idx).abs();
       final imgRef = imageRefFromMediaStoreId(_thumbFiles[n].id);
       if (_thumbFiles[n].mime == 'image/gif') {
         precacheImage(
@@ -1321,7 +1324,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
         buildImageProvider(
           imgRef,
           targetWidth: tw,
-          priority: n == idx
+          // dist0 当前页级 p50（跳到页最快档）；dist1+ p250 预取级——
+          // 让位当前页直通/probe，同档 FIFO 下 dist1 天然先于 dist3。
+          priority: dist == 0
               ? RequestPriority.viewerImage
               : RequestPriority.prefetchFull,
         ),

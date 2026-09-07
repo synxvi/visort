@@ -111,6 +111,9 @@ void evictViewerImageCache(String mediaStoreId, int targetWidth) {
     cache.evict(
       _AndroidThumbnailProvider(ref: ref, size: 640, squareCrop: false),
     ),
+    // mid900 自产档（= detail_page_state.kViewerMidThumbSize 字面值）：
+    // 条快甩远邻预取（dist1~2）走的 readSampledImage 下采样档，随走随清。
+    cache.evict(_AndroidBytesImageProvider(ref: ref, targetWidth: 900)),
   ];
   cachePerfEvict('viewer', mediaStoreId, results);
 }

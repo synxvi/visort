@@ -32,6 +32,7 @@ import 'package:visort_flutter/core/fs/service_policy.dart';
 import 'package:visort_flutter/ui/screens/album_common.dart' show extOf;
 import 'detail_page_state.dart';
 import 'gallery_groups.dart' show GalleryGroups;
+import 'thumbnail_widget.dart' show ThumbnailPlaceHolder;
 
 /// ente 常量（core/constants.dart dragSensitivity = 8）：上滑详情/下滑关闭阈值。
 const double _kDragSensitivity = 8.0;
@@ -314,6 +315,14 @@ class _ZoomableImageState extends State<ZoomableImage> {
       squareCrop: false,
     );
     final cell = buildThumbnailProvider(_ref, size: _cellThumbSize(), squareCrop: true);
+    // mid900 自产档（detail_page 条快甩 dist1~2 预取，kViewerMidThumbSize
+    // 同 key）：掠过页首帧 0.625× 屏宽——MediaStore thumb 640 尺寸不可控
+    //（240 mini / 360 欠采样），900 自产 blob 才是「过渡不糊」的保障档。
+    final mid = buildImageProvider(
+      _ref,
+      targetWidth: 900,
+      priority: RequestPriority.prefetchFull,
+    );
     bool completed(ImageProvider p) => _probeSyncComplete(p);
     String picked = 'none';
     if (completed(full)) {
@@ -322,6 +331,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
       _loadedFinalImage = true;
       _loadedSmallThumbnail = true;
       _loadedLargeThumbnail = true;
+    } else if (completed(mid)) {
+      picked = 'mid900';
+      _imageProvider = mid;
+      _loadedLargeThumbnail = true;
+      _loadedSmallThumbnail = true;
     } else if (completed(large)) {
       picked = 'large512';
       _imageProvider = large;
@@ -544,10 +558,15 @@ class _ZoomableImageState extends State<ZoomableImage> {
             // 原比例紧框（不套 Center——Center 会把 hero rect 撑成全屏，
             // cover 展开式飞行终点错位，见 _aspectHeroFrame）：本框即
             // wrappers loading 分支 Hero 的 rect，与 PhotoViewCore 态一致。
+            // 占位用灰底图框（ThumbnailPlaceHolder）而非透黑：快甩掠过页
+            // 连 strip96 都 miss 时（真机 L=none 实证），纯黑底 + 黑框 =
+            // 「穿插闪黑」；灰框保留「这里有张图」的空间感。
             return SizedBox(
               width: screenRelativeImageWidth,
               height: screenRelativeImageHeight,
-              child: const Center(child: _DelayedLoadingIndicator()),
+              child: const ThumbnailPlaceHolder(
+                color: Color(0xFF161616),
+              ),
             );
           },
         ),
