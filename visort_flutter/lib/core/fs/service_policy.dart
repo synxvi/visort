@@ -130,10 +130,15 @@ class ServicePolicy {
     return task.completer.future;
   }
 
-  /// 把队列中匹配的【未启动】任务移到队尾（温和重排：不取消、不报错、
-  /// future 照常完成）。viewer pop 冲刷时把甩滑遗留的条 512/96 预取挪后，
-  /// 让网格 cell 解码立即占满并发门——否则网格缩略图排在几十个无观众
-  /// 积压之后，200ms 飞行窗口内出不了图，落位后陆续替换 = 网格闪烁。
+  /// 把队列中匹配的【未启动】任务移到队尾并压到队列现存最低优先级档
+  ///（温和让位：不取消、不报错、future 照常完成）。viewer pop 冲刷时把
+  /// 甩滑遗留的条 640/96 预取挪后，让网格 cell 解码立即占满并发门——
+  /// 否则网格缩略图排在几十个无观众积压之后，200ms 飞行窗口内出不了
+  /// 图，落位后陆续替换 = 网格闪烁。
+  ///
+  /// ⚠️ 只挪位置不够：调度按 priority 取 min，p100 的条预取挪到队尾
+  /// 依然先于 p200 的网格 cell 出队——必须同时压档才真正让位（单测
+  /// 实证：修前跨档挪尾无效）。
   void deprioritizeQueued(bool Function(_Task<dynamic> task) test) {
     if (_queue.isEmpty) return;
     final moved = <_Task<dynamic>>[];
@@ -142,6 +147,13 @@ class ServicePolicy {
       (test(t) ? moved : keep).add(t);
     }
     if (moved.isEmpty) return;
+    var lowest = 0;
+    for (final t in keep) {
+      if (t.priority > lowest) lowest = t.priority;
+    }
+    for (final t in moved) {
+      if (t.priority < lowest) t.priority = lowest;
+    }
     _queue
       ..clear()
       ..addAll(keep)
