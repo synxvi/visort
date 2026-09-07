@@ -696,4 +696,60 @@ void main() {
       reason: '解除后对齐外部 center',
     );
   });
+
+  testWidgets('frozen 置位截断在途甩动/吸附（pop 淡出窗口无滚动残留）', (tester) async {
+    // 真机实证回归：pop 时 frozen 只拦新输入不拦已起跑的自驱动画——
+    // fling 惯性/settle 补间在 200ms 淡出窗口继续滚 = 「滚动中的大图/
+    // 条残留」轻微闪烁。置位瞬间必须断动画、几何冻结在当前值。
+    final center = ValueNotifier<int>(10);
+    final frozen = ValueNotifier<bool>(false);
+    await tester.pumpWidget(
+      _wrap(
+        Filmstrip(
+          itemCount: 30,
+          initialIndex: 10,
+          center: center,
+          thumbnail: (i) => MemoryImage(_png),
+          frozen: frozen,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 惯性进行中置 frozen。
+    await tester.fling(find.byType(Filmstrip), const Offset(-250, 0), 600);
+    await tester.pump(const Duration(milliseconds: 50));
+    final during = _imageRects(tester);
+    frozen.value = true;
+    await tester.pump(const Duration(milliseconds: 120));
+    await tester.pump(const Duration(milliseconds: 120));
+    final after = _imageRects(tester);
+    expect(after.length, during.length, reason: '截断后视口 item 集不变');
+    for (var k = 0; k < during.length; k++) {
+      expect(
+        after[k].topLeft,
+        during[k].topLeft,
+        reason: 'frozen 置位后几何必须纹丝不动（第 $k 项；旧实现惯性/'
+            'settle 继续跑 = pop 淡出窗口滚动残留）',
+      );
+    }
+
+    // settle 吸附中置 frozen 同样截断：惯性尾声（已转 settle 补间）再验一次。
+    frozen.value = false;
+    await tester.pumpAndSettle();
+    await tester.fling(find.byType(Filmstrip), const Offset(-150, 0), 400);
+    await tester.pump(const Duration(milliseconds: 260)); // 惯性尽，settle 中
+    final settling = _imageRects(tester);
+    frozen.value = true;
+    await tester.pump(const Duration(milliseconds: 120));
+    await tester.pump(const Duration(milliseconds: 120));
+    final settled = _imageRects(tester);
+    for (var k = 0; k < settling.length; k++) {
+      expect(
+        settled[k].topLeft,
+        settling[k].topLeft,
+        reason: 'settle 补间中 frozen 同样立即截断（第 $k 项）',
+      );
+    }
+  });
 }

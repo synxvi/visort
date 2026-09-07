@@ -508,7 +508,19 @@ class _FilmstripState extends State<Filmstrip>
   /// frozen 解除（删除流程收尾）：对齐外部 center——同位只补撑开
   ///（删除补位后下一项已在中心但缺聚焦态），异位滑移过去。
   void _onFrozenChanged() {
-    if (_isFrozen) return;
+    if (_isFrozen) {
+      // 冻结瞬间必须断在途动画（fling 惯性 / settle 补间 / travel）：
+      // pop 淡出 200ms 窗口内条若继续滚（frozen 只拦新输入不拦已起跑
+      // 的自驱动画，真机实证「滚动中的残留」轻微闪烁）。几何停在当前
+      // 值，phase 归 idle（onTick 的 idle 分支自动停表）。解除时由下方
+      // 对齐逻辑补焦到位（删除流程同链路）。
+      _cancelAnims();
+      if (_phase != _Phase.idle) {
+        _phase = _Phase.idle;
+        setState(() {});
+      }
+      return;
+    }
     final g = widget.center.value;
     if (g < 0 || g >= widget.itemCount) return;
     if (g == _sel) {

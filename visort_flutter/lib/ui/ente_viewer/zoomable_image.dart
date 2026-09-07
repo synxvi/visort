@@ -19,7 +19,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart' show SchedulerBinding;
+import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/src/core/photo_view_core.dart'
     show PhotoViewCoreState;
@@ -261,6 +261,18 @@ class _ZoomableImageState extends State<ZoomableImage> {
   void _onSelectedChanged() {
     if (!mounted || !_isCurrentPage) return;
     if (_loadedFinalImage || _loadingFinalImage) return;
+    // 掠过页 p120 直通在途时翻到本页：立即提速到当前页级（不等 150ms
+    // heavy 窗的 bump 分支——「停稳即清晰」不被掠过页语义拖慢；同 key
+    // 合并下 bump 改的就是那一个在队任务）。
+    if (_passThroughInFlight) {
+      _bumpFullToPriority(
+        computeViewerTargetWidth(
+          MediaQuery.sizeOf(context).width *
+              MediaQuery.devicePixelRatioOf(context),
+        ),
+        RequestPriority.viewerImage,
+      );
+    }
     // 与 build 同链（probe 直通 → p50 full → updfl），一图一次守卫在
     // _probePassThrough 内（_passThroughProbed）。
     _loadLocalImage(context);
@@ -609,21 +621,23 @@ class _ZoomableImageState extends State<ZoomableImage> {
     });
   }
 
-  /// 快甩「盘缓存直通」：掠过页不等 150ms 延迟窗——full 盘缓存 exists
-  /// 探测命中即 p120 发起（盘就绪 decodeByteArray 22-46ms 出图，掠过帧内
-  /// 即清晰）；miss 零请求零副作用，原延迟窗 p50 路径兜底（停稳插队）。
-  /// 洪泛防线：只有全库预缓存就绪的图才发起（无中生有的解码不存在），
-  /// ImageCache 峰值由 detail_page 的 _trimDistantViewerCache 翻页窗口
-  /// 兜底。每图一次（_passThroughProbed），换图随 generation 复位。
+  /// 当前页「盘缓存直通」：full exists 探测命中即 p50 发起（盘就绪
+  /// decodeByteArray 22-46ms，停稳即清晰）；miss 零请求零副作用，150ms
+  /// 延迟窗路径兜底。洪泛防线：只有全库预缓存就绪的图才发起，ImageCache
+  /// 峰值由 detail_page 的 _trimDistantViewerCache 翻页窗口兜底。每图一次
+  ///（_passThroughProbed），换图随 generation 复位。
+  ///
+  /// ⚠️ 快甩掠过页/当前页的「清晰起步档」（等比 640）**不在这里发**——
+  /// 页到达才发起的解码（640 ~80ms / full 30-45ms）永远追不上 14-30ms/页
+  /// 的甩速（真机日志三轮实证：pick 恒落 strip96、wait 被自身洪泛推高）。
+  /// 由 detail_page 的 _prefetchStripAhead 在甩动方向上**提前** 3 档预热，
+  /// 页到达时 _pickCachedProvider 同步命中 large 档 = 第一帧即清晰。
   void _probePassThrough(BuildContext context) {
-    if (_passThroughProbed) return;
     if (!Platform.isAndroid) return; // 盘缓存在 MediaStore 侧
-    if (_photo.mime == 'image/gif') return; // GIF 走 readBytes 多帧，不读盘缓存
-    if (_loadedFinalImage || _loadingFinalImage) return;
-    // 仅当前显示页：预建途经页（allowImplicitScrolling ±1）不发盘探测——
-    // push 窗口请求收敛（对齐 immich 打开只发当前页请求的模型）；翻到时
-    // PageView 重新 build → 本方法重跑（_passThroughProbed 仍 false）。
     if (!_isCurrentPage) return;
+    if (_passThroughProbed) return;
+    if (_loadedFinalImage || _loadingFinalImage) return;
+    if (_photo.mime == 'image/gif') return; // GIF 走 readBytes 多帧，不读盘缓存
     _passThroughProbed = true;
     final gen = _loadGeneration;
     final tw = computeViewerTargetWidth(
@@ -648,14 +662,13 @@ class _ZoomableImageState extends State<ZoomableImage> {
       '[PROBE] id=${_photo.id} miss live=${st.live} keep=${st.keepAlive} '
       'pend=${st.pending} t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
     );
-    // 探测在即：无论本页 full 任务由谁发起（150ms 窗的 _fireHeavyLoads /
-    // onPageChanged 的邻居预取），先把队列中该任务升到当前页级 p50——
-    // precacheImage 同 key 只合并 listener，改不了已入队任务的优先级
-    //（连续翻页时 onPageChanged 同步段先入队的 p250 会赢下 load，后续
-    // 直通 resolve 全是合并 → 不 bump 就以预取级排在 640 清晰层 p200
-    // 后面，当前页 full 反而最后跑）。bump 只动未启动任务，已跑/已完
-    // 任务不受影响。
-    _bumpFullToViewerPriority(tw);
+    // 探测在即：把队列中本图 full 任务（无论谁先入队——150ms 窗的
+    // _fireHeavyLoads / onPageChanged 的 p250 邻居预取）升到当前页级 p50。
+    // precacheImage 同 key 只合并 listener，改不了先入队任务的优先级
+    //（onPageChanged 同步段的 p250 恒早于下一帧 build 的本探测 → 不 bump
+    // 则 full 以预取级排在 640 清晰层 p200 后面，当前页 full 反而最后跑）。
+    // bump 只动未启动任务，已跑/已完任务不受影响。
+    _bumpFullToPriority(tw, RequestPriority.viewerImage);
     // ImageConfiguration 在 async gap 前捕获：exists 回调里预热不再触碰
     // BuildContext（precacheImage 的 context 也只在同步首行构 config 用）。
     final config = createLocalImageConfiguration(context);
@@ -674,9 +687,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
       _loadingFinalImage = true;
       _passThroughInFlight = true;
       cachePerfEvent('pass hit id=${_photo.id} tw=$tw');
-      // p120「掠过页」语义已随 _isCurrentPage 守卫消失（探测只对当前页
-      // 发起）——盘 miss 回退下采样原图同样发生在用户正盯着的页，直接
-      // 当前页级 p50；探测入口的 bump 已覆盖「合并进早先 p250 任务」。
       final full = buildImageProvider(
         _ref,
         targetWidth: tw,
@@ -697,14 +707,14 @@ class _ZoomableImageState extends State<ZoomableImage> {
     });
   }
 
-  /// 把本页 full 的队列任务（任意发起者）升到当前页级 p50。precacheImage
+  /// 把本页 full 的队列任务（任意发起者）升到 [priority]。precacheImage
   /// 同 key 合并 listener 改不了已入队任务的优先级——bump 是唯一插队手段
   ///（service_policy.bumpPriority doc）。tag 与 _loadRawImage 的入队 tag
   /// 同格式（full$tw:$id）。
-  void _bumpFullToViewerPriority(int tw) {
+  void _bumpFullToPriority(int tw, int priority) {
     ServicePolicy.instance.bumpPriority(
       (t) => t.tag == 'full$tw:${_photo.id}',
-      RequestPriority.viewerImage,
+      priority,
     );
   }
 
@@ -829,7 +839,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
       // 直通任务升级到当前页级插队（探测入口已 bump 过一次，此处是
       // 防御性兜底——快甩积压的其它任务不再排在它前面，「停稳即清晰」
       // 不回归）。已在跑的不动（盘读 22-46ms 本就秒完）。
-      _bumpFullToViewerPriority(fullTw);
+      _bumpFullToPriority(fullTw, RequestPriority.viewerImage);
     } else if (!_loadingFinalImage && !_loadedFinalImage) {
       _loadingFinalImage = true;
       final gen = _loadGeneration;
@@ -844,7 +854,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
       );
       // 同 key 合并防御（见 _probePassThrough 的 bump 注释）：早先 p250
       // 预取任务可能已带着本 key 在队，precache 改不了它的优先级。
-      _bumpFullToViewerPriority(fullTw);
+      _bumpFullToPriority(fullTw, RequestPriority.viewerImage);
       precacheImage(full, context)
           .then((_) {
             if (!mounted || gen != _loadGeneration) return;

@@ -136,6 +136,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 条→主图 drive 代际：兜底 timer 只清当前 drive 的 flag（P3）。
   int _thumbDriveToken = 0;
 
+  /// 条快甩节流跳页（见 _jumpToPageThrottled / _onThumbCenterChanged doc）。
+  /// 60ms：真机实证 120ms（8 页/秒）观感明显慢于系统相册的连续切换——
+  /// 系统靠 smooth 跳页动画 + ±3 窗口预取领先实现快且清晰；visort 窗口
+  /// 每跨档推进（不受节流影响），60ms/页下 dist3 提前 180ms > 解码 ~100ms，
+  /// 跳到的页仍同步命中。
+  static const Duration _kJumpThrottle = Duration(milliseconds: 60);
+  DateTime _lastThumbJumpAt = DateTime(2000);
+  int? _pendingThumbJump;
+  Timer? _thumbJumpTimer;
+
   /// 条最近一次「选区主张」（跟手跨档/停稳/点按的汇聚记录）：时间 + 索引。
   /// onPageChanged 的迟到回声守卫用——条跟手 jumpToPage 连射的中间页通知
   /// 可能晚到（实测 settle 后 971ms 到达 idx=旧主张−1），无守卫时
@@ -337,13 +347,21 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // 网格锁死在 flush 定位（album 侧 reverse 同帧冲刷），飞行目标稳定。
     if (status == AnimationStatus.reverse) {
       _popping = true;
-      // 条联动一并冻结（Filmstrip.frozen）：滚动/吸附/外部指令全停。
+      // 条联动一并冻结（Filmstrip.frozen）：滚动/吸附/外部指令全停，
+      // 在途自驱动画（fling/settle）在组件内同步截断。
       _thumbFrozen.value = true;
       // ⚠️ pop 冻结须同时锁 PageView 惯性（physics 加 _popping）：
       // 快甩（fling 惯性未停）中返回时 PageView 若继续滚，onPageChanged
       // 被 _popping 拒后网格 cell 与 viewer 页错位，Hero 终点悬空/错位
       //（审查实证 P1，089ea74 冻结了条/网格联动但漏了页面本体）。
       // setState 让 physics 立即生效（首帧即锁，无 1 帧惯性间隙）。
+      // ⚠️ physics 只锁【手势】惯性——条甩动跨档驱动的 animateToPage
+      //（DrivenScrollActivity）不受 physics 拦截，淡出 200ms 内大图
+      // 继续平移 = 真机实证「网格已显示 + 滚动中大图残留」闪烁。同值
+      // jumpTo 把一切在途 Activity 替换为 idle hold（值不变零视觉跳变）。
+      if (_pageController.hasClients) {
+        _pageController.jumpTo(_pageController.position.pixels);
+      }
       if (mounted) setState(() {});
     }
     // 返回动画结束：立即移除栏。PageRouteBuilder(opaque:false) 下页面
@@ -466,6 +484,8 @@ class _DetailPageState extends ConsumerState<DetailPage>
     _heavyStripGateTimer = null;
     _chromeInsertTimer?.cancel();
     _chromeInsertTimer = null;
+    _thumbJumpTimer?.cancel();
+    _thumbJumpTimer = null;
     // 菜单浮层挂 rootOverlay（不随本页 dispose），主动收回防残留。
     _viewerMenuCtl?.close();
     _viewerMenuScrolling.dispose();
@@ -1194,22 +1214,58 @@ class _DetailPageState extends ConsumerState<DetailPage>
     );
   }
 
-  /// 条滚动跨档（Filmstrip.onCenterChanged，实时）：主图跟手联动——直接
-  /// 赋值 + jumpToPage 即时切换（含快甩——对标系统相册全程跟随；途经页
-  /// 零解码请求由 containsKey 守卫保证，跟随首帧质量由条构建时的预取
-  /// 保证，见 _prefetchStripItem）。pop/删除冻结已由 frozen 桥在组件内挡。
+  /// 条滚动跨档（Filmstrip.onCenterChanged，实时）：sel/预取窗口即时跟随，
+  /// 大图跳页节流。2026-09-07 对齐系统相册机制（反编译实证 PhotoThumbLine
+  /// Section：条甩动只移「加载窗口焦点」持续推进 ±3 预取，大图跳页是停稳
+  /// /点按的一次跳转——跳到时目标 ±3 早已解码完 = 第一帧清晰）。此前
+  /// 「每跨档 jumpToPage 一次」把停稳一跳变成甩动中跳 N 次：快甩 14-30ms/
+  /// 页的驻留 < full 解码 30-45ms，显示物理上追不上 = 「快甩掠过的大图
+  /// 模糊」根因（真机日志三轮实证：pick 恒落 strip96、页到达才发起的解码
+  /// 永远迟到）。慢甩（跨档间隔 > 节流窗）每档都到点即跳 = 全程跟随体验
+  /// 不变。pop/删除冻结已由 frozen 桥在组件内挡。
   void _onThumbCenterChanged(int i) {
     _claimStripIndex(i);
     if (i == _selectedIndexNotifier.value) return;
     _selectedIndexNotifier.value = i;
     widget.onIndexChanged?.call(i);
-    if (_pageController.hasClients) _pageController.jumpToPage(i);
-    _prefetchPageNeighbors(i); // 条快甩联动同样按聚焦邻居预取
+    _jumpToPageThrottled(i);
+    // 预取窗口每次跨档都推进（不等跳页）：sel 已指新页，dist1~3 的 full
+    // 提前 1~3 档（快甩 30-70ms/档）≈ 提前 90-210ms > 解码总耗时，跳到
+    // 时 pick 同步命中。
+    _prefetchPageNeighbors(i);
+  }
+
+  /// 快甩节流跳页：距上次跳 < [_kJumpThrottle] 时挂起，到期跳最新 center；
+  /// 连续跨档时合并为到期一跳（系统相册「停稳一跳」的甩动期近似）。
+  void _jumpToPageThrottled(int i) {
+    if (!_pageController.hasClients) return;
+    final now = DateTime.now();
+    final sinceLast = now.difference(_lastThumbJumpAt);
+    if (sinceLast >= _kJumpThrottle) {
+      _lastThumbJumpAt = now;
+      _pendingThumbJump = null;
+      _thumbJumpTimer?.cancel();
+      _pageController.jumpToPage(i);
+      return;
+    }
+    _pendingThumbJump = i;
+    _thumbJumpTimer?.cancel();
+    _thumbJumpTimer = Timer(_kJumpThrottle - sinceLast, () {
+      final target = _pendingThumbJump;
+      _pendingThumbJump = null;
+      if (target == null || !mounted || !_pageController.hasClients) return;
+      _lastThumbJumpAt = DateTime.now();
+      _pageController.jumpToPage(target);
+    });
   }
 
   /// 条停稳吸附/点按单项（Filmstrip.onSettled/onTap，组件已完成吸附
-  /// 聚焦）：主图跟随动画。
+  /// 聚焦）：主图跟随动画。冲掉节流挂起——停稳的 animateToPage 是最终
+  /// 落位，晚到的节流 timer 再 jump 会跳过动画终点。
   void _onThumbSettled(int i) {
+    _thumbJumpTimer?.cancel();
+    _thumbJumpTimer = null;
+    _pendingThumbJump = null;
     _onThumbPageChanged(i);
   }
 
@@ -1234,33 +1290,43 @@ class _DetailPageState extends ConsumerState<DetailPage>
   }
 
   /// 主图页驱动预取（翻页 onPageChanged / 条跟手联动的汇聚点）：聚焦页
-  /// ±1 的 large640（主图翻页起步档）+ full（GIF 跳过）。受
-  /// _heavyStripPrefetch 延迟门控制（push 首帧洪峰防护，300ms）。
-  /// 优先级分档：**当前页 full = p50**（用户正盯着——onPageChanged 同步段
-  /// 先于直通探测入队，若以 p250 入队则后续直通 resolve 全是同 key 合并、
-  /// 升不了级，连续翻页时会排在邻居 640 清晰层 p200 后面 = 当前页最糊最
-  /// 晚出图）；邻居保持 p250 预取级。
+  /// ±3 的 full（详见方法体注释）。受 _heavyStripPrefetch 延迟门控制
+  ///（push 首帧洪峰防护，300ms）。
   void _prefetchPageNeighbors(int idx) {
     if (!mounted || !_heavyStripPrefetch) return;
-    for (var n = idx - 1; n <= idx + 1; n++) {
+    // ±3 滑窗全预取 full（2026-09-07 对齐系统相册：PhotoPagerSection 窗口
+    // 7 页（低内存 5），±1 CONTENT、±2~3 THUMB 全是 screenNail 档——fit 屏
+    // 显示档就是清晰档，不为邻居解中间档/全图。静态图去掉 large640 预取
+    // ——中间档只加任务不改善首帧；GIF 无 full 直通（readBytes 多帧）保
+    // 640 等比档）。聚焦页 p50：节流跳页下 sel 先于跳页前移，此处即「即将
+    // 到达页」的提前解码；dist1~3 保持 p250 预取级（同 key 合并下 sel 页
+    // 直通先入队则已被 bump p50）。洪泛核算：窗口滑动每跨档仅 1 个新任务
+    //（~45ms run × 快甩 30-70ms/档 ≈ 1~1.5 槽，并发门 6 足够）。
+    final tw = computeViewerTargetWidth(View.of(context).physicalSize.width);
+    for (var n = idx - 3; n <= idx + 3; n++) {
       if (n < 0 || n >= _thumbFiles.length) continue;
       final imgRef = imageRefFromMediaStoreId(_thumbFiles[n].id);
-      precacheImage(
-        buildThumbnailProvider(imgRef, size: kViewerLargeThumbSize, squareCrop: false),
-        context,
-      );
-      if (_thumbFiles[n].mime != 'image/gif') {
+      if (_thumbFiles[n].mime == 'image/gif') {
         precacheImage(
-          buildImageProvider(
+          buildThumbnailProvider(
             imgRef,
-            targetWidth: computeViewerTargetWidth(View.of(context).physicalSize.width),
-            priority: n == idx
-                ? RequestPriority.viewerImage
-                : RequestPriority.prefetchFull,
+            size: kViewerLargeThumbSize,
+            squareCrop: false,
           ),
           context,
         );
+        continue;
       }
+      precacheImage(
+        buildImageProvider(
+          imgRef,
+          targetWidth: tw,
+          priority: n == idx
+              ? RequestPriority.viewerImage
+              : RequestPriority.prefetchFull,
+        ),
+        context,
+      );
     }
   }
 
