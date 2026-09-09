@@ -103,6 +103,12 @@ class _ImageWrapperState extends State<ImageWrapper> {
   void didUpdateWidget(ImageWrapper oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.imageProvider != oldWidget.imageProvider) {
+      // [PVW] provider 换链打点：定位「谁把显示档换走」（渐进 completer
+      // 死亡 = 旧 stream listener 被这里移除）。
+      debugPrint(
+        '[PVW] provider change '
+        '${oldWidget.imageProvider.runtimeType} -> ${widget.imageProvider.runtimeType}',
+      );
       _resolveImage();
     }
   }
@@ -124,6 +130,11 @@ class _ImageWrapperState extends State<ImageWrapper> {
     }
 
     void handleImageFrame(ImageInfo info, bool synchronousCall) {
+      // [PVF] 推帧对账打点：completer 每次推帧此处应到达一次（宽高变化 =
+      // 升档帧上屏链路通了）。
+      debugPrint(
+        '[PVF] frame ${info.image.width}x${info.image.height} sync=$synchronousCall',
+      );
       final setupCB = () {
         _imageSize = Size(
           info.image.width.toDouble(),

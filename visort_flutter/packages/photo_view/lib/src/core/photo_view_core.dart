@@ -542,6 +542,29 @@ class PhotoViewCoreState extends State<PhotoViewCore>
   Widget build(BuildContext context) {
     // Check if we need a recalc on the scale
     if (widget.scaleBoundaries != cachedScaleBoundaries) {
+      // 【升档视角保持，immich vendored fork 同款】gapless 换帧（高分辨率
+      // 位图替换同一显示图）时 wrapper 会以新 _imageSize 重建
+      // scaleBoundaries → childSize 变大；视觉尺寸 = childSize × scale
+      // 恒定 → scale 按 contained 反比补偿（setScaleInvisibly 走
+      // updateIgnoring，绕过 scaleState 动画/回调，纯静默）。仅限「同
+      // 视口、childSize 变」的换帧场景——旋转等 outerSize 同变的路径
+      // 保持原行为（绝对 scale 不动）。
+      final prev = cachedScaleBoundaries;
+      final next = widget.scaleBoundaries;
+      if (prev.outerSize == next.outerSize &&
+          prev.childSize != next.childSize &&
+          prev.initialScale > 0 &&
+          next.initialScale > 0 &&
+          controller.scale != null) {
+        final ratio = next.initialScale / prev.initialScale;
+        if (ratio > 0 && (ratio - 1.0).abs() > 0.0001) {
+          // [PVC] 补偿对账打点。
+          debugPrint(
+            '[PVC] compensate ratio=$ratio child=${next.childSize.width}',
+          );
+          controller.setScaleInvisibly(controller.scale! * ratio);
+        }
+      }
       markNeedsScaleRecalc = true;
       cachedScaleBoundaries = widget.scaleBoundaries;
     }

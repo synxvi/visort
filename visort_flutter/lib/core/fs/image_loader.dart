@@ -14,6 +14,7 @@ import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 
 import 'android_mediastore_file_system.dart';
+import 'cache_aware_listener_tracker.dart';
 import 'cache_perf.dart';
 import 'file_system_repository.dart';
 import 'image_ref.dart';
@@ -114,14 +115,50 @@ void evictViewerImageCache(String mediaStoreId, int targetWidth) {
     // mid900 自产档（= detail_page_state.kViewerMidThumbSize 字面值）：
     // 条快甩远邻预取（dist1~2）走的 readSampledImage 下采样档，随走随清。
     cache.evict(_AndroidBytesImageProvider(ref: ref, targetWidth: 900)),
+    // 放大升档渐进条目（2304/4096 帧在 _ProgressiveViewerImageCompleter
+    // 内部，无独立键——evict 渐进 provider 单键整体回收）。⚠️ includeLive
+    // 必须 false：默认 true 会 dispose live completer 的 keepAlive handle，
+    // 之后任何一次 resolve 都造出第二个 completer——屏上听旧的、
+    // _progressiveStream 持旧的、新请求推给无人观看的新实例（immich 对照
+    // 实锤的「推给空气」分裂根因，2026-09-08）。pop 时 viewer 已关无 live，
+    // false 与 true 等效。
+    cache.evict(
+      _AndroidProgressiveImageProvider(ref: ref, baseTargetWidth: 1152),
+      includeLive: false,
+    ),
   ];
   cachePerfEvict('viewer', mediaStoreId, results);
+}
+
+/// 只清放大升档条目（渐进 provider 单键：2304/4096 帧在 completer 内部，
+/// 无独立 ImageCache 键）。独立于 [evictViewerImageCache]：翻页窄窗 trim
+///（detail_page _trimDistantHdCache）只应逐出升档——宽窗函数会顺带清
+/// 1152 预取档，误伤 ±6 窗口的「掠过即 full」成果（快甩残余 miss 的
+/// 历史教训）。在屏条目 evict 后由引用计数自然回收（live completer
+/// 持有 listener，页 dispose 后无引用即释放）。
+void evictViewerUpgradeCache(String mediaStoreId) {
+  if (!Platform.isAndroid) return;
+  final cache = PaintingBinding.instance.imageCache;
+  final ref = imageRefFromMediaStoreId(mediaStoreId);
+  final results = <bool>[
+    // includeLive:false（同 evictViewerImageCache 的渐进键注释）：翻页窄窗
+    // trim 只清 cache 持仓，绝不杀在用 completer 的 keepAlive——否则造出
+    // 双 completer 分裂（推给空气）。
+    cache.evict(
+      _AndroidProgressiveImageProvider(ref: ref, baseTargetWidth: 1152),
+      includeLive: false,
+    ),
+  ];
+  cachePerfEvict('viewerHd', mediaStoreId, results);
 }
 
 /// viewer 原图下采样目标宽度（物理像素）：对齐系统相册 by70.c() = max(960, 屏宽×0.8)。
 /// 屏宽物理 = 逻辑宽 × devicePixelRatio。打开瞬间解码到此宽度：对 12MP 图约 ~1MP，
 /// 解码快、能压进 250ms 飞行动画窗；全屏 contain（屏宽 ≤1440）0.8× 略欠采样但视觉
-/// 可接受（系统相册同策略）；放大 scale>1.3 由 _hdTriggered 加载原片全像素覆盖。
+/// 可接受（系统相册同策略）；放大 scale>1.3 由 zoomable_image._maybeTriggerHdUpgrade
+/// 加载 2304 档（kViewerHdThumbSize，2026-09-08 补实曾经的 _hdTriggered 死注释）
+/// 覆盖——不落原片全像素：无 targetWidth 的 HD 通道绕过 ServicePolicy 门且
+/// 48MB/张 会挤爆内存缓存（网格缩略图连锁 RE 重解码）。
 /// precache/_BigImage/evict 三处都用本函数算同一值，否则 ImageCache key 不匹配。
 int computeViewerTargetWidth(double screenWidthPx) {
   final target = (screenWidthPx * 0.8).round();
@@ -184,22 +221,55 @@ class _AndroidBytesImageProvider
     return SynchronousFuture<_AndroidBytesImageProvider>(this);
   }
 
+  /// 升档加载入口（_ProgressiveViewerImageCompleter 专用）：raw 直建档
+  ///（2304 级以下用）。
+  Future<ui.Image> loadRawImageForUpgrade(ImageDecoderCallback decode) =>
+      _loadRawImage(this, decode);
+
+  /// 升档加载入口（_ProgressiveViewerImageCompleter 专用）：4096 档必须走
+  /// **JPEG bytes→引擎 codec**（readSampledJpeg 通道）——⚠️ 不可用
+  /// readSampledImage raw 回传：48MB 像素过 MethodChannel 时 main 线程
+  /// StandardMessageCodec 序列化扩容翻倍再拷一份（96MB 分配）→ OOM
+  /// 闪退 + 每张 100ms+ main 线程卡顿（真机 23:03 FATAL 实证，2026-09-08）。
+  ///
+  /// 【完全对齐 immich·2026-09-09】≤25MP 图 Kotlin 侧直回**原图 bytes**
+  /// （零解码零重压缩，immich 本地相册同款单步链）：引擎单次解码，替换
+  /// 发生在飞行动画内。>25MP 超大图 Kotlin 侧降级采样重压缩慢链（OOM
+  /// 防）。
+  Future<ui.Image> loadJpegImageForUpgrade(ImageDecoderCallback decode) async {
+    final tw = targetWidth!;
+    final r = await ServicePolicy.instance
+        .run(
+          priority,
+          () => _msChannel.readSampledJpeg(
+            ref.relativePath,
+            targetWidth: tw,
+          ),
+        )
+        .timeout(const Duration(seconds: 8));
+    final buffer = await ui.ImmutableBuffer.fromUint8List(r.bytes);
+    // 原图 bytes 原样（EXIF orientation 由引擎 SkCodec 应用）：原尺寸解。
+    final codec = await decode(buffer);
+    final frame = await codec.getNextFrame();
+    return frame.image;
+  }
+
   @override
   ImageStreamCompleter loadImage(
     _AndroidBytesImageProvider key,
     ImageDecoderCallback decode,
   ) {
-    // 【raw 直路】viewer full（targetWidth 非 GIF）：native readSampledImage
-    // 返回的已是最终 ARGB 像素——decodeImageFromPixels 同步建 ui.Image，
-    // 完全绕开 ImageDescriptor.raw→codec→getNextFrame 的引擎 io worker
-    // 解码队列。真机实证（2026-09-06）：盘缓存 30ms 出像素后，帧生产在
-    // codec 队列排 ~700ms =「翻页糊半秒以上」的根因（窗口内 Dart isolate
-    // 全程空闲在等 getNextFrame 的 Future）；raw 描述符的 desc/buffer
-    // 生命周期纠缠（855ms 停摆事件，见下方注释）也一并消除。
+    // 【raw 直路】viewer full（targetWidth 非 GIF，含 2304/4096 升档）：
+    // native readSampledImage 返回的已是最终 ARGB 像素——
+    // decodeImageFromPixelsSync 同步建 ui.Image，一遍到位（immich 同款
+    // native 解码→raw 包装语义）。4096 档曾走「JPEG bytes→引擎 codec
+    // 再解」——compress+二次解码双重 codec 往返 400-800ms =「压根没
+    // 解码」体感（2026-09-08 真机实证），已废除；48MB raw 回传的一次
+    // 分配（~30-80ms）发生在推帧时刻（远离手势），单帧可接受。
     // GIF/全分辨率（HD 放大）路径保持 MultiFrame（多帧语义必须 codec）。
     final tw = key.targetWidth;
-    final isRawPath =
-        tw != null && tw > 0 && key.ref.extension.toLowerCase() != '.gif';
+    final isGif = key.ref.extension.toLowerCase() == '.gif';
+    final isRawPath = tw != null && tw > 0 && !isGif;
     if (isRawPath) {
       return _RawImageStreamCompleter(
         _loadRawImage(key, decode),
@@ -431,6 +501,339 @@ class _RawImageStreamCompleter extends ImageStreamCompleter {
 
 /// 全局 MediaStoreChannel 实例（缩略图用）
 const MediaStoreChannel _msChannel = MediaStoreChannel();
+
+// ───────────────────────── viewer 渐进升档（immich 同款架构） ─────────────────────────
+//
+// 此前「放大升档」是换 provider：setState → 新 provider → cache 查询 →
+// RawImage 重建 → 纹理上传全挤一帧 = 卡顿/跳变的结构性根源（静止门/预上传
+// 只是补偿）。现为单 completer 串流推帧：resolve 一次，2304/4096 解码完成
+// 后由 completer 内部 setImage 推进——widget 不 rebuild、不换 provider，
+// 高分辨率位图渲染进同一尺寸框（PhotoView 布局用 ratio 补偿保持视觉恒定），
+// 「换源」动作整体消失。
+
+/// 渐进升档能力接口（zoomable_image 经 `stream.completer as?` 使用，不暴露
+/// 私有实现类型）。
+abstract class ProgressiveImageCompleter extends ImageStreamCompleter {
+  /// 请求解码到 [targetWidth] 档。重复/降级请求幂等。
+  /// [priority] 可指定 ServicePolicy 优先级（构造并行发起用 p150）。
+  void requestUpTo(int targetWidth, {int? priority});
+
+  /// 暂缓推帧（解码照常进行）：帧解完暂存 completer 内，不 setImage。
+  /// 供 widget 控制「替换时机」——飞行中/手势中推帧会有视觉跳变。
+  void holdFrames();
+
+  /// 释放暂存帧立即推（幂等：无暂存帧时 no-op）。此后新帧不再 hold
+  ///（直到再次 holdFrames）。
+  void flushHeldFrame();
+
+  /// 帧解完且被 hold 时回调（widget 检查时机后决定 flush）。置 null 摘除。
+  void setOnFrameReady(void Function()? callback);
+
+  /// 是否已有可显示帧（推帧或暂存）——widget 换链守卫：【实验·打开即
+  /// 原图】跳过 1152 首帧后 completer 首帧即 4096，帧就绪前换上渐进
+  /// provider = PhotoView 黑底。
+  bool get hasFrame;
+}
+
+/// 双桶缓存判据标记（visort_image_cache 的 _cacheForKey 用对象模式匹配）：
+/// progressive 升档条目进大图桶，与网格缩略图互不驱逐。
+abstract interface class ProgressiveImageKey {}
+
+/// viewer 渐进升档 provider：1152 显示档就绪后由 zoomable_image 换上
+///（这是最后一次换 provider，且发生在未放大态——key 重建链路已验证），
+/// 此后放大升档全部走 completer 内推帧。
+class _AndroidProgressiveImageProvider
+    extends ImageProvider<_AndroidProgressiveImageProvider>
+    implements ProgressiveImageKey {
+  const _AndroidProgressiveImageProvider({
+    required this.ref,
+    required this.baseTargetWidth,
+    this.priority = RequestPriority.viewerImage,
+  });
+
+  final ImageRef ref;
+
+  /// 首帧基准档（= computeViewerTargetWidth，偷帧源与 PhotoView 初始布局）。
+  final int baseTargetWidth;
+  final int priority;
+
+  @override
+  Future<_AndroidProgressiveImageProvider> obtainKey(
+    ImageConfiguration configuration,
+  ) {
+    return SynchronousFuture<_AndroidProgressiveImageProvider>(this);
+  }
+
+  @override
+  ImageStreamCompleter loadImage(
+    _AndroidProgressiveImageProvider key,
+    ImageDecoderCallback decode,
+  ) {
+    debugPrint('[PVP] new completer id=${key.ref.id}');
+    return _ProgressiveViewerImageCompleter(key: key, decode: decode);
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is _AndroidProgressiveImageProvider && other.ref.id == ref.id;
+
+  @override
+  int get hashCode => Object.hash(ref.id, 'progressive');
+}
+
+class _ProgressiveViewerImageCompleter extends ImageStreamCompleter
+    with CacheAwareListenerTrackerMixin
+    implements ProgressiveImageCompleter {
+  _ProgressiveViewerImageCompleter({
+    required _AndroidProgressiveImageProvider key,
+    required ImageDecoderCallback decode,
+  }) : _key = key,
+       _decode = decode {
+    // 【immich 同款构造三步】（one_frame_multi_image_stream_completer）：
+    // ① listener 追踪初始化（hadInitialImage 兜底「initialImage 同步
+    //    setImage → cache pending listener attach→收帧→detach」的假死亡）；
+    // ② initialImage 同步偷 1152 帧 setImage——1152 是 immich 的 preview
+    //    显示档语义：flight 起点/预建兜底全靠它清晰上屏（2026-09-09 实验
+    //    「跳过 1152 直接原图」证伪：flight 全程只剩 300px 网格小图放大 4 倍
+    //    = 超糊，比 immich 差一档——immich 飞行起点就是 preview。1152 恢复
+    //    显示档地位，4096 是唯一升档帧）；
+    // ③ 升档推帧（immich 是 images.listen(setImage) 流，visort 为命令式
+    //    requestUpTo/_pump——推帧机制同源）。
+    final initial = _stealBaseFrame();
+    setupListenerTracking(
+      hadInitialImage: initial != null,
+      onLastListenerRemoved: _handleAbandoned,
+    );
+    if (initial != null) {
+      _hasImage = true;
+      setImage(initial);
+    }
+    debugPrint(
+        '[PVP] new completer id=${key.ref.id} initial=${initial != null}');
+    // p50（viewerImage）而非原 p150：4096 是唯一升档帧，压过一切预取/
+    // 条请求（此前 p150 会让位预取潮 = 替换变慢）。
+    holdFrames();
+    requestUpTo(4096);
+  }
+
+  final _AndroidProgressiveImageProvider _key;
+  final ImageDecoderCallback _decode;
+
+  /// 档位阶梯：仅 4096（= kViewerUltraThumbSize，原图等效档）。1152 显示
+  /// 档即 immich 的 preview 语义（视口像素级），2304 中间档已废除（多一次
+  /// 解码 + 多一档内存，收益被 4096 覆盖）。core 层不 import UI 常量，
+  /// 字面量 + 注释对齐（同 evictViewerImageCache 约定）。
+  static const List<int> _levels = [4096];
+
+  /// 当前请求目标在 [_levels] 中的索引（-1 = 未请求升档）。
+  int _targetIndex = -1;
+
+  /// 已完成（推帧或失败跳过）的最高档索引：游标推进制，防重复重解。
+  int _loadedIndex = -1;
+
+  /// 在途档索引（-1 = 空闲）。
+  int _loadingIndex = -1;
+
+  /// 当前解码优先级（requestUpTo 可升级，如放大触发 → viewerHd）。
+  late int _priority = _key.priority;
+
+  /// 推帧闸（见构造注释）：true 时解完的帧暂存 [_heldImage] 不推。
+  bool _hold = false;
+  ui.Image? _heldImage;
+  void Function()? _onFrameReady;
+  bool _dead = false;
+
+  /// 是否已产出可显示帧（推帧/暂存/兜底偷帧任一）——hasFrame 的实现
+  /// 基础，widget 换链时机守卫。
+  bool _hasImage = false;
+
+  @override
+  bool get hasFrame => _hasImage;
+
+  /// 零 listener：**不置死**（immich 语义——abandoned 只取消网络在途请求，
+  /// completer 留在 cache 里继续服务）。真机/模拟器实证：UI 树重建
+  ///（PhotoView ValueKey 翻转、页重建）会让 listener 短暂全退——置死会让
+  /// 36ms 后回来的 listener 挂在死 completer 上，requestUpTo 永远哑火
+  ///（「反复双击死活不清楚」的最终根因）。帧继续解、继续推，无人观看的
+  /// 推帧落在 _currentImage 里，listener 回来时同步回放最新档，零浪费。
+  /// _dead 仅在基类 onDisposed（cache evict 且零引用的真 dispose）置位。
+  ///
+  /// 在途任务压级（快速翻页防堆积）：连续翻页会积累多个在途 4096
+  ///（每页一个），全 p150 会挤占邻取 1152 预取 → 掠过页 miss → 快甩/
+  /// 翻页模糊。离屏即压到全队列最低（解完照推、翻回命中 blob 不变）。
+  void _handleAbandoned() {
+    debugPrint('[PVP] abandoned (deprioritize) id=${_key.ref.id}');
+    ServicePolicy.instance.deprioritizeQueued(
+      (t) => t.tag == 'full4096:${_key.ref.id}',
+    );
+  }
+
+  /// 首帧同步偷取（immich getInitialImage 同款，image_provider.dart:27-55）：
+  /// resolve 基准档（1152）→ addListener——其 completer 已有 current 时
+  /// 【同步】回调，取 clone 立刻移除返回；不同步（解码在途，理论不可达
+  /// ——1152 刚显示完毕）返回 null，放弃首帧。clone 与 1152 条目共享
+  /// ui.Image（引用计数），不额外占内存。
+  ImageInfo? _stealBaseFrame() {
+    final base = _AndroidBytesImageProvider(
+      ref: _key.ref,
+      targetWidth: _key.baseTargetWidth,
+      priority: _key.priority,
+    );
+    final completer = base.resolve(const ImageConfiguration()).completer;
+    if (completer == null) return null;
+    ImageInfo? stolen;
+    late final ImageStreamListener probe;
+    probe = ImageStreamListener((ImageInfo? info, bool synchronousCall) {
+      if (info != null && synchronousCall) stolen = info.clone();
+    });
+    completer.addListener(probe);
+    completer.removeListener(probe);
+    return stolen;
+  }
+
+  @override
+  void requestUpTo(int targetWidth, {int? priority}) {
+    if (_dead) {
+      debugPrint('[HD] req-skip dead tw=$targetWidth id=${_key.ref.id}');
+      return;
+    }
+    final idx = _levels.indexOf(targetWidth);
+    if (idx < 0 || idx <= _targetIndex) return; // 未定义/已覆盖：幂等
+    if (priority != null) _priority = priority;
+    debugPrint('[HD] req tw=$targetWidth p=$_priority id=${_key.ref.id}');
+    _targetIndex = idx;
+    scheduleMicrotask(_pump);
+  }
+
+  /// 串行渐进加载（游标推进）：2304（raw blob ~125ms，先上屏把清晰度
+  /// 翻倍）→ 4096（JPEG ~300-500ms，补满）。真机实证单目标直达的 4096
+  /// 解码总延迟近 1s =「压根没解码」体感；两级渐进让第一级 ~125ms 就
+  /// 明显变清楚。失败也推进游标（跳过该档防死循环重试）。
+  void _pump() {
+    if (_dead || _loadingIndex >= 0) return;
+    final next = _loadedIndex + 1;
+    if (next > _targetIndex) return;
+    _loadingIndex = next;
+    final tw = _levels[next];
+    // 复用 _AndroidBytesImageProvider 的加载实现，临时实例只作参数载体。
+    // 4096 走 JPEG bytes→引擎 codec（io worker，UI 零大拷贝——滑动帧
+    // 30-80ms 尖峰的根治；解码慢无妨，帧早已并行发起并 hold）。
+    final delegate = _AndroidBytesImageProvider(
+      ref: _key.ref,
+      targetWidth: tw,
+      priority: _priority,
+    );
+    final Future<ui.Image> future = tw >= 4096
+        ? _run4096Exclusive(() => delegate.loadJpegImageForUpgrade(_decode))
+        : delegate.loadRawImageForUpgrade(_decode);
+    future.then((img) {
+      _loadingIndex = -1;
+      if (_dead) {
+        debugPrint('[HD] push-skip dead tw=$tw id=${_key.ref.id}');
+        img.dispose();
+        return;
+      }
+      _loadedIndex = next;
+      if (_hold) {
+        // 闸门关闭（飞行/手势中）：帧暂存，widget 在合适时机 flush。
+        _heldImage?.dispose();
+        _heldImage = img;
+        _hasImage = true;
+        debugPrint('[HD] hold tw=$tw id=${_key.ref.id}');
+        _onFrameReady?.call();
+      } else {
+        debugPrint('[HD] push tw=$tw id=${_key.ref.id}');
+        _hasImage = true;
+        setImage(ImageInfo(image: img));
+      }
+      if (_targetIndex > _loadedIndex) scheduleMicrotask(_pump);
+    }).catchError((Object e, StackTrace? st) {
+      _loadingIndex = -1;
+      debugPrint('[HD] level fail tw=$tw id=${_key.ref.id} err=$e');
+      if (_dead) return;
+      _loadedIndex = next;
+      if (_targetIndex > _loadedIndex) scheduleMicrotask(_pump);
+      // 【实验兜底】唯一帧（4096）失败（损坏/异常）：偷 1152 帧垫底防
+      // 灰屏死等（原机制 1152 首帧先在无此风险；1152 也失败则保持空帧
+      // 由 widget 层 _showingThumbnailFallback 兜）。
+      if (!_hasImage) {
+        final fallback = _stealBaseFrame();
+        if (fallback != null) {
+          _hasImage = true;
+          setImage(fallback);
+        }
+      }
+    });
+  }
+
+  @override
+  void holdFrames() {
+    _hold = true;
+  }
+
+  @override
+  void flushHeldFrame() {
+    _hold = false;
+    final img = _heldImage;
+    _heldImage = null;
+    if (img == null || _dead) {
+      img?.dispose();
+      return;
+    }
+    debugPrint('[HD] flush id=${_key.ref.id}');
+    setImage(ImageInfo(image: img));
+  }
+
+  @override
+  void setOnFrameReady(void Function()? callback) {
+    _onFrameReady = callback;
+  }
+
+  /// 【4096 全局单飞】整个 app 同时只允许一个 4096 解码在 ServicePolicy
+  /// 门内。结构性隔离：4096 是 400-600ms 的独占型长任务，无此约束时
+  /// 滚动积压的多个会占满 6 门 → 条 96px/网格 cell/1152 预取全部排队
+  /// 饿死（「甩动全残留同一张缩略图」「返回网格全占位几秒」的真机根因，
+  /// 连续两轮回归）。等待在 ServicePolicy.run 之前（等待者不占门槽）；
+  /// 锁按 ref.id 认主，同图重复请求直通；等待中 completer 死亡即让出。
+  static String? _activeHdDecodeOwner;
+
+  Future<ui.Image> _run4096Exclusive(Future<ui.Image> Function() job) async {
+    while (_activeHdDecodeOwner != null && _activeHdDecodeOwner != _key.ref.id) {
+      if (_dead) throw StateError('4096 等待中 completer 已弃置');
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+    }
+    _activeHdDecodeOwner = _key.ref.id;
+    try {
+      return await job();
+    } finally {
+      if (_activeHdDecodeOwner == _key.ref.id) _activeHdDecodeOwner = null;
+    }
+  }
+
+  @override
+  void onDisposed() {
+    debugPrint('[PVP] disposed id=${_key.ref.id}');
+    _dead = true;
+    _heldImage?.dispose();
+    _heldImage = null;
+    super.onDisposed();
+  }
+}
+
+/// 构建 viewer 渐进升档 provider（安卓）：1152 显示档就绪后由
+/// zoomable_image 换上（最后一次换 provider），2304/4096 由 completer
+/// 内部推帧。GIF 不使用（readBytes 多帧已是无损原图）。
+ImageProvider buildProgressiveViewerProvider(
+  ImageRef ref, {
+  required int baseTargetWidth,
+  int priority = RequestPriority.viewerImage,
+}) {
+  return _AndroidProgressiveImageProvider(
+    ref: ref,
+    baseTargetWidth: baseTargetWidth,
+    priority: priority,
+  );
+}
 
 // ───────────────────────── 缩略图 Provider（相册网格用） ─────────────────────────
 

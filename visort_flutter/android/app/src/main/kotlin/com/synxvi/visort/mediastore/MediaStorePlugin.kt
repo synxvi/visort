@@ -367,6 +367,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             "readBytes" -> handleReadBytes(call, result)
             "readThumbnail" -> handleReadThumbnail(call, result)
             "readSampledImage" -> handleReadSampledImage(call, result)
+            "readSampledJpeg" -> handleReadSampledJpeg(call, result)
             "exists" -> handleExists(call, result)
             "requestDelete" -> handleRequestDelete(call, result)
             "getBucketRelativePath" -> handleGetBucketRelativePath(call, result)
@@ -903,6 +904,32 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             } catch (e: Exception) {
                 mainHandler.post {
                     result.error(MsError.QueryFailed("readSampledImage 异常: ${e.message}").code, e.message, null)
+                }
+            }
+        }
+    }
+
+    /// 大档位（≥4096 原图等效档）专用：采样后 JPEG bytes 直回（不转 raw），
+    /// Dart 侧引擎 codec 解码——48MB raw 过 channel 的 UI 线程拷贝是「放大
+    /// 过程卡顿」主因，此通道绕开（见 MediaStoreRepository.readSampledJpeg）。
+    private fun handleReadSampledJpeg(call: MethodCall, result: Result) {
+        val repo = requireRepo() ?: run {
+            result.error(MsError.InvalidArg("repository 未就绪").code, null, null); return
+        }
+        val id = call.argument<String>("id")
+        if (id.isNullOrBlank()) {
+            result.error(MsError.InvalidArg("id 缺失").code, null, null); return
+        }
+        val targetWidth = call.argument<Int>("targetWidth") ?: 4096
+        ioExecutor.execute {
+            try {
+                val data = repo.readSampledJpeg(id, targetWidth)
+                mainHandler.post { result.success(data) }
+            } catch (e: MsError) {
+                mainHandler.post { result.error(e.code, e.message, null) }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    result.error(MsError.QueryFailed("readSampledJpeg 异常: ${e.message}").code, e.message, null)
                 }
             }
         }

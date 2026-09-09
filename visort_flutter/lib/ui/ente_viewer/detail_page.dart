@@ -29,7 +29,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/fs/cache_perf.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
-import 'package:visort_flutter/core/fs/service_policy.dart' show RequestPriority;
+import 'package:visort_flutter/core/fs/service_policy.dart'
+    show RequestPriority, ServicePolicy;
 import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/fs/share_channel.dart';
 import 'package:visort_flutter/core/i18n/i18n.dart' show configProvider, t;
@@ -216,9 +217,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// [photo_view fork] X 边缘溢出翻页动画进行中：期间忽略重复回调防连翻。
   bool _edgePageAnimating = false;
 
-  /// 翻页滚动中显示页缘黑缝（ScrollNotification 驱动，停稳淡出）。
-  bool _pageGapVisible = false;
-
   /// 顶层双击路由表：pageIndex → 该页 ZoomableImage 的双击处理
   /// （Scrollable ballistic 中 ignorePointer 屏蔽页内 tap，双击必须
   /// 由 PageView 之外捕获再分发到当前页）。
@@ -400,6 +398,12 @@ class _DetailPageState extends ConsumerState<DetailPage>
   final _viewedFullIds = <String>{};
   int? _viewerTargetWidthPx;
 
+  /// 放大升档已就绪的 id 集合：2304 档 ~16MB / 4096 档 ~50MB 每张，远重于
+  /// 1152 档 3MB——不进 _viewedFullIds 的 ±6 宽窗（14 张宽窗 × HD 内存 =
+  /// 挤爆低内存机配额），走独立窄窗（[_trimDistantHdCache] 翻页即逐出；
+  /// blob 盘缓存仍在 visort_full/2304、/4096 桶，翻回重看 run 快）。
+  final _hdIds = <String>{};
+
   void _onFullImageLoaded(String id) {
     _viewedFullIds.add(id);
     cachePerfEvent('fullLoaded id=$id n=${_viewedFullIds.length}');
@@ -411,14 +415,28 @@ class _DetailPageState extends ConsumerState<DetailPage>
     );
   }
 
+  void _onHdLoaded(String id) {
+    _hdIds.add(id);
+    cachePerfEvent('hdLoaded id=$id n=${_hdIds.length}');
+  }
+
   void _evictViewedViewerCache() {
     final tw = _viewerTargetWidthPx;
+    // 【pop 压级】滚动期间发起的 4096（每个 400-600ms）若已入队，pop 后
+    // 会串行堵住网格 cell 解码（p200 排 p150 后）=「网格全占位几秒」。
+    // 全部挪到弃置档，网格立即插前。
+    ServicePolicy.instance.deprioritizeQueued(
+      (t) => t.tag?.startsWith('full4096:') ?? false,
+    );
     if (tw == null || _viewedFullIds.isEmpty) return;
     cachePerfEvent('evictAll R=pop n=${_viewedFullIds.length} tw=$tw');
     for (final id in _viewedFullIds) {
       evictViewerImageCache(id, tw);
     }
     _viewedFullIds.clear();
+    // HD 集合兜底：evictViewerImageCache 已含 2304 键（含翻页窄窗漏网的
+    // 近邻条目），这里只清集合本身。
+    _hdIds.clear();
   }
 
   /// 浏览中增量清理：翻页时把已远离当前页（>±3）的 viewer 大图逐出
@@ -427,6 +445,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 解码 = 「网格界面加载慢」。窗口内的保留（±3 立即翻回零重解码），
   /// 其余随走随清，pop 时缓存主体仍是网格缩略图。
   void _trimDistantViewerCache(int currentIndex) {
+    // HD 窄窗先行：不受下方 1152 宽窗的 early return（集合 ≤14 张）影响
+    //——两张 HD 就值得逐远端（内存权重完全不同，见 _hdIds doc）。
+    _trimDistantHdCache(currentIndex);
     final tw = _viewerTargetWidthPx;
     // 窗口 14 张（±6 + 当前）与 _prefetchPageNeighbors 的预取窗口 ±5 对齐
     //（留 1 档裕量）：±5 版真机实证 trim 仍按旧 ±3 清——dist4~5 刚解码
@@ -436,7 +457,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
     final distant = <String>[];
     for (final id in _viewedFullIds) {
       final i = indexById[id];
-      if (i == null || (i - currentIndex).abs() > 6) distant.add(id);
+      // 当前页永不自清（防御：快甩回折时 trim 与跟手 jumpToPage 竞态
+      // 可能把正在显示的页判为 distant → 清掉在屏缓存 = 糊图不自愈）。
+      if (i == null || (i == currentIndex)) continue;
+      if ((i - currentIndex).abs() > 6) distant.add(id);
     }
     for (final id in distant) {
       evictViewerImageCache(id, tw);
@@ -444,6 +468,28 @@ class _DetailPageState extends ConsumerState<DetailPage>
     }
     if (distant.isNotEmpty) {
       cachePerfEvent('trim idx=$currentIndex evicted=${distant.length}');
+    }
+  }
+
+  /// HD 升档档独立窄窗（距离 >0 即逐出 = 翻页就清）：2304 档 ~16MB、4096
+  /// 档 ~50MB/张，宽窗会挤爆低内存机（96MB 档一张 4096 就是 52% 配额，
+  /// 网格缩略图连锁 RE 重解码）。翻回重看走盘缓存 blob（visort_full/2304、
+  /// /4096 桶）重解 + 静止门换源，观感平滑。pop 路径由 evictViewerImageCache
+  /// 的 2304/4096 键兜底（见其 doc），此处只管浏览中增量。
+  void _trimDistantHdCache(int currentIndex) {
+    if (_hdIds.isEmpty) return;
+    final indexById = _idIndex;
+    final distant = <String>[];
+    for (final id in _hdIds) {
+      final i = indexById[id];
+      if (i == null || i != currentIndex) distant.add(id);
+    }
+    for (final id in distant) {
+      evictViewerUpgradeCache(id);
+      _hdIds.remove(id);
+    }
+    if (distant.isNotEmpty) {
+      cachePerfEvent('hdTrim idx=$currentIndex evicted=${distant.length}');
     }
   }
 
@@ -684,75 +730,49 @@ class _DetailPageState extends ConsumerState<DetailPage>
         }
         _doubleTapHandlers[_selectedIndexNotifier.value]?.call(down);
       },
-      child: NotificationListener<ScrollNotification>(
-        // 翻页间隙：滚动中显示页缘黑缝（相邻两页交界 8px 黑，区分两张图），
-        // 停稳后淡出——静止时图片满宽贴屏（无永久 padding，Hero 终点矩形
-        // 与网格 cell 严格一致）。depth==0：只认 PageView 自身（内部无可滚
-        // 子组件，防御性过滤）。
-        onNotification: (n) {
-          if (n.depth != 0) return false;
-          // 删除补位的程序滚动（animateToPage/jumpToPage）不显示页缘黑缝：
-          // 黑缝为用户翻页区分相邻两图而设，程序滚动的 Start/Update/End
-          // 序列会在动画结束时以 150ms 淡出一道黑边 = 切换结束时图片
-          // 两侧轻微闪烁（真机实证）。
-          if (_deletingInProgress) return false;
-          final scrolling = n is! ScrollEndNotification;
-          if (scrolling != _pageGapVisible) {
-            setState(() => _pageGapVisible = scrolling);
-          }
-          return false;
-        },
-        child: PageView.builder(
-          clipBehavior: Clip.none,
-          // 相邻页预 build（±1 页）：ZoomableImage 的 didChangeDependencies
-          // 自然完成预解码，快速连翻不再有糊图期（对标系统相册翻页即现）。
-          allowImplicitScrolling: true,
-          itemBuilder: (context, index) {
-            final file = _files[index];
-            final fileContent = ZoomableImage(
-              file,
-              tagPrefix: 'photo',
-              // 页索引：顶层双击路由（Scrollable ballistic 中 ignorePointer
-              // 屏蔽页内 tap → 双击由 detail_page 顶层捕获后按索引分发）。
-              pageIndex: index,
-              // 与来源网格同列数：cell 缩略图尺寸一致（ImageCache key 命中）。
-              gridCols: widget.gridCols ??
-                  ref.watch(configProvider).photoGridColumns,
-              shouldDisableScroll: (value) {
-                if (_shouldDisableScroll != value) {
-                  setState(() => _shouldDisableScroll = value);
-                }
-              },
-              backgroundDecoration: const BoxDecoration(color: Colors.black),
-              onSwipeUp: () => _showDetails(file),
-              // 面板打开时下滑 → 收面板；否则默认返回。
-              onSwipeDown: _detailsOpen ? _animateClose : null,
-              // 放大后平移到 X 边缘继续拖 → 翻页（photo_view fork onEdgeX）。
-              onEdgeX: _handleEdgePage,
-              onFullLoaded: _onFullImageLoaded,
-            );
-            final pageContent = GestureDetector(
-              onTap: () {
-                InheritedDetailPageState.of(context).toggleFullScreenByUser();
-              },
+      child: PageView.builder(
+        clipBehavior: Clip.none,
+        // 相邻页预 build（±1 页）：ZoomableImage 的 didChangeDependencies
+        // 自然完成预解码，快速连翻不再有糊图期（对标系统相册翻页即现）。
+        allowImplicitScrolling: true,
+        itemBuilder: (context, index) {
+          final file = _files[index];
+          final fileContent = ZoomableImage(
+            file,
+            tagPrefix: 'photo',
+            // 页索引：顶层双击路由（Scrollable ballistic 中 ignorePointer
+            // 屏蔽页内 tap → 双击由 detail_page 顶层捕获后按索引分发）。
+            pageIndex: index,
+            // 与来源网格同列数：cell 缩略图尺寸一致（ImageCache key 命中）。
+            gridCols: widget.gridCols ??
+                ref.watch(configProvider).photoGridColumns,
+            shouldDisableScroll: (value) {
+              if (_shouldDisableScroll != value) {
+                setState(() => _shouldDisableScroll = value);
+              }
+            },
+            backgroundDecoration: const BoxDecoration(color: Colors.black),
+            onSwipeUp: () => _showDetails(file),
+            // 面板打开时下滑 → 收面板；否则默认返回。
+            onSwipeDown: _detailsOpen ? _animateClose : null,
+            // 放大后平移到 X 边缘继续拖 → 翻页（photo_view fork onEdgeX）。
+            onEdgeX: _handleEdgePage,
+            onFullLoaded: _onFullImageLoaded,
+            onHdLoaded: _onHdLoaded,
+          );
+          // 【桌面卡片式页间隙·2026-09-09】黑缝宽度跟随滚动位置（见
+          // _PageGapFollowing doc）：滑动中自然存在、停稳精确归零，图片
+          // 恒全宽贴边、布局零变化。
+          final page = GestureDetector(
+            onTap: () {
+              InheritedDetailPageState.of(context).toggleFullScreenByUser();
+            },
+            child: _PageGapFollowing(
+              controller: _pageController,
+              index: index,
               child: fileContent,
-            );
-            // 页缘黑缝遮罩：仅滚动中可见（AnimatedOpacity 淡入淡出）。
-            // IgnorePointer 不挡下层手势。
-            final page = Stack(
-              children: [
-                Positioned.fill(child: pageContent),
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: AnimatedOpacity(
-                      opacity: _pageGapVisible ? 1.0 : 0.0,
-                      duration: const Duration(milliseconds: 150),
-                      child: const _PageGapEdges(),
-                    ),
-                  ),
-                ),
-              ],
-            );
+            ),
+          );
             return ValueListenableBuilder(
               // 按 file.id 建 key：删除补位时列表移位，element 跟着【图】走
               // 而非"同 index 复用换血"——换图场景（didUpdateWidget 换
@@ -813,7 +833,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
           controller: _pageController,
           itemCount: _files.length,
         ),
-      ),
     );
   }
 
@@ -2428,32 +2447,64 @@ class _TrashDateLabel extends ConsumerWidget {
   }
 }
 
-/// 页缘黑缝（翻页间隙）：左右各 4px 黑条，仅 PageView 滚动中显示
-/// （AnimatedOpacity 淡入），相邻两页交界处拼成 8px 黑色间距。
-class _PageGapEdges extends StatelessWidget {
-  const _PageGapEdges();
+/// 页缘黑缝（跟随滚动位置的桌面卡片式缝隙）：黑缝宽度 = 4dp × 当页距
+/// 中心（controller.page - index）的滚动距离——滑动中页离中心越远缝越
+/// 宽（相邻页交界拼出缝，区分两张图），页滑回中心过程中缝连续收窄、
+/// 停稳时恰好归零：缝隙的出现/消失是滚动本身的组成部分，停稳后无任何
+/// 后补动画；图像布局恒定全宽贴边（黑条只是视觉覆盖，photo_view 零参
+/// 与，无 childSize 竞态）。
+///
+/// 前史（均废）：①「滚动中显示/停稳 150ms 淡出」遮罩——滚动结束序列
+/// End 后 3ms 紧跟 UserScrollNotification(idle)，「非 End 即滚动中」误
+/// 判致 _pageGapVisible 卡 true 黑缝残留；② 恒定 4dp padding 卡片边——
+/// 停稳图片缩 4dp，四角被屏幕圆角裁切。
+class _PageGapFollowing extends StatelessWidget {
+  const _PageGapFollowing({
+    required this.controller,
+    required this.index,
+    required this.child,
+  });
+
+  final PageController controller;
+  final int index;
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    // Stack 双 Positioned 顶底拉伸（Row+SizedBox(width) 在
-    // crossAxisAlignment.center 下高度 0 = 不可见，真机翻页无缝的根因）。
-    return const Stack(
-      children: [
-        Positioned(
-          top: 0,
-          bottom: 0,
-          left: 0,
-          width: 4,
-          child: ColoredBox(color: Colors.black),
-        ),
-        Positioned(
-          top: 0,
-          bottom: 0,
-          right: 0,
-          width: 4,
-          child: ColoredBox(color: Colors.black),
-        ),
-      ],
+    return AnimatedBuilder(
+      animation: controller,
+      child: child,
+      builder: (context, child) {
+        double w = 0;
+        if (controller.hasClients && controller.position.haveDimensions) {
+          final page = controller.page;
+          if (page != null) {
+            w = (4.0 * (page - index).abs()).clamp(0.0, 4.0);
+          }
+        }
+        if (w <= 0) return child!;
+        // 非定位 child 撑起尺寸（Stack 全定位 child 在 loose 约束下不可靠）。
+        return Stack(
+          children: [
+            child!,
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: w,
+              child: const ColoredBox(color: Colors.black),
+            ),
+            Positioned(
+              right: 0,
+              top: 0,
+              bottom: 0,
+              width: w,
+              child: const ColoredBox(color: Colors.black),
+            ),
+          ],
+        );
+      },
     );
   }
 }
+

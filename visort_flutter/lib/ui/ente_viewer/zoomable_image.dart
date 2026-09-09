@@ -70,6 +70,9 @@ class ZoomableImage extends StatefulWidget {
   /// 原图（下采样）就绪回调（外层记录 id，退出时 evict 缓存）。
   final ValueChanged<String>? onFullLoaded;
 
+  /// 放大升档（HD 2304）就绪回调（外层记录 id，翻页窄窗 trim）。
+  final ValueChanged<String>? onHdLoaded;
+
   /// 网格列数：cell 缩略图尺寸与网格 cell 完全一致（ImageCache key 命中，
   /// 飞行层/Hero shuttle 首帧不重新解码）。
   final int gridCols;
@@ -86,6 +89,7 @@ class ZoomableImage extends StatefulWidget {
     this.onSwipeDown,
     this.onEdgeX,
     this.onFullLoaded,
+    this.onHdLoaded,
   });
 
   @override
@@ -117,6 +121,75 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// [_probePassThrough]。
   bool _passThroughProbed = false;
   bool _passThroughInFlight = false;
+
+  // 放大升档：无触发判据（immich 行为）——打开/翻页零升档任务，4096 仅由
+  // 「进入放大态」的离散状态信号触发（_scaleStateChangedCallback /
+  // _updateViewWithFinalImage 末尾补查），p150 与一切用户请求互斥。
+  // 此前按 scale 阈值触发的方案每轮真机都在修边界（基准宽被补偿污染/
+  // 双击窗口/静止门延迟），全部废除。
+
+  /// 渐进升档 completer 的流（_updateViewWithFinalImage 换上渐进 provider
+  /// 时 resolve 持有；放大触发经它调 requestUpTo）。换图复位。
+  ImageStream? _progressiveStream;
+
+  /// 【实验·打开即原图】渐进 provider 引用（attach 时存，帧就绪且静止
+  /// 闸开时 _tryFlushHd 统一换链）：渐进 completer 跳过 1152 首帧、首帧
+  /// 即 4096，提前换链 = PhotoView 黑底窗口。换图复位。
+  ImageProvider? _progressiveProvider;
+
+  /// 【4096 替换时机闸】帧解完（completer 暂存）后，何时 flush：
+  /// ①路由 push 动画 completed（飞行动画结束，用户注意力空档——最佳
+  ///   替换时机：既用到 1152 缓存秒显，落地即全清）；
+  /// ②缩放静止（距最后 zoom 事件 ≥250ms，双击/捏合动画中推帧会与动画
+  ///   写值交错 = 视觉跳变）。
+  /// 驱动源：completer onFrameReady 回调 + 路由 statusListener + zoom
+  /// 事件重排的停稳 Timer。
+  bool _routeSettled = false;
+  bool _routeListenerAttached = false;
+  DateTime _lastZoomActivityAt = DateTime.now();
+  Timer? _hdFlushTimer;
+
+  static const Duration _kZoomIdleForFlush = Duration(milliseconds: 250);
+
+  void _onHdRouteStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed) {
+      _routeSettled = true;
+      _tryFlushHd();
+    }
+  }
+
+  /// flush 条件检查（三源驱动收敛点）。
+  ///
+  /// 主路径：渐进 provider 已在屏（updfl/补建换上），此处只 flush 推帧，
+  /// widget 零 rebuild。换链分支是兜底：attach 了但 provider 尚未上屏的
+  /// 场景（理论不可达，防「帧推给空气」）——帧进 completer current 后再
+  /// 换 provider，build 时 resolve 命中 cache 同 completer 同步回放。
+  /// hasFrame 守卫：无帧时不 flush（提前开闸会让帧到时绕过静止闸直推），
+  /// 等 onFrameReady 再驱动。
+  void _tryFlushHd() {
+    if (!mounted || !_routeSettled) return;
+    if (DateTime.now().difference(_lastZoomActivityAt) < _kZoomIdleForFlush) {
+      _hdFlushTimer?.cancel();
+      _hdFlushTimer = Timer(_kZoomIdleForFlush, _tryFlushHd);
+      return;
+    }
+    final completer = _progressiveStream?.completer;
+    if (completer is! ProgressiveImageCompleter || !completer.hasFrame) return;
+    final provider = _progressiveProvider;
+    if (provider != null && !identical(_imageProvider, provider)) {
+      setState(() => _imageProvider = provider);
+    }
+    completer.flushHeldFrame();
+  }
+
+  /// 放大态信号 → 4096 升档请求（p150）。幂等安全，可从多处调用。
+  void _requestUltraUpgrade() {
+    final completer = _progressiveStream?.completer;
+    if (completer is! ProgressiveImageCompleter) return;
+    cachePerfEvent('hd-req id=${_photo.id} tw=${kViewerUltraThumbSize}');
+    completer.requestUpTo(kViewerUltraThumbSize,
+        priority: RequestPriority.viewerHd);
+  }
   bool _firedOnReady = false;
   ValueChanged<PhotoViewScaleState>? _scaleStateChangedCallback;
   bool _isZooming = false;
@@ -142,6 +215,13 @@ class _ZoomableImageState extends State<ZoomableImage> {
       _isZooming = value != PhotoViewScaleState.initial;
       final state = InheritedDetailPageState.maybeOf(context);
       state?.isZoomedNotifier.value = _isZooming;
+      // 【放大升档触发】离散状态信号（无数值判据边界）：进入放大态即
+      // 请求 4096（immich loadOriginal 语义的按需版）。幂等——重复
+      // zoomedIn/已到位请求被 requestUpTo 吞。放大态与翻页/条/网格
+      // 天然互斥（shouldDisableScroll 锁死），p150 不挤任何预取。
+      if (value == PhotoViewScaleState.zoomedIn) {
+        _requestUltraUpgrade();
+      }
       if (!_isZooming) {
         _initialScale = _photoViewController.scale ?? _initialScale;
         state?.zoomTransformNotifier.value = ZoomTransform.identity;
@@ -201,6 +281,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
     _loadingFinalImage = false;
     _passThroughProbed = false;
     _passThroughInFlight = false;
+    _progressiveStream = null;
+    _progressiveProvider = null;
+    _hdFlushTimer?.cancel();
+    _hdFlushTimer = null;
+    _lastZoomActivityAt = DateTime.now();
     _pickCachedProvider(allowCellThumb: false);
     _showingThumbnailFallback = false;
     _firedOnReady = false;
@@ -261,6 +346,24 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// page→build潮恒定 715-725ms，updfl 与潮同刻）。
   void _onSelectedChanged() {
     if (!mounted || !_isCurrentPage) return;
+    // 【实验·原图直出·翻页让位】上一页/更早页的在队 4096 立即压到队列
+    // 最低档：原图直出后每页一个 400-900ms 长任务，连翻 N 页不压级 =
+    // 当前页排队等前面 N-1 页份。先压级再 attach——本页自己的 4096 尚
+    // 未入队（下方补建发起 p50 恒排最前）；在跑的不可中断（MethodChannel
+    // 语义），最坏等一份解码时长。
+    ServicePolicy.instance.deprioritizeQueued(
+      (t) => t.tag?.startsWith('full4096:') ?? false,
+    );
+    // 【pick 短路页的渐进补建】1152 已就绪（pick 命中 full，_loadedFinalImage
+    // = true）的页在成为当前页时必须补上 progressive 接线 + 4096 发起——
+    // 否则该页恒糊（预取就绪页的短路，真机实证）。直通/heavy 路径的页由
+    // _updateViewWithFinalImage 内的 _attachProgressive 覆盖（幂等）。
+    if (_loadedFinalImage && _progressiveStream == null) {
+      final progressive = _attachProgressive();
+      if (progressive != null) {
+        setState(() => _imageProvider = progressive);
+      }
+    }
     if (_loadedFinalImage || _loadingFinalImage) return;
     // 掠过页 p120 直通在途时翻到本页：立即提速到当前页级（不等 150ms
     // heavy 窗的 bump 分支——「停稳即清晰」不被掠过页语义拖慢；同 key
@@ -327,6 +430,12 @@ class _ZoomableImageState extends State<ZoomableImage> {
     String picked = 'none';
     if (completed(full)) {
       picked = 'full';
+      // 1152 已就绪（预取/回看命中）：直接显示 full。渐进接线和 4096 发起
+      // 由 [_onSelectedChanged] 补（本页成为当前页时）——【不可在 pick 里
+      // attach】：pick 在预建页（PageView ±1）也跑，预建页 attach 会让
+      // 快甩/翻页途中的每页都发 4096(p150)——多个不可抢占任务占满 6 门
+      // → 条 p100/掠过页 p50/网格 p200 全部饿死 = 大图黑屏 + 条缩略图
+      // 重复 + 返回网格占位（真机实证三连回归）。
       _imageProvider = full;
       _loadedFinalImage = true;
       _loadedSmallThumbnail = true;
@@ -456,6 +565,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
       if (!mounted) return;
       final state = InheritedDetailPageState.maybeOf(context);
       if (value.scale == null) return;
+      // 替换时机闸：缩放活跃即暂缓 flush（帧照常解，停稳 250ms 后推）。
+      _lastZoomActivityAt = DateTime.now();
       if (!_isZooming) {
         _initialScale = value.scale;
         state?.zoomTransformNotifier.value = ZoomTransform.identity;
@@ -472,6 +583,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
   @override
   void dispose() {
     _inherited?.selectedIndexNotifier.removeListener(_onSelectedChanged);
+    if (_routeListenerAttached) {
+      ModalRoute.of(context)?.animation?.removeStatusListener(_onHdRouteStatus);
+    }
+    _hdFlushTimer?.cancel();
+    _hdFlushTimer = null;
     if (kLiveViewerProviders[_photo.id] == _imageProvider) {
       kLiveViewerProviders.remove(_photo.id);
     }
@@ -499,6 +615,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 而本页 build 晚到 = 显示升级的真正起点延迟）。
     debugPrint(
       '[B] zbuild idx=${widget.pageIndex} sel=${_inherited?.selectedIndexNotifier.value} '
+      'prov=${_imageProvider.runtimeType} '
       't=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
     );
     _loadLocalImage(context);
@@ -627,7 +744,32 @@ class _ZoomableImageState extends State<ZoomableImage> {
           };
     return GestureDetector(
       onVerticalDragUpdate: verticalDragCallback,
-      child: content,
+      child: Stack(
+        children: [
+          content,
+          // [模拟器调试] 双击入口按钮：adb input 的两次 tap 间隔超双击窗口，
+          // 无法自动化复刻「反复双击」场景——debug 包专用悬浮按钮直接调
+          // core 的 doubleTapZoom（与顶层双击分发同一入口），二态切换放大/缩回。
+          if (const bool.fromEnvironment('debug_hd_btn'))
+            Positioned(
+              right: 24,
+              bottom: 120,
+              child: IgnorePointer(
+                ignoring: false,
+                child: FloatingActionButton(
+                  mini: true,
+                  backgroundColor: const Color(0xCC6750A3),
+                  onPressed: () {
+                    cachePerfEvent('dbgtap zoom id=${_photo.id}');
+                    _coreKey.currentState
+                        ?.doubleTapZoom(const Offset(360, 700));
+                  },
+                  child: const Icon(Icons.zoom_in),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -782,6 +924,14 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// 3) 下采样原图。2/3 为重加载，延迟 [_kHeavyLoadDelay] 起跳（快甩路过
   /// 页零入队，见其 doc）；已起跳/终态由 _loading 标志幂等，不再重排 timer。
   void _loadLocalImage(BuildContext context) {
+    // 【pick 短路页渐进补建·build 驱动兜底】覆盖「本页已是 sel 且 pick
+    // 命中过」的首开场景（无 sel 变化，_onSelectedChanged 不触发）。幂等
+    // （_attachProgressive 内 null 守卫），预建页被 _isCurrentPage 拦。
+    // 直接赋字段（本方法在 build 中被调，不能 setState——本帧 build 用
+    // 新 provider 渲染，渐进 provider 首帧同步偷 1152 帧视觉无缝）。
+    if (_loadedFinalImage && _progressiveStream == null && _isCurrentPage) {
+      _imageProvider = _attachProgressive() ?? _imageProvider;
+    }
     _probePassThrough(context);
     if (!_loadedSmallThumbnail &&
         !_loadedLargeThumbnail &&
@@ -895,8 +1045,59 @@ class _ZoomableImageState extends State<ZoomableImage> {
     debugPrint('[B] heavy-out t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}');
   }
 
+  /// 渐进 provider 接线（full 1152 就绪的所有路径统一走此）：resolve 持流
+  /// + 构造并行发起的 4096（p150）+ 替换时机闸（onFrameReady / 路由 settled）。
+  /// 调用点：_pickCachedProvider 的 full 同步命中（pick 短路修复）与
+  /// _updateViewWithFinalImage（直通/heavy 异步路径）。幂等：已有活流返回
+  /// 先前 provider。返回渐进 provider（GIF/非安卓返回 null，调用方回退）。
+  ImageProvider? _attachProgressive() {
+    if (_progressiveStream != null) return null; // 已接（幂等）
+    if (!Platform.isAndroid || _photo.mime == 'image/gif') return null;
+    final tw = computeViewerTargetWidth(
+      MediaQuery.sizeOf(context).width *
+          MediaQuery.devicePixelRatioOf(context),
+    );
+    final progressive = buildProgressiveViewerProvider(
+      _ref,
+      baseTargetWidth: tw,
+    );
+    _progressiveProvider = progressive;
+    _progressiveStream = progressive.resolve(const ImageConfiguration());
+    widget.onHdLoaded?.call(_photo.id); // trim 记录（翻页窄窗用）
+    final completer = _progressiveStream!.completer;
+    if (completer is ProgressiveImageCompleter) {
+      completer.setOnFrameReady(_tryFlushHd);
+    }
+    if (!_routeListenerAttached) {
+      _routeListenerAttached = true;
+      final animation = ModalRoute.of(context)?.animation;
+      if (animation == null || animation.isCompleted) {
+        _routeSettled = true;
+      } else {
+        animation.addStatusListener(_onHdRouteStatus);
+      }
+    }
+    return progressive;
+  }
+
   Future<void> _updateViewWithFinalImage(ImageProvider imageProvider) async {
     debugPrint('[B] updfl-in t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}');
+    // 【升档接线】非 GIF 换上渐进 provider（_attachProgressive 统一入口）。
+    // ⚠️ 仅当前页 attach：本方法可被「翻走后才完成的 precache 回调」触发
+    //（发起时是当前页、完成时已是预建页）——无守卫会让快甩途中的每个
+    // 预建页都发 4096，门被占满 → 条 96px 饿死 → 条项复用 widget
+    // 显示旧帧 =「甩动全残留同一张缩略图、停稳几秒才恢复」（真机实证）。
+    // 预建页只换 1152 显示（便宜），翻到时 _onSelectedChanged 补 attach。
+    //
+    // 换链无感靠 completer 构造偷 1152 帧作 initial（1152 = immich preview
+    // 显示档语义，flight 清晰度的来源）；此后 4096 帧由 completer 推进，
+    // widget 不再 rebuild（「换源」动作整体消失）。
+    if (_isCurrentPage) {
+      final progressive = _attachProgressive();
+      if (progressive != null) {
+        imageProvider = progressive;
+      }
+    }
     // 仅【真放大态】（用户主动 zoomedIn）才做 ente 式尺寸修正保持视角；
     // 其余态静默把 scaleState 归位 initial（setInvisibly 无通知、零副作用）。
     //

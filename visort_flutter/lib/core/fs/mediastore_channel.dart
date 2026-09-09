@@ -642,6 +642,30 @@ class MediaStoreChannel {
     }
   }
 
+  /// 大档位（≥4096 原图等效档）专用：返回采样后 **JPEG bytes**（不转 raw）。
+  /// raw 路径 4096×3072 = 48MB ByteArray 过 channel 在 UI 线程分配/拷贝
+  /// =「放大过程卡顿」主因（2026-09-08 真机）；JPEG ~1-2MB 传输轻，解码
+  /// 交引擎 codec 的 io worker（离 UI 线程）。宽高为解码后实际尺寸
+  ///（含 EXIF 转正，与 readSampledImage 契约一致）。
+  Future<({Uint8List bytes, int width, int height})> readSampledJpeg(
+      String id, {required int targetWidth}) async {
+    try {
+      final raw = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+          'readSampledJpeg', {'id': id, 'targetWidth': targetWidth});
+      if (raw == null) {
+        throw const MsException(
+            MsErrorCode.unknown, 'readSampledJpeg 返回 null');
+      }
+      return (
+        bytes: raw['bytes'] as Uint8List,
+        width: (raw['width'] as num).toInt(),
+        height: (raw['height'] as num).toInt(),
+      );
+    } on PlatformException catch (e) {
+      throw _convertError(e);
+    }
+  }
+
   /// 设备总内存（MB）。[ente 对齐] 解码防崩阈值用（RAM < 5GB → 24MP 上限）。
   Future<int?> totalRamMb() async {
     try {

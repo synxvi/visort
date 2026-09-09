@@ -48,9 +48,19 @@ abstract final class RequestPriority {
   /// 会卡预取级）。若未来恢复「途经页不等延迟窗直通」再启用本档。
   static const int passthroughFull = 120;
 
+  /// 放大升档（viewer 当前页捏合/双击越过阈值后的高清档 2304）：用户显式
+  /// 行为（放大看细节）优先于预取（250）与网格清晰层（200），仍让位当前页
+  /// 大图（50）与条占位（100）。放大态下 PageView 被 shouldDisableScroll
+  /// 锁死、单次只有一个 HD 任务（占一门槽 ~100-200ms），不会形成积压。
+  static const int viewerHd = 150;
+
   /// 空闲预缓存（全相册 screenNail 预生成）：比一切用户请求低——任何
   /// 用户解码天然插队；配合 IdlePrecacheService 的交互静默检测双保险。
   static const int idlePrecache = 300;
+
+  /// 升档解码的弃置优先级（离屏/退出后与网格清晰层同档让行——4096 单个
+  /// 400-600ms，滚动积压的多个会堵住 pop 后的网格 cell 解码）。
+  static const int deprioritizedUpgrade = 200;
 
   /// filmstrip full 预取（盘缓存就绪区域「掠过即 full」）：低于一切用户
   /// 请求（当前页 p50 恒优先），高于空闲扫描——未扫到的老照片会走

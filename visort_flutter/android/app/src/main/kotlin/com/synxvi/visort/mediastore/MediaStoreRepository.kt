@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.IntentSender
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ColorSpace
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
@@ -879,9 +880,16 @@ class MediaStoreRepository(private val context: Context) {
             sampleSize *= 2
         }
         // ③ 按 inSampleSize 解码(只解 origW/sampleSize 像素,native libjpeg-turbo 快)
+        // ⚠️ inPreferredColorSpace = SRGB：手机主摄 JPEG 常带 Display P3 ICC
+        //（一加/OPPO UltraHDR 全中）——不设此项时解码出的 Bitmap 保持 P3
+        // 色域，copyPixelsToBuffer 拷出的是【P3 原始编码值】，Dart 侧按
+        // sRGB 解释 = 整体灰暗/欠饱和（与 Skia 正确转换的 JPEG bytes 通道
+        // 出现「切换瞬间亮度和质感突变」，真机+像素级 ICC 检查实证
+        // 2026-09-09）。统一转换到 sRGB 后全链色彩一致。
         val opts = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
             inPreferredConfig = Bitmap.Config.ARGB_8888
+            inPreferredColorSpace = ColorSpace.get(ColorSpace.Named.SRGB)
         }
         val dStream = contentResolver.openInputStream(uri)
             ?: throw MsError.QueryFailed("无法打开 InputStream: $id")
@@ -891,11 +899,29 @@ class MediaStoreRepository(private val context: Context) {
         // ③' 应用 EXIF 旋转(见 readSampledImage doc):竖拍照片位图横躺,
         //    Matrix.postRotate 转正。翻转组合(TRANSPOSE/TRANSVERSE,多见于前置
         //    摄像头)忽略镜像只取旋转角——比横躺好,罕见场景不引入翻转复杂度。
-        if (rotationDegrees == 0) return bitmap
+        if (rotationDegrees == 0) {
+            logColorProbe("sampled", longId, bitmap)
+            return bitmap
+        }
         val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
         val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
         bitmap.recycle()
+        logColorProbe("sampledRot", longId, rotated)
         return rotated
+    }
+
+    /// 【色差探针·debug 专用】两条解码链的像素同点采样对比：1152 raw 直建
+    /// 链（本函数）与 4096 JPEG blob 生成/读取链的色彩管理是否一致——
+    /// 真机「1152→原图档切换瞬间亮度/质感跳动」的量化依据（模拟器两链
+    /// 像素 Δ=0 无法复现，ROM 的 Skia/BitmapFactory 色彩管理行为差异）。
+    private fun logColorProbe(tag: String, id: Long, bmp: Bitmap) {
+        val w = bmp.width
+        val h = bmp.height
+        val pts = (0..4).map { bmp.getPixel(w * (it + 1) / 6, h / 2) }
+        Log.i(
+            "ColorProbe",
+            "src=$tag id=$id cs=${bmp.colorSpace} w=$w pts=$pts",
+        )
     }
 
     // ──────────── 空闲预缓存（对标系统相册全相册 screenNail 预生成，配额内填满） ────────────
@@ -928,6 +954,79 @@ class MediaStoreRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.w(TAG, "precacheFullImage 失败 id=$id: ${e.message}")
             3
+        }
+    }
+
+    /// 大档位（≥4096 原图等效档）专用：返回 **JPEG bytes**（不转 raw 像素）。
+    /// raw 路径 4096×3072 = 48MB ByteArray 过 channel 在 Dart UI 线程
+    /// 分配/拷贝（~30-80ms 帧尖）=「放大过程卡顿」主因（2026-09-08）；
+    /// bytes 传输轻，解码交引擎 codec 的 io worker（离 UI 线程）。
+    ///
+    /// 【完全对齐 immich·2026-09-09 用户指令】≤25MP 的图【直回原图 bytes】
+    /// ——零解码零重压缩，引擎单次解码 ~150-250ms，原图档替换发生在
+    /// 飞行动画内（immich 本地相册同款时序）。此前「全尺寸解码(SRGB 统一)
+    /// + JPEG q90 重压缩 + 引擎再解」三步 400-900ms =「动画结束顿一会才
+    /// 变亮」的根源（immich 单步链无此税）。
+    /// 代价（用户确认接受，immich 同款）：宽色域图（P3）原图档 = 引擎
+    /// 直读（引擎忽略 ICC，flutter test 同像素双 ICC 逐位一致实证），与
+    /// 1152 档（BitmapFactory SRGB 转换）存在色彩差——immich 本地相册
+    /// 同款行为（系统 thumb vs 原图直读）。
+    /// 超大图（>25MP，48MP 全像素模式 8160×6144 = 引擎全解 ~192MB bitmap
+    /// OOM 风险）：仍走采样重压缩慢链（blob 缓存保留供二次秒读）。
+    fun readSampledJpeg(id: String, targetWidth: Int): Map<String, Any> {
+        val safeTarget = targetWidth.coerceIn(960, 4096)
+        val longId = id.toLongOrNull() ?: throw MsError.InvalidArg("非法图片 id: $id")
+        val uri = ContentUris.withAppendedId(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
+        )
+        val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        // ⚠️ openInputStream 判 null 必须独立 + BufferedInputStream（同
+        // decodeSampledBitmap ①：decodeStream 需要 markable stream）。
+        val bStream = contentResolver.openInputStream(uri)
+            ?: throw MsError.QueryFailed("无法打开 InputStream: $id")
+        bStream.use {
+            BitmapFactory.decodeStream(BufferedInputStream(it, 65536), null, boundsOpts)
+        }
+        val origW = boundsOpts.outWidth
+        val origH = boundsOpts.outHeight
+        // 快链：全像素 ≤26MP（解码 bitmap ~100MB 上限内）直回原图 bytes。
+        // EXIF orientation 交引擎（SkCodec 应用，immich/Flutter 同款）。
+        if (origW > 0 && origW.toLong() * origH <= 26_000_000L) {
+            val input = contentResolver.openInputStream(uri)
+                ?: throw MsError.QueryFailed("无法打开 InputStream: $id")
+            val bytes = input.use { it.readBytes() }
+            return mapOf("bytes" to bytes, "width" to origW, "height" to origH)
+        }
+        // 慢链（超大图）：采样解码 + compress 落盘，二次读取走 blob 秒回。
+        readFullCacheBytes(longId, safeTarget)?.let { return it }
+        val bitmap = decodeSampledBitmap(longId, safeTarget)
+        val bytes = writeFullCache(longId, safeTarget, bitmap)
+        val w = bitmap.width
+        val h = bitmap.height
+        bitmap.recycle()
+        return mapOf("bytes" to bytes, "width" to w, "height" to h)
+    }
+
+    /// 盘缓存 JPEG 字节直读（[readSampledJpeg] 专用，不 decode 不转 raw）。
+    /// 校验逻辑与 [readFullCache] 完全对齐（存在 + mtime；miss 零 DB 查询）。
+    private fun readFullCacheBytes(id: Long, targetWidth: Int): Map<String, Any>? {
+        val file = File(File(fullCacheDir, targetWidth.toString()), "$id.jpg")
+        if (!file.exists()) return null // miss：零查询
+        val dm = queryDateModifiedMs(id)
+        if (dm != null && file.lastModified() < dm) {
+            val len = file.length()
+            if (file.delete()) fullBytesCounter.addIfReady(-len) // 源图已编辑：失效重解
+            return null
+        }
+        return try {
+            val bytes = file.readBytes()
+            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            if (opts.outWidth <= 0) return null // 损坏文件：走重解
+            mapOf("bytes" to bytes, "width" to opts.outWidth, "height" to opts.outHeight)
+        } catch (e: Exception) {
+            Log.w(TAG, "readFullCacheBytes 失败: ${e.message}")
+            null
         }
     }
 
@@ -1123,8 +1222,16 @@ class MediaStoreRepository(private val context: Context) {
         }
         return try {
             val bytes = file.readBytes()
-            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            // SRGB 转换（同 decodeSampledImage 的注释）：旧盘缓存 blob 是
+            // P3 bitmap compress 的（带 P3 ICC），读路径统一转 sRGB——旧
+            // 缓存无需失效重建。
+            val opts = BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inPreferredColorSpace = ColorSpace.get(ColorSpace.Named.SRGB)
+            }
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
                 ?: return null
+            logColorProbe("blobRead tw=$targetWidth", id, bitmap)
             val w = bitmap.width
             val h = bitmap.height
             val pixels = ByteArray(w * h * 4)
@@ -1152,15 +1259,23 @@ class MediaStoreRepository(private val context: Context) {
     }
 
     /// 写全图缓存（compress 后立即落盘 + 节流 trim）。失败静默（不阻断解码
-    /// 主路径）。
-    private fun writeFullCache(id: Long, targetWidth: Int, bitmap: Bitmap) {
+    /// 主路径）。返回 compress 后的 bytes（readSampledJpeg 复用同一份，
+    /// 免二次 compress/读盘）。
+    private fun writeFullCache(id: Long, targetWidth: Int, bitmap: Bitmap): ByteArray {
+        val out = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+        val bytes = out.toByteArray()
+        writeFullCacheBytes(id, targetWidth, bytes)
+        return bytes
+    }
+
+    /// compress 后字节落盘（tmp 原子改名 + 计数 + 节流 trim）。失败静默。
+    private fun writeFullCacheBytes(id: Long, targetWidth: Int, bytes: ByteArray) {
         try {
             val dir = File(fullCacheDir, targetWidth.toString())
             dir.mkdirs()
             val tmp = File(dir, "$id.tmp")
-            val out = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
-            tmp.writeBytes(out.toByteArray())
+            tmp.writeBytes(bytes)
             // 临时文件原子改名：trim/断电不留半写 JPEG（decodeByteArray 会
             // 当损坏图返回 null，命中变 miss 白付一次 IO）。
             val dest = File(dir, "$id.jpg")
@@ -1499,6 +1614,7 @@ class MediaStoreRepository(private val context: Context) {
         val opts = BitmapFactory.Options().apply {
             inSampleSize = sampleSize
             inPreferredConfig = Bitmap.Config.ARGB_8888
+            inPreferredColorSpace = ColorSpace.get(ColorSpace.Named.SRGB)
         }
         val dStream = contentResolver.openInputStream(uri)
             ?: throw MsError.QueryFailed("无法打开 InputStream: $id")

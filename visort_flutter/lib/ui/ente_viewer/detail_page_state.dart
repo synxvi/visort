@@ -49,6 +49,28 @@ const int kViewerLargeThumbSize = 640;
 /// 污染 59%、360x792 欠采样），360px 上 1440 屏 = 「过渡还是糊」的根因。
 const int kViewerMidThumbSize = 900;
 
+/// viewer 放大升档（HD 档，物理 px）：相对 contained 倍率越过 1.3 时懒加载
+/// 整图替换 1152 显示档（此前放大只靠 FilterQuality 插值拉伸——
+/// computeViewerTargetWidth doc 里的 _hdTriggered 曾是死注释，2026-09-08 补实）。
+/// 取 2304 = 2×1152（系统相册 log2 分层同款语义），且是 readSampledImage
+/// 尺寸数学的硬约束：inSampleSize 只取 2 的幂，请求 ≥2304 才能保证
+/// ≥4600px 原图落到 sampleSize=2（半宽）档——请求 2048 会退回 sampleSize=4
+/// 拿 1150 宽（等于白干）。通道零改动：readSampledImage 的 targetWidth
+/// clamp [960,4096] 天然支持，盘缓存自动落 {visort_full}/2304/ 桶
+///（blob ~300-500KB/张，与 1152 桶共享配额 LRU）。内存 ~16MB/张
+///（2304×~1720×4），远重于 1152 档 3MB——trim 走独立窄窗（距离 >1，
+/// detail_page._trimDistantHdCache），不进 1152 的 ±6 宽窗。
+const int kViewerHdThumbSize = 2304;
+
+/// viewer 放大升档第二级（原图等效档，物理 px）：相对倍率越过 2.3（2304 档
+/// 已开始插值）时加载。对 ≤4096 宽的原图【无损等价原图】；对 40-50MP 旗舰
+/// 图，4× 放大前显示需求（1440 屏双击 2.5× = 2880px 宽）仍在 4096 之内——
+/// 真·全像素只服务极端变焦段，却不值得付它的代价：无 targetWidth 通道绕过
+/// ServicePolicy 门（readBytes 裸跑）+ 引擎 codec 队列停摆（当年「翻页糊半秒」
+/// 同根）+ 50MP 位图 200MB。内存 ~50MB/张（4096×3072×4）——trim 窗口与
+/// 2304 共用但更严（翻页即逐，见 detail_page._trimDistantHdCache）。
+const int kViewerUltraThumbSize = 4096;
+
 /// viewer 端正在显示的图源注册表（photoId → provider）。zoomable_image
 /// build 时写入、dispose 时移除、detail_page dispose 时整体兜底清空。
 /// 飞行层（Hero shuttle）第一优先级图源：正在显示的 provider 其

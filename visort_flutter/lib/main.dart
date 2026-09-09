@@ -22,6 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 import 'core/fs/image_loader.dart' show initMaxDecodePixels;
+import 'core/fs/visort_image_cache.dart' show VisortWidgetsBinding;
 import 'app.dart';
 import 'core/db/database_service.dart';
 import 'core/diag/probe_log.dart';
@@ -30,7 +31,11 @@ import 'core/i18n/i18n.dart';
 import 'core/window/window_state.dart';
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  // 自定义 binding：实例化即注册为全局单例（Dart 静态方法不继承，
+  // 不能写 VisortWidgetsBinding.ensureInitialized()）。接入双桶 ImageCache
+  //（visort_image_cache，immich 同款手法）——viewer 渐进升档大帧与网格
+  // 缩略图分桶，互不驱逐。
+  VisortWidgetsBinding();
 
   // ──────────── 时序排查日志环（接管 debugPrint → cache/probe.log） ────────────
   // 真机复现后事后拉取完整时间线（logcat 窗口与用户操作时序解耦）：
