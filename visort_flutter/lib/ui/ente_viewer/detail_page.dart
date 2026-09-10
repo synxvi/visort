@@ -214,6 +214,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 相册 p() 同构）。integral 值 = 静止，不触发任何联动。
   final ValueNotifier<double> _thumbPagePos = ValueNotifier(0);
 
+  /// 【翻页中扣帧】PageView 滚动中广播（_onPageScroll 维护，经 Inherited
+  /// 下发各页 ZoomableImage——4096 帧滚动中 hold、停稳 flush）。
+  final ValueNotifier<bool> _pageScrolling = ValueNotifier(false);
+
+  /// 【双击意图重放】跨 build 存活持有者（见 DoubleTapIntentHolder doc：
+  /// State 单例，经 Inherited 下发——放 widget 实例字段会随 rebuild 丢失）。
+  final DoubleTapIntentHolder _doubleTapIntent = DoubleTapIntentHolder();
+
   /// [photo_view fork] X 边缘溢出翻页动画进行中：期间忽略重复回调防连翻。
   bool _edgePageAnimating = false;
 
@@ -310,6 +318,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
     final p = _pageController.page;
     if (p != null) {
       _thumbPagePos.value = p;
+    }
+    // 【翻页中扣帧】广播滚动状态（值变化才写，每帧调用零 notifier 抖动）。
+    final scrolling = _pageController.position.isScrollingNotifier.value;
+    if (_pageScrolling.value != scrolling) {
+      _pageScrolling.value = scrolling;
     }
   }
 
@@ -654,6 +667,8 @@ class _DetailPageState extends ConsumerState<DetailPage>
       selectedIndexNotifier: _selectedIndexNotifier,
       doubleTapHandlers: _doubleTapHandlers,
       zoomTransformNotifier: zoomTransformNotifier,
+      pageScrollingNotifier: _pageScrolling,
+      doubleTapIntent: _doubleTapIntent,
       // 面板打开时点击图片区 → 收面板（而非切换全屏）。
       onImageTap: _detailsOpen ? _animateClose : null,
       child: PopScope(
@@ -677,7 +692,19 @@ class _DetailPageState extends ConsumerState<DetailPage>
           extendBodyBehindAppBar: true,
           resizeToAvoidBottomInset: false,
           backgroundColor: Colors.black,
-          body: Center(
+          // 【沉浸切换 State 重建修复·2026-09-10】SystemChrome 隐藏/恢复
+          // 系统栏 → WindowInsets 动画 → MediaQuery padding 抖动传导进
+          // body → PageView 页 element 整个销毁重建（模拟器 [DT]
+          // state-dispose/new 成对实证：进沉浸后 270ms 全部页 State 换
+          // 血，doubleTapZoom 动画随旧 core 死亡 =「双击没反应」；顶/底
+          // 栏跟手浮层随重建抖动 =「栏抖一下」）。viewer 全屏黑底，本就
+          // 不消费系统栏 padding——在此剥除，insets 抖动进不了页子树。
+          body: MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              padding: EdgeInsets.zero,
+              viewInsets: EdgeInsets.zero,
+            ),
+            child: Center(
             child: Stack(
               children: [
                 // 图片随面板上推（唯一驱动源 _panelExtent）。
@@ -702,6 +729,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
                 ),
               ],
             ),
+          ),
           ),
         ),
       ),
@@ -760,14 +788,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
             onFullLoaded: _onFullImageLoaded,
             onHdLoaded: _onHdLoaded,
           );
-          // 【桌面卡片式页间隙·2026-09-09】黑缝宽度跟随滚动位置（见
-          // _PageGapFollowing doc）：滑动中自然存在、停稳精确归零，图片
-          // 恒全宽贴边、布局零变化。
           final page = GestureDetector(
             onTap: () {
               InheritedDetailPageState.of(context).toggleFullScreenByUser();
             },
-            child: _PageGapFollowing(
+            child: _PageParallaxTransition(
               controller: _pageController,
               index: index,
               child: fileContent,
@@ -827,12 +852,19 @@ class _DetailPageState extends ConsumerState<DetailPage>
             _trimDistantViewerCache(index);
             _prefetchPageNeighbors(index);
           },
+          // 【翻页手感对齐 immich·2026-09-10】标准 PageScrollPhysics：
+          // FastScrollPhysics 的 ballistic velocity×4 会让抬手后页面猛冲
+          // 到 snap 位——交界缝从屏中「突然加速跑到左边」（用户实证）；
+          // 拖拽阶段本就 1:1 跟手不受影响。快甩条驱动主图走 jumpToPage
+          // 程序滚动，不经 physics，不受影响。
+          // 【微弹手感·对齐 aves】snap 由 iOS 弹簧驱动（Bouncing 物理），
+          // 落页带轻微过冲回弹；PageScrollPhysics 保持整页吸附。
           physics: _shouldDisableScroll || _swipeLocked || _popping
               ? const NeverScrollableScrollPhysics()
-              : const FastScrollPhysics(speedFactor: 4.0),
+              : const PageScrollPhysics(parent: BouncingScrollPhysics()),
           controller: _pageController,
           itemCount: _files.length,
-        ),
+      ),
     );
   }
 
@@ -2447,19 +2479,24 @@ class _TrashDateLabel extends ConsumerWidget {
   }
 }
 
-/// 页缘黑缝（跟随滚动位置的桌面卡片式缝隙）：黑缝宽度 = 4dp × 当页距
-/// 中心（controller.page - index）的滚动距离——滑动中页离中心越远缝越
-/// 宽（相邻页交界拼出缝，区分两张图），页滑回中心过程中缝连续收窄、
-/// 停稳时恰好归零：缝隙的出现/消失是滚动本身的组成部分，停稳后无任何
-/// 后补动画；图像布局恒定全宽贴边（黑条只是视觉覆盖，photo_view 零参
-/// 与，无 childSize 竞态）。
+/// 视差滑动过渡（对齐 aves `PageTransitionEffects.slide(parallax: true)`，
+/// 其源码 lib/widgets/viewer/controls/transitions.dart）：每页包
+/// ClipRect + Transform.translate，dx = position × W / 2
+///（position = (page - index).clamp(-1, 1)）——每页以【半速】跟随滚动
+///（视差）：进入页以两倍揭示速度提前探入屏幕（刚拖动就大半出现）、旧
+/// 页以半速退场，划到底新页恰好满幅露出；微弹手感由 physics 侧
+/// PageScrollPhysics(parent: BouncingScrollPhysics()) 提供（iOS 弹簧落页
+/// 过冲回弹，见 _buildPageView）。
 ///
-/// 前史（均废）：①「滚动中显示/停稳 150ms 淡出」遮罩——滚动结束序列
-/// End 后 3ms 紧跟 UserScrollNotification(idle)，「非 End 即滚动中」误
-/// 判致 _pageGapVisible 卡 true 黑缝残留；② 恒定 4dp padding 卡片边——
-/// 停稳图片缩 4dp，四角被屏幕圆角裁切。
-class _PageGapFollowing extends StatelessWidget {
-  const _PageGapFollowing({
+/// Transform.translate 为 paint 层变换：每帧零 relayout，photo_view 布局
+/// /手势不受影响。ClipRect 同 aves，防平移后的页内容溢出自身边界。
+///
+/// 前史：覆盖式（进入页原生滑入盖住补偿固定的旧页）方向与 aves 相反
+/// （aves 是视差半速揭示，非覆盖），已废；更早的页间缝四版（遮罩淡出/
+/// 恒定 padding/每页跟随/全局 overlay）亦全废——任何缝的存在与消失都
+/// 是补偿式动画。
+class _PageParallaxTransition extends StatelessWidget {
+  const _PageParallaxTransition({
     required this.controller,
     required this.index,
     required this.child,
@@ -2475,36 +2512,22 @@ class _PageGapFollowing extends StatelessWidget {
       animation: controller,
       child: child,
       builder: (context, child) {
-        double w = 0;
-        if (controller.hasClients && controller.position.haveDimensions) {
-          final page = controller.page;
-          if (page != null) {
-            w = (4.0 * (page - index).abs()).clamp(0.0, 4.0);
-          }
+        if (!controller.hasClients || !controller.position.haveDimensions) {
+          return child!;
         }
-        if (w <= 0) return child!;
-        // 非定位 child 撑起尺寸（Stack 全定位 child 在 loose 约束下不可靠）。
-        return Stack(
-          children: [
-            child!,
-            Positioned(
-              left: 0,
-              top: 0,
-              bottom: 0,
-              width: w,
-              child: const ColoredBox(color: Colors.black),
-            ),
-            Positioned(
-              right: 0,
-              top: 0,
-              bottom: 0,
-              width: w,
-              child: const ColoredBox(color: Colors.black),
-            ),
-          ],
+        final page = controller.page!;
+        final position = (page - index).clamp(-1.0, 1.0);
+        final w = controller.position.viewportDimension;
+        return ClipRect(
+          child: Transform.translate(
+            offset: Offset(position * w / 2, 0),
+            child: child,
+          ),
         );
       },
     );
   }
 }
+
+
 

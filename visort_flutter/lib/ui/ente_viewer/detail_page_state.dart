@@ -106,6 +106,39 @@ void restoreEdgeToEdgeBars() {
 typedef FullScreenRequestCallback =
     void Function(bool shouldEnable, FullScreenRequestReason reason);
 
+/// 【双击意图重放】跨 build 存活的意图持有者（DetailPage State 持有
+/// 单例，经 InheritedDetailPageState.doubleTapIntent 下发）。
+class DoubleTapIntentHolder {
+  Offset? global;
+  String? photoId;
+  DateTime? at;
+
+  /// 意图方向：true = 放大（initial→zoomedIn），false = 缩小（zoomedIn→
+  /// initial）。⚠️ 重放只放大意图：缩小意图在重建后目标已天然达成（新
+  /// core 就在 initial，flags 默认即非放大态）——若不辨方向重放，会在
+  /// 「双击缩小 → 退出沉浸 → insets 重建」链里把刚缩小的图又放大回去
+  ///（真机实证：恢复默认大小后又回到放大态、栏再消失）。
+  bool zoomIn = false;
+
+  /// 匹配本图、在时间窗内、且为放大意图的待处理坐标（否则 null 并视情
+  /// 况消费清除）。
+  Offset? takeFor(String id) {
+    final t = at;
+    if (t == null || global == null || photoId != id) return null;
+    if (DateTime.now().difference(t) > const Duration(seconds: 1) || !zoomIn) {
+      clear();
+      return null;
+    }
+    return global;
+  }
+
+  void clear() {
+    global = null;
+    photoId = null;
+    at = null;
+  }
+}
+
 class InheritedDetailPageState extends InheritedWidget {
   final ValueNotifier<bool> enableFullScreenNotifier;
   final ValueNotifier<bool> isInSharedCollectionNotifier;
@@ -124,10 +157,22 @@ class InheritedDetailPageState extends InheritedWidget {
   final Map<int, void Function(Offset globalPosition)> doubleTapHandlers;
   final ValueNotifier<ZoomTransform> zoomTransformNotifier;
 
-  /// 图片区单击回调（DetailPage 注入）：详情面板打开时收面板，否则全屏切换。
-  final VoidCallback? onImageTap;
+  /// 【翻页中扣帧】PageView 滚动中（含 ballistic）为 true：各页
+  /// ZoomableImage 的 4096 帧在此期间不推（大纹理上传 ~50MB GPU 会与
+  /// 动画帧抢主线程/GPU =「翻页动画卡一下」），帧保持 held，停稳翻为
+  /// false 时由该事件驱动 flush（listener 挂在 ZoomableImage attach 处）。
+  final ValueNotifier<bool> pageScrollingNotifier;
 
-  // ignore: prefer_const_constructors_in_immutables
+  /// 【双击意图重放】持有者（跨 build 存活）：SystemChrome 隐藏系统栏的
+  /// insets 变化会把 PageView 页 element 整个销毁重建（[DT] state-dispose/
+  /// new 成对实证）——双击的放大动画随旧 State/core 死亡 =「双击没反应」。
+  /// 意图记在这里（由 DetailPage State 持有单例、经 Inherited 下发——
+  /// ⚠️ 不能放 Inherited widget 实例字段：detail_page 每次 rebuild 都 new
+  /// 一个 Inherited 实例，写旧读新恒 null，真机实证重放从未触发）；新
+  /// State 首帧发现匹配的待处理意图时恢复 zoom/沉浸上报并重放放大。
+  /// photoId 匹配防串页；时间窗防陈旧重放。
+  final DoubleTapIntentHolder doubleTapIntent;
+
   InheritedDetailPageState({
     super.key,
     required super.child,
@@ -138,8 +183,13 @@ class InheritedDetailPageState extends InheritedWidget {
     required this.selectedIndexNotifier,
     required this.doubleTapHandlers,
     required this.zoomTransformNotifier,
+    required this.pageScrollingNotifier,
+    required this.doubleTapIntent,
     this.onImageTap,
   });
+
+  /// 图片区单击回调（DetailPage 注入）：详情面板打开时收面板，否则全屏切换。
+  final VoidCallback? onImageTap;
 
   static InheritedDetailPageState of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<InheritedDetailPageState>()!;

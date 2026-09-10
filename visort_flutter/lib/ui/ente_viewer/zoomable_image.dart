@@ -158,7 +158,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
     }
   }
 
-  /// flush 条件检查（三源驱动收敛点）。
+  /// flush 条件检查（四源驱动收敛点：onFrameReady / 路由 settled /
+  /// zoom 停稳 Timer / 翻页滚动结束）。
   ///
   /// 主路径：渐进 provider 已在屏（updfl/补建换上），此处只 flush 推帧，
   /// widget 零 rebuild。换链分支是兜底：attach 了但 provider 尚未上屏的
@@ -168,6 +169,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// 等 onFrameReady 再驱动。
   void _tryFlushHd() {
     if (!mounted || !_routeSettled) return;
+    // 【翻页中扣帧】PageView 滚动中（含 ballistic）不推帧：4096 大纹理
+    // 上传（~50MB GPU）与动画帧抢主线程/GPU =「翻页动画卡一下」（用户
+    // 实证）。帧保持 held，滚动结束事件（下方 pageScrollingNotifier
+    // listener）会再驱动本方法完成 flush。
+    if (_inherited?.pageScrollingNotifier.value ?? false) return;
     if (DateTime.now().difference(_lastZoomActivityAt) < _kZoomIdleForFlush) {
       _hdFlushTimer?.cancel();
       _hdFlushTimer = Timer(_kZoomIdleForFlush, _tryFlushHd);
@@ -180,6 +186,13 @@ class _ZoomableImageState extends State<ZoomableImage> {
       setState(() => _imageProvider = provider);
     }
     completer.flushHeldFrame();
+  }
+
+  /// 翻页滚动结束（pageScrollingNotifier true→false）驱动的 flush 入口。
+  void _onPageScrollingChanged() {
+    if (mounted && !(_inherited?.pageScrollingNotifier.value ?? true)) {
+      _tryFlushHd();
+    }
   }
 
   /// 放大态信号 → 4096 升档请求（p150）。幂等安全，可从多处调用。
@@ -230,10 +243,25 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 新页初始上报（scaleStateChangedCallback 只在状态变化时触发，新页
     // initial 不回调 → 上一页放大标志跨页残留 = 翻页失灵/沉浸模式不退出）。
     // postFrame 覆盖所有翻页路径（filmstrip 跳转/删除补位/边缘翻页）。
+    //
+    // 【双击意图重放】SystemChrome 隐藏系统栏的 insets 变化（进沉浸等）
+    // 会销毁重建本页 element——旧 State 上刚启动的双击放大动画随旧 core
+    // 死亡 =「双击没反应 + 顶/底栏抖动」。新 State 首帧发现本图的待处理
+    // 双击意图（1s 窗内）时：恢复 zoom/沉浸上报并重放放大动画，观感 =
+    // 放大继续，而非无响应。重放经 _handleTopDoubleTap 会续写 pending
+    //（insets 动画期多轮重建逐次重放，时间窗兜底防无限）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      widget.shouldDisableScroll?.call(false);
-      InheritedDetailPageState.maybeOf(context)?.isZoomedNotifier.value = false;
+      final inh = InheritedDetailPageState.maybeOf(context);
+      final pending = inh?.doubleTapIntent.takeFor(widget.photo.id);
+      final hasPendingZoom = pending != null;
+      widget.shouldDisableScroll?.call(hasPendingZoom);
+      inh?.isZoomedNotifier.value = hasPendingZoom;
+      if (hasPendingZoom) {
+        _handleTopDoubleTap(pending);
+        return;
+      }
+      inh?.isZoomedNotifier.value = false;
     });
     _subscribeToZoomStream();
   }
@@ -317,10 +345,32 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // dependOnInheritedWidgetOfExactType assert（红屏）；didChangeDependencies
     // 在 initState 之后、首帧 build 之前执行，Hero 首帧不受影响。
     if (_imageProvider == null) {
-      _pickCachedProvider();
+      _inherited = InheritedDetailPageState.maybeOf(context);
+      // 【防降级·State 重建场景】当前页且 4096 渐进 completer 仍存活在
+      // 大图缓存（insets/沉浸切换销毁重建 element，completer 不随 State
+      // 死）：直接恢复 Progressive 显示，不落 1152 档——降级再恢复 =
+      // 「图闪一下变糊又变清」。恢复失败（缓存真被逐）回落原分级 pick。
+      var recovered = false;
+      if (_isCurrentPage) {
+        final progressive = _attachProgressive();
+        final completer = _progressiveStream?.completer;
+        if (progressive != null &&
+            completer is ProgressiveImageCompleter &&
+            completer.hasFrame) {
+          _imageProvider = progressive;
+          _loadedFinalImage = true;
+          _loadedSmallThumbnail = true;
+          _loadedLargeThumbnail = true;
+          recovered = true;
+        }
+      }
+      if (!recovered) {
+        _pickCachedProvider();
+      }
       _notifyReadyOnce();
+    } else {
+      _inherited = InheritedDetailPageState.maybeOf(context);
     }
-    _inherited = InheritedDetailPageState.maybeOf(context);
     // 翻页升级链的即时驱动（见 _onSelectedChanged doc）：sel listener 必须挂
     // ——快甩 ballistic ~700ms 期间 ZoomableImage.build 不会重跑（外层
     // ValueListenableBuilder 只包 HeroMode，sel 变化不触发本 State.build），
@@ -532,6 +582,22 @@ class _ZoomableImageState extends State<ZoomableImage> {
   void _handleTopDoubleTap(Offset globalPosition) {
     final box = context.findRenderObject();
     if (box is! RenderBox || !box.hasSize) return;
+    // 【双击意图重放】记录待处理意图（State 持有单例，见 initState 注释）：
+    // 本 core 若随后被 element 重建（insets 变化）杀死，新 State 首帧凭
+    // 此重放放大。
+    final inh = _inherited ?? InheritedDetailPageState.maybeOf(context);
+    final intent = inh?.doubleTapIntent;
+    if (intent != null) {
+      // 方向记录（见 DoubleTapIntentHolder.zoomIn doc）：当前已放大 →
+      // 本次双击是缩小意图（重建后不重放）；当前 initial → 放大意图。
+      final zoomed = _scaleStateController.scaleState !=
+          PhotoViewScaleState.initial;
+      intent
+        ..global = globalPosition
+        ..photoId = _photo.id
+        ..at = DateTime.now()
+        ..zoomIn = !zoomed;
+    }
     _coreKey.currentState?.doubleTapZoom(box.globalToLocal(globalPosition));
   }
 
@@ -583,6 +649,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
   @override
   void dispose() {
     _inherited?.selectedIndexNotifier.removeListener(_onSelectedChanged);
+    _inherited?.pageScrollingNotifier.removeListener(_onPageScrollingChanged);
     if (_routeListenerAttached) {
       ModalRoute.of(context)?.animation?.removeStatusListener(_onHdRouteStatus);
     }
@@ -966,10 +1033,24 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// 延迟窗结束真正发起 512 + 原图 precache（页仍在树上 = 观众还在）。
   void _fireHeavyLoads(BuildContext context) {
     debugPrint('[B] heavy-in t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}');
-    // 仅当前显示页（见 _probePassThrough 同款守卫注释）：途经页 150ms
-    // 窗到点时若已被翻过/未翻到则不发；翻到时 build 重排 timer。
-    if (!_isCurrentPage) return;
-    if (!_loadingLargeThumbnail &&
+    // 【邻页 1152 预解码·2026-09-10】dist==1 预建页也预解码 1152 显示档：
+    // 此前 heavy 链仅当前页，慢拖露出邻页只有 cell/低档，翻到才发起
+    // 1152 =「露出低清、挪动中突然变清晰」的拖动抖动感（用户实证）。
+    // p250 让位当前页一切请求（p50/p100 恒先）；快甩途经页同样满足
+    // dist==1 但高速掠过不可见，p250 排队无害。4096 渐进接线仍仅当前页
+    //（_updateViewWithFinalImage 的 _isCurrentPage 分支不动，快甩洪泛
+    // 防线不动）。
+    final sel = _inherited?.selectedIndexNotifier.value;
+    final idx = widget.pageIndex;
+    final isCur = _isCurrentPage;
+    final isNeighbor = !isCur &&
+        sel != null &&
+        idx != null &&
+        (idx - sel).abs() == 1;
+    if (!isCur && !isNeighbor) return;
+    // 512 large：仅当前页（邻页直接 1152 档，无需低清过渡档）。
+    if (isCur &&
+        !_loadingLargeThumbnail &&
         !_loadedLargeThumbnail &&
         !_loadedFinalImage) {
       _loadingLargeThumbnail = true;
@@ -1003,6 +1084,34 @@ class _ZoomableImageState extends State<ZoomableImage> {
       MediaQuery.sizeOf(context).width *
           MediaQuery.devicePixelRatioOf(context),
     );
+    if (isNeighbor) {
+      // 邻页：p250 预解码 1152；完成走 _updateViewWithFinalImage 的
+      // 「预建页只换 1152 显示」分支（非当前页不 attach 4096）。
+      if (!_loadingFinalImage && !_loadedFinalImage) {
+        _loadingFinalImage = true;
+        final gen = _loadGeneration;
+        final full = buildImageProvider(
+          _ref,
+          targetWidth: fullTw,
+          priority: RequestPriority.prefetchFull,
+        );
+        precacheImage(full, context)
+            .then((_) {
+              if (!mounted || gen != _loadGeneration) return;
+              if (!_loadedFinalImage) {
+                _updateViewWithFinalImage(full);
+              }
+            })
+            .catchError((Object e) {
+              if (gen != _loadGeneration) return;
+              if (mounted) {
+                setState(() => _showingThumbnailFallback = true);
+                _notifyReadyOnce();
+              }
+            });
+      }
+      return;
+    }
     if (_passThroughInFlight) {
       // 直通在途而页已存活过延迟窗（停稳/翻页预建）：把队列中该图的
       // 直通任务升级到当前页级插队（探测入口已 bump 过一次，此处是
@@ -1077,6 +1186,9 @@ class _ZoomableImageState extends State<ZoomableImage> {
         animation.addStatusListener(_onHdRouteStatus);
       }
     }
+    // 翻页滚动结束驱动 flush（见 _tryFlushHd 扣帧注释）：先摘再加防重。
+    _inherited?.pageScrollingNotifier.removeListener(_onPageScrollingChanged);
+    _inherited?.pageScrollingNotifier.addListener(_onPageScrollingChanged);
     return progressive;
   }
 
