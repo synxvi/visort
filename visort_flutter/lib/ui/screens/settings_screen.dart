@@ -535,7 +535,8 @@ class _CacheSection extends ConsumerStatefulWidget {
 
 class _CacheSectionState extends ConsumerState<_CacheSection> {
   final MediaStoreChannel _channel = const MediaStoreChannel();
-  ({int cached, int total, int full, int thumb})? _usage;
+  ({int cached, int total, int smallExempt, int gifCount, int full, int thumb})?
+      _usage;
 
   /// WorkManager 任务态：running / enqueued（排队等充电）/ idle。
   String _workState = 'idle';
@@ -574,7 +575,8 @@ class _CacheSectionState extends ConsumerState<_CacheSection> {
     ]);
     if (!mounted) return;
     setState(() {
-      _usage = results[0] as ({int cached, int total, int full, int thumb});
+      _usage = results[0]
+          as ({int cached, int total, int smallExempt, int gifCount, int full, int thumb});
       _workState = results[1] as String;
     });
   }
@@ -638,6 +640,22 @@ class _CacheSectionState extends ConsumerState<_CacheSection> {
       default:
         return '${t(ref, 'settings_disk_usage')} $usageStr';
     }
+  }
+
+  /// 数量组成行文案：总数 N · 已缓存 C · 未缓存 U（GIF G · 小图 S · 待生成 P）。
+  String _breakdownLine(WidgetRef ref) {
+    final u = _usage;
+    if (u == null) return '…';
+    final totalAll = u.total + u.gifCount;
+    final uncached = totalAll - u.cached;
+    final pending = uncached - u.gifCount - u.smallExempt;
+    return '${t(ref, 'settings_cache_breakdown')}: '
+        '${t(ref, 'settings_cache_bd_total')} $totalAll · '
+        '${t(ref, 'settings_cache_bd_cached')} ${u.cached} · '
+        '${t(ref, 'settings_cache_bd_uncached')} $uncached'
+        '（${t(ref, 'settings_cache_bd_gif')} ${u.gifCount} · '
+        '${t(ref, 'settings_cache_bd_small')} ${u.smallExempt} · '
+        '${t(ref, 'settings_cache_bd_pending')} ${pending < 0 ? 0 : pending}）';
   }
 
   Future<void> _updateConfig({bool? precacheEnabled, int? precacheQuotaMb}) async {
@@ -773,6 +791,19 @@ class _CacheSectionState extends ConsumerState<_CacheSection> {
                 const SizedBox(height: 3),
                 Text(
                   _statusLine(ref),
+                  style: const TextStyle(
+                      fontFamily: 'Space Mono',
+                      fontFamilyFallback: ['Noto Sans Mono CJK SC'],
+                      color: AppColors.muted,
+                      fontSize: 12),
+                ),
+                const SizedBox(height: 3),
+                // 数量组成行（磁盘占用下方）：总数（含 GIF）/ 已缓存 /
+                // 未缓存拆分（GIF 永不入缓存、小图豁免不生成 blob、剩余
+                // 待生成）。未缓存 = 总 - 已缓存；待生成 = 未缓存 - GIF -
+                // 小图（cached 残留旧小图 blob 时轻微偏差，展示口径）。
+                Text(
+                  _breakdownLine(ref),
                   style: const TextStyle(
                       fontFamily: 'Space Mono',
                       fontFamilyFallback: ['Noto Sans Mono CJK SC'],

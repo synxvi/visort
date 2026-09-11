@@ -32,7 +32,6 @@ class PhotoViewCore extends StatefulWidget {
     required this.onTapUp,
     required this.onTapDown,
     required this.onScaleEnd,
-    this.onEdgeX,
     this.enableDoubleTap = true,
     required this.gestureDetectorBehavior,
     required this.controller,
@@ -57,7 +56,6 @@ class PhotoViewCore extends StatefulWidget {
     this.onTapUp,
     this.onTapDown,
     this.onScaleEnd,
-    this.onEdgeX,
     this.enableDoubleTap = true,
     this.gestureDetectorBehavior,
     required this.controller,
@@ -92,9 +90,6 @@ class PhotoViewCore extends StatefulWidget {
   final PhotoViewImageTapUpCallback? onTapUp;
   final PhotoViewImageTapDownCallback? onTapDown;
   final PhotoViewImageScaleEndCallback? onScaleEnd;
-
-  /// [visort fork] X 边缘溢出回调（+1 右拖溢出→上一张，-1 左拖溢出→下一张）。
-  final ValueChanged<int>? onEdgeX;
 
   /// [visort fork] 是否在 core 内注册双击手势（顶层分发模式置 false，
   /// 双击由外层捕获后调 doubleTapZoom）。
@@ -136,6 +131,14 @@ class PhotoViewCoreState extends State<PhotoViewCore>
   Animation<double>? _rotationAnimation;
 
   PhotoViewHeroAttributes? get heroAttributes => widget.heroAttributes;
+
+  /// [visort fork] 程序化缩放动画（双击）进行中：4096 帧替换闸用。
+  /// 动画 tick 写 tween 绝对值，帧到达触发的 [PVC] compensate 写
+  /// scale×ratio——两者同帧互相覆盖 =「双重放大」（真机 17.082 铁证：
+  /// [HD] flush → [PVF] 3072x4096(sync=false) → [DBL] → [PVC] 同毫秒）。
+  /// 帧替换必须等动画结束（zoomable_image._tryFlushHd 据此重排 timer）。
+  bool get isProgrammaticZoomingActive =>
+      programmaticScaleAnimationActive || _doubleTapController.isAnimating;
 
   /// [visort fork] 精准双击：scale 与 position 同步插值的专用动画
   /// （300ms decelerate，主分支算法）。
@@ -187,21 +190,11 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     final Offset clampedPosition = widget.enablePanAlways
         ? targetPosition
         : clampPosition(position: targetPosition);
-    // [visort fork] X 边缘溢出翻页：放大态且无缩放变化(纯平移)时，图片在
-    // X 边界继续拖动（目标 position 超出 clamp 边界）→ 回调外层翻页。
-    // 旧版 arena 裁决无法实现"手势中途到边释放"（Scale recognizer accept 后
-    // 垄断事件流，PageView 的 drag recognizer 已被 reject）。
-    // 容差条件：|scale-1|<0.01（双指微动不算缩放）+ scaleState≠initial
-    // （放大态判定，photo_view scale 是绝对像素比不能用 newScale>1.0）+
-    // 溢出 >64px：贴边平移（拖到边界即止，溢出几 px）不触发；有意翻页
-    // 继续拖过 64px 才切页（target 随拖动持续增长，溢出量单调增大）。
-    final edgeCb = widget.onEdgeX;
-    if (edgeCb != null &&
-        (details.scale - 1.0).abs() < 0.01 &&
-        scaleStateController.scaleState != PhotoViewScaleState.initial &&
-        (targetPosition.dx - clampedPosition.dx).abs() > 64) {
-      edgeCb(targetPosition.dx > clampedPosition.dx ? 1 : -1);
-    }
+    // [visort fork·aves 对齐] 放大态 X 贴边外拖的翻页【不走回调协议】——
+    // 手势层让位（PhotoViewGestureRecognizer.resolve 覆写）后由 PageView
+    // 原生滚动接管：跟手/视差/Bouncing 回弹全部原生，零协议代码。
+    // 此前两版（一次性 onEdgeX + 三段 Start/Overflow/End 协议）都是
+    // recognizer 垄断事件流后的程序模拟，无法真正跟手（真机实证）。
 
     updateMultiple(
       scale: newScale,
@@ -291,6 +284,13 @@ class PhotoViewCoreState extends State<PhotoViewCore>
     final double begin = scale;
     final double initial = scaleBoundaries.initialScale;
     final bool zooming = begin <= initial * 1.01;
+    // [DBL] 双击入口打点（「双重放大」定位）：core 实例 + 三关键值——
+    // 若一次双击出现两行且 core 相同 → doubleTapZoom 被调两次（重入）；
+    // core 不同 → 分发到了两个页的 core；zooming=false 而 scale 应为
+    // initial → begin 被污染（动画中间值/compensate 残留）。
+    debugPrint(
+        '[DBL] core=$hashCode begin=${begin.toStringAsFixed(2)} '
+        'initial=${initial.toStringAsFixed(2)} zooming=$zooming');
     final double target = zooming ? _doubleTapTargetScale() : initial;
     final Offset endPos = zooming
         ? _doubleTapEndPositionSnap(tapLocal, box.size, begin, target)
@@ -563,6 +563,22 @@ class PhotoViewCoreState extends State<PhotoViewCore>
             '[PVC] compensate ratio=$ratio child=${next.childSize.width}',
           );
           controller.setScaleInvisibly(controller.scale! * ratio);
+          // 【双击动画共存】4096 帧可能在双击动画窗内上屏（停稳 flush 与
+          // 双击同毫秒，帧回调 sync=false 异步落地更晚）：tween 是旧
+          // childSize 坐标系的绝对 scale，childSize ×(1/ratio) 后须同步
+          // 缩放 tween，否则动画 tick 写旧值、compensate 写新值互相覆盖
+          // =「双重放大」（真机 17.082 铁证）。position 语义为屏幕像素
+          // 偏移，与 childSize 无关，不动。
+          final scaleTween = _doubleTapScaleTween;
+          if (programmaticScaleAnimationActive &&
+              scaleTween != null &&
+              scaleTween.begin != null &&
+              scaleTween.end != null) {
+            _doubleTapScaleTween = Tween<double>(
+              begin: scaleTween.begin! * ratio,
+              end: scaleTween.end! * ratio,
+            );
+          }
         }
       }
       markNeedsScaleRecalc = true;

@@ -783,22 +783,26 @@ class MediaStoreChannel {
     }
   }
 
-  /// 预缓存进度 {cached, total, full, thumb}：cached=已缓存张数（目录
-  /// 文件数），total=全库应缓存张数（非回收站非 GIF），full/thumb=磁盘
-  /// 占用字节。设置页进度行轮询数据源（一次往返全给齐）。
-  Future<({int cached, int total, int full, int thumb})> fullCacheStats(
-      {required int targetWidth}) async {
+  /// 预缓存进度 {cached, total, smallExempt, gifCount, full, thumb}：
+  /// cached=已缓存张数（目录文件数），total=全库应缓存张数（非回收站
+  /// 非 GIF），smallExempt=小图豁免数（max 边 ≤ 档位，不生成 blob），
+  /// gifCount=GIF 张数（同 trashed 口径），full/thumb=磁盘占用字节。
+  /// 设置页进度行轮询数据源（一次往返全给齐）。
+  Future<({int cached, int total, int smallExempt, int gifCount, int full, int thumb})>
+      fullCacheStats({required int targetWidth}) async {
     try {
       final raw = await _channel.invokeMethod<Map<dynamic, dynamic>>(
           'fullCacheStats', {'targetWidth': targetWidth});
       return (
         cached: ((raw?['cached'] as num?) ?? 0).toInt(),
         total: ((raw?['total'] as num?) ?? 0).toInt(),
+        smallExempt: ((raw?['smallExempt'] as num?) ?? 0).toInt(),
+        gifCount: ((raw?['gifCount'] as num?) ?? 0).toInt(),
         full: ((raw?['full'] as num?) ?? 0).toInt(),
         thumb: ((raw?['thumb'] as num?) ?? 0).toInt(),
       );
     } on PlatformException {
-      return (cached: 0, total: 0, full: 0, thumb: 0);
+      return (cached: 0, total: 0, smallExempt: 0, gifCount: 0, full: 0, thumb: 0);
     }
   }
 

@@ -24,7 +24,9 @@ class ProbeLog with WidgetsBindingObserver {
   ProbeLog._();
 
   static const int _maxEntries = 4000;
-  static const int _maxLineChars = 500;
+  // 4000：StackTrace.current 多行打点（[DT] zi-init 带栈）整条进环，500 会
+  // 把栈截到 #5 帧失去定位力（真机实证 2026-09-11 沉浸重建排查）。
+  static const int _maxLineChars = 4000;
   static const int _rotateBytes = 1 << 20;
 
   /// 高频噪音前缀：不进环/不落盘（每秒多行，冲刷排查窗口）。

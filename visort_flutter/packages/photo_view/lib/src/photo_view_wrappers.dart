@@ -26,7 +26,6 @@ class ImageWrapper extends StatefulWidget {
     required this.onTapUp,
     required this.onTapDown,
     required this.onScaleEnd,
-    this.onEdgeX,
     required this.outerSize,
     required this.gestureDetectorBehavior,
     required this.tightMode,
@@ -60,7 +59,6 @@ class ImageWrapper extends StatefulWidget {
   final PhotoViewImageScaleEndCallback? onScaleEnd;
 
   /// [visort fork] X 边缘溢出回调（+1 右拖溢出→上一张，-1 左拖溢出→下一张）。
-  final ValueChanged<int>? onEdgeX;
   final Size outerSize;
   final HitTestBehavior? gestureDetectorBehavior;
   final bool? tightMode;
@@ -222,7 +220,6 @@ class _ImageWrapperState extends State<ImageWrapper> {
       onTapUp: widget.onTapUp,
       onTapDown: widget.onTapDown,
       onScaleEnd: widget.onScaleEnd,
-      onEdgeX: widget.onEdgeX,
       gestureDetectorBehavior: widget.gestureDetectorBehavior,
       tightMode: widget.tightMode ?? false,
       filterQuality: widget.filterQuality ?? FilterQuality.none,
@@ -289,7 +286,6 @@ class CustomChildWrapper extends StatelessWidget {
     this.onTapUp,
     this.onTapDown,
     this.onScaleEnd,
-    this.onEdgeX,
     required this.outerSize,
     this.gestureDetectorBehavior,
     required this.tightMode,
@@ -322,7 +318,6 @@ class CustomChildWrapper extends StatelessWidget {
   final PhotoViewImageScaleEndCallback? onScaleEnd;
 
   /// [visort fork] X 边缘溢出回调（+1 右拖溢出→上一张，-1 左拖溢出→下一张）。
-  final ValueChanged<int>? onEdgeX;
   final Size outerSize;
   final HitTestBehavior? gestureDetectorBehavior;
   final bool? tightMode;
@@ -359,7 +354,6 @@ class CustomChildWrapper extends StatelessWidget {
       strictScale: strictScale ?? false,
       enableDoubleTap: enableDoubleTap,
       onScaleEnd: onScaleEnd,
-      onEdgeX: onEdgeX,
       gestureDetectorBehavior: gestureDetectorBehavior,
       tightMode: tightMode ?? false,
       filterQuality: filterQuality ?? FilterQuality.none,

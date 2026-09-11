@@ -245,6 +245,11 @@ class _AndroidBytesImageProvider
             ref.relativePath,
             targetWidth: tw,
           ),
+          // ⚠️ tag 必须与 _handleAbandoned 的压级匹配串
+          //（'full4096:${id}'）一致：缺 tag 时三处 deprioritizeQueued
+          // 永不命中 = 快速翻页离屏压级死代码，在途 4096 全 p150 挤占
+          // 邻取预取（2026-09-11 审查 P1）。
+          tag: 'full4096:${ref.id}',
         )
         .timeout(const Duration(seconds: 8));
     final buffer = await ui.ImmutableBuffer.fromUint8List(r.bytes);
@@ -533,6 +538,12 @@ abstract class ProgressiveImageCompleter extends ImageStreamCompleter {
   /// 原图】跳过 1152 首帧后 completer 首帧即 4096，帧就绪前换上渐进
   /// provider = PhotoView 黑底。
   bool get hasFrame;
+
+  /// 是否已被 evict 置死（_dead）：死 completer 的 requestUpTo/flush 全
+  /// 无效。翻回当前页时据此判断渐进链是否需要重建（真机实证
+  /// 2026-09-11：拖动跨页触发 evict，拖回后 _loadedFinalImage 标志仍在
+  /// → 不重发 → 图停留 1152「不再变清晰」）。
+  bool get isDead;
 }
 
 /// 双桶缓存判据标记（visort_image_cache 的 _cacheForKey 用对象模式匹配）：
@@ -610,10 +621,13 @@ class _ProgressiveViewerImageCompleter extends ImageStreamCompleter
     }
     debugPrint(
         '[PVP] new completer id=${key.ref.id} initial=${initial != null}');
-    // p50（viewerImage）而非原 p150：4096 是唯一升档帧，压过一切预取/
-    // 条请求（此前 p150 会让位预取潮 = 替换变慢）。
+    // 【飞行窗让空·2026-09-10】构造只 hold 不发起 4096——由 widget 在
+    // 路由 settled 后延迟 600ms 发起（见 zoomable_image._scheduleHdStart）。
+    // 原图直出帧成本已变重（≤25MP 直回 bytes ~7MB IO + 引擎全解 48MB
+    // bitmap），与当前页 1152、±1 邻页预取同窗并行 = 四个大任务挤飞行
+    // 300ms 窗口 =「飞行动画顿挫」（真机时间线实证，immich 打开仅解
+    // 当前页一个）。发起后 p50 不变。
     holdFrames();
-    requestUpTo(4096);
   }
 
   final _AndroidProgressiveImageProvider _key;
@@ -649,6 +663,9 @@ class _ProgressiveViewerImageCompleter extends ImageStreamCompleter
 
   @override
   bool get hasFrame => _hasImage;
+
+  @override
+  bool get isDead => _dead;
 
   /// 零 listener：**不置死**（immich 语义——abandoned 只取消网络在途请求，
   /// completer 留在 cache 里继续服务）。真机/模拟器实证：UI 树重建

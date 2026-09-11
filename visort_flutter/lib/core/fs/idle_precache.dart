@@ -169,8 +169,8 @@ class IdlePrecacheService with WidgetsBindingObserver {
           );
           if (code == 0) {
             generated++;
-          } else if (code == 1) {
-            skipped++;
+          } else if (code == 1 || code == 2) {
+            skipped++; // 2=小图豁免（原图 ≤ 档位，无 blob 收益不生成）
           }
           // 每 16 张查配额：写满即停本轮（静默条件持续则等下轮 tick
           // 重扫，已缓存段秒级越过）。

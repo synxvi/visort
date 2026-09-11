@@ -60,10 +60,6 @@ class ZoomableImage extends StatefulWidget {
   /// 上滑（>8px）→ 详情面板（visort 适配：外层 DetailPage 决定展示）。
   final VoidCallback? onSwipeUp;
 
-  /// [photo_view fork] X 边缘溢出回调：放大后平移到 X 边缘继续拖
-  /// （+1 右拖→上一张，-1 左拖→下一张，由外层 DetailPage 翻页）。
-  final ValueChanged<int>? onEdgeX;
-
   /// 下滑（>8px）→ 返回（visort 适配：外层 DetailPage 面板打开时改为收面板）。
   final VoidCallback? onSwipeDown;
 
@@ -87,7 +83,6 @@ class ZoomableImage extends StatefulWidget {
     this.backgroundDecoration,
     this.onSwipeUp,
     this.onSwipeDown,
-    this.onEdgeX,
     this.onFullLoaded,
     this.onHdLoaded,
   });
@@ -146,16 +141,45 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// 事件重排的停稳 Timer。
   bool _routeSettled = false;
   bool _routeListenerAttached = false;
+  /// 挂载时的路由动画引用（_ensureRouteListener 缓存）：dispose 摘
+  /// listener 必须用它，不得现场 ModalRoute.of(context)——unmount 期
+  /// element 已 defunct，debug 断言直接抛出会中断 unmount 循环、跳过
+  /// DetailPage.dispose（notifier/timer 全漏），release 静默挂空
+  ///（2026-09-11 审查 P1）。
+  Animation<double>? _routeAnimation;
   DateTime _lastZoomActivityAt = DateTime.now();
   Timer? _hdFlushTimer;
 
   static const Duration _kZoomIdleForFlush = Duration(milliseconds: 250);
 
   void _onHdRouteStatus(AnimationStatus status) {
+    // [HDDBG] 排查打点：4096 提前发起定位（completed 时刻基准）。
+    debugPrint('[HDDBG] route-status id=${_photo.id} $status');
     if (status == AnimationStatus.completed) {
       _routeSettled = true;
+      // 【4096 立即发起】飞行一结束就开解原图帧（不延迟——延迟会让
+      // 「进入即原图」退化成 1152 停留期，用户否决）。~170ms 解完，
+      // 静止闸此时也已开，落地后尽快替换。
+      _requestUltraUpgrade(from: 'route');
       _tryFlushHd();
+      // 【邻页预取·停稳驱动】打开（push）场景：飞行动画结束后邻页才
+      // 开始预解码（用户指令：邻页加载必须在飞行动画停稳后面）。
+      _prefetchNeighborFullIfAny();
     }
+  }
+
+  /// 【4096 发起时机】飞行窗内不发（与当前页 1152 挤 = 顿挫），路由
+  /// settled（飞行结束）立即发起——「进入即原图」的落地替换窗口 =
+  /// 解码时长本身（~170ms），不加人为延迟（600ms 延迟试验被用户否决：
+  /// 进入时不是原图）。翻页 attach（路由早已 settled）场景由
+  /// _attachProgressive 尾部直接发起。
+  void _startHdNow() {
+    // [HDDBG] 排查打点：_startHdNow 只被 _attachProgressive 尾部调用
+    //（_routeSettled 已 true 的场景）——出现时刻早于 route-status completed
+    // 即坐实「attach 时 _routeSettled 被提前置 true」。
+    debugPrint('[HDDBG] start-now id=${_photo.id} settled=$_routeSettled');
+    if (!mounted || !_isCurrentPage) return;
+    _requestUltraUpgrade(from: 'startNow');
   }
 
   /// flush 条件检查（四源驱动收敛点：onFrameReady / 路由 settled /
@@ -168,19 +192,50 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// hasFrame 守卫：无帧时不 flush（提前开闸会让帧到时绕过静止闸直推），
   /// 等 onFrameReady 再驱动。
   void _tryFlushHd() {
-    if (!mounted || !_routeSettled) return;
+    if (!mounted || !_routeSettled) {
+      debugPrint(
+          '[FL] block route=$_routeSettled mounted=$mounted id=${_photo.id}');
+      return;
+    }
     // 【翻页中扣帧】PageView 滚动中（含 ballistic）不推帧：4096 大纹理
     // 上传（~50MB GPU）与动画帧抢主线程/GPU =「翻页动画卡一下」（用户
     // 实证）。帧保持 held，滚动结束事件（下方 pageScrollingNotifier
     // listener）会再驱动本方法完成 flush。
-    if (_inherited?.pageScrollingNotifier.value ?? false) return;
-    if (DateTime.now().difference(_lastZoomActivityAt) < _kZoomIdleForFlush) {
+    final scrolling = _inherited?.pageScrollingNotifier.value ?? false;
+    if (scrolling) {
+      // 防御兜底：停稳边沿驱动为主（_onIsScrollingChanged），timer 防边沿
+      // 意外丢失时 4096 永久滞留 held（「翻页后糊」的最后一道保险）。
+      _hdFlushTimer?.cancel();
+      _hdFlushTimer = Timer(const Duration(milliseconds: 500), _tryFlushHd);
+      debugPrint('[FL] block scrolling id=${_photo.id}');
+      return;
+    }
+    final idleMs =
+        DateTime.now().difference(_lastZoomActivityAt).inMilliseconds;
+    if (idleMs < _kZoomIdleForFlush.inMilliseconds) {
       _hdFlushTimer?.cancel();
       _hdFlushTimer = Timer(_kZoomIdleForFlush, _tryFlushHd);
+      debugPrint('[FL] defer idle=$idleMs id=${_photo.id}');
       return;
     }
     final completer = _progressiveStream?.completer;
-    if (completer is! ProgressiveImageCompleter || !completer.hasFrame) return;
+    if (completer is! ProgressiveImageCompleter || !completer.hasFrame) {
+      debugPrint(
+          '[FL] block frame hasFrame=${completer is ProgressiveImageCompleter ? completer.hasFrame : 'n/a'} id=${_photo.id}');
+      return;
+    }
+    // 【双击动画互斥】帧替换（childSize 变 → [PVC] compensate 写 scale）
+    // 与双击动画 tick（写 tween 绝对值）同帧互相覆盖 =「双重放大」（真机
+    // 17.082 铁证）。动画进行中重新 hold，timer 重排兜底（300ms 动画 >
+    // 250ms timer，重排一次后动画必已结束）。
+    final core = _coreKey.currentState;
+    if (core != null && core.isProgrammaticZoomingActive) {
+      _hdFlushTimer?.cancel();
+      _hdFlushTimer = Timer(_kZoomIdleForFlush, _tryFlushHd);
+      debugPrint('[FL] defer dbltap id=${_photo.id}');
+      return;
+    }
+    debugPrint('[FL] ok id=${_photo.id}');
     final provider = _progressiveProvider;
     if (provider != null && !identical(_imageProvider, provider)) {
       setState(() => _imageProvider = provider);
@@ -192,14 +247,96 @@ class _ZoomableImageState extends State<ZoomableImage> {
   void _onPageScrollingChanged() {
     if (mounted && !(_inherited?.pageScrollingNotifier.value ?? true)) {
       _tryFlushHd();
+      // 【邻页预取·停稳驱动】翻页场景：滚动停止后邻页预解码。
+      _prefetchNeighborFullIfAny();
     }
   }
 
+  /// 本页是否 ±1 邻页（非当前页）。
+  bool get _isNeighborPage {
+    final sel = _inherited?.selectedIndexNotifier.value;
+    final idx = widget.pageIndex;
+    if (sel == null || idx == null) return false;
+    return (idx - sel).abs() == 1;
+  }
+
+  /// 路由动画监听挂载（幂等）：attach（当前页 4096 闸）与邻页预取
+  /// （completed 信号）共用——completed 回调内各自按身份分流。
+  void _ensureRouteListener() {
+    if (_routeListenerAttached) return;
+    _routeListenerAttached = true;
+    final route = ModalRoute.of(context);
+    final animation = route?.animation;
+    _routeAnimation = animation;
+    // [HDDBG] 排查打点：挂载时路由动画真实状态（animNull / isCompleted /
+    // status 三值定位 _routeSettled 提前置 true 的分支）。
+    debugPrint(
+      '[HDDBG] ensure id=${_photo.id} routeNull=${route == null} '
+      'animNull=${animation == null} completed=${animation?.isCompleted} '
+      'status=${animation?.status}',
+    );
+    // 【Hero offstage 假 completed 防御】push 带 Hero 配对的路由时，
+    // HeroController 为测量飞行终点会把 to 路由 offstage 一帧
+    // （heroes.dart toRoute.offstage = value==0.0）——offstage 的 animation
+    // 被 proxy 到 kAlwaysCompleteAnimation（value=1 / completed）。当前页
+    // 首帧 didChangeDependencies 恰落在这窗口：isCompleted==true 是假象，
+    // 据此视为 settled 会让 4096 在飞行窗内发起（20MP 原图引擎全解与
+    // 飞行动画抢 CPU = 顿挫；真机 [HDDBG] 时间线实证：ensure 读到
+    // completed 时同刻 req from=startNow，而路由真 completed 在 211ms 后）。
+    // 判据：offstage 期间一律挂 statusListener——proxy parent 切回 controller
+    // 后真 completed 事件才会触发（kAlwaysComplete 的 completed 是稳态、
+    // 后挂的 listener 不补发，无误触发）。
+    if (route != null && route.offstage) {
+      debugPrint('[HDDBG] ensure id=${_photo.id} offstage-defer');
+      animation?.addStatusListener(_onHdRouteStatus);
+    } else if (animation == null || animation.isCompleted) {
+      _routeSettled = true;
+      // 路由早已完成（翻页预建/重建）：视为已停稳——邻页立即预取，
+      // 当前页走 _attachProgressive 的 _scheduleHdStart 延迟。
+      _prefetchNeighborFullIfAny();
+    } else {
+      animation.addStatusListener(_onHdRouteStatus);
+    }
+  }
+
+  /// 邻页 1152 预解码（p250）。由停稳信号驱动（路由 completed / 滚动
+  /// 停止）——绝不在飞行动画窗内发起（顿挫根源，真机时间线实证）。
+  void _prefetchNeighborFullIfAny() {
+    if (!mounted || !_isNeighborPage) return;
+    if (_loadingFinalImage || _loadedFinalImage) return;
+    _loadingFinalImage = true;
+    final gen = _loadGeneration;
+    final fullTw = computeViewerTargetWidth(
+      MediaQuery.sizeOf(context).width *
+          MediaQuery.devicePixelRatioOf(context),
+    );
+    final full = buildImageProvider(
+      _ref,
+      targetWidth: fullTw,
+      priority: RequestPriority.prefetchFull,
+    );
+    precacheImage(full, context).then((_) {
+      if (!mounted || gen != _loadGeneration) return;
+      if (!_loadedFinalImage) {
+        _updateViewWithFinalImage(full);
+      }
+    }).catchError((Object e) {
+      if (gen != _loadGeneration) return;
+      if (mounted) {
+        setState(() => _showingThumbnailFallback = true);
+        _notifyReadyOnce();
+      }
+    });
+  }
+
   /// 放大态信号 → 4096 升档请求（p150）。幂等安全，可从多处调用。
-  void _requestUltraUpgrade() {
+  /// [from]（[HDDBG] 排查）：调用来源标记（zoom=双击放大态 / route=路由
+  /// settled / startNow=attach 尾部直发）。
+  void _requestUltraUpgrade({String from = 'zoom'}) {
     final completer = _progressiveStream?.completer;
     if (completer is! ProgressiveImageCompleter) return;
-    cachePerfEvent('hd-req id=${_photo.id} tw=${kViewerUltraThumbSize}');
+    cachePerfEvent('hd-req id=${_photo.id} tw=${kViewerUltraThumbSize} from=$from');
+    debugPrint('[HDDBG] req id=${_photo.id} from=$from settled=$_routeSettled');
     completer.requestUpTo(kViewerUltraThumbSize,
         priority: RequestPriority.viewerHd);
   }
@@ -221,6 +358,13 @@ class _ZoomableImageState extends State<ZoomableImage> {
   @override
   void initState() {
     super.initState();
+    // [DT] 排查打点：State 创建/销毁对（双击 insets 重建连环重放定位）。
+    // 带栈：init 栈指认「谁在重建这棵子树」（真机实证双击后 21ms 内整组
+    // 页 element 连环拆建 4 轮 = 意图重放逐轮重启放大动画）。
+    debugPrint(
+      '[DT] zi-init id=${widget.photo.id} idx=${widget.pageIndex}\n'
+      '${StackTrace.current}',
+    );
     _scaleStateChangedCallback = (value) {
       if (widget.shouldDisableScroll != null) {
         widget.shouldDisableScroll!(value != PhotoViewScaleState.initial);
@@ -256,12 +400,16 @@ class _ZoomableImageState extends State<ZoomableImage> {
       final pending = inh?.doubleTapIntent.takeFor(widget.photo.id);
       final hasPendingZoom = pending != null;
       widget.shouldDisableScroll?.call(hasPendingZoom);
-      inh?.isZoomedNotifier.value = hasPendingZoom;
       if (hasPendingZoom) {
+        inh?.isZoomedNotifier.value = true;
         _handleTopDoubleTap(pending);
         return;
       }
-      inh?.isZoomedNotifier.value = false;
+      // 【沉浸粘性】新页 initial 不写 isZoomedNotifier=false：沉浸态翻页
+      // 保持栏隐藏（用户定稿 2026-09-12「翻页不需要拉起顶栏底栏」）。
+      // 退出沉浸只有两个口：用户在当前页显式缩回（scaleState→initial
+      // 的 callback）或沉浸态单击（detail_page 顶层 onTap）。翻页失灵
+      // 旧的清理职责由上一行 shouldDisableScroll(false) 单独承担。
     });
     _subscribeToZoomStream();
   }
@@ -379,6 +527,10 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 可重跑（MediaQuery 变化），防重复挂载。
     _inherited?.selectedIndexNotifier.removeListener(_onSelectedChanged);
     _inherited?.selectedIndexNotifier.addListener(_onSelectedChanged);
+    // 翻走复位的停稳边沿驱动（见 _onPageScrollingForReset doc）：滚动结束
+    // 且已非当前页 → 缩放归位。所有页都挂（不限于渐进页）。
+    _inherited?.pageScrollingNotifier.removeListener(_onPageScrollingForReset);
+    _inherited?.pageScrollingNotifier.addListener(_onPageScrollingForReset);
     final idx = widget.pageIndex;
     if (idx != null) {
       _inherited?.doubleTapHandlers[idx] = _handleTopDoubleTap;
@@ -395,23 +547,44 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// 甩动惯性 ~700ms = 「翻页糊图 0.5~1s」根因（真机 zbuild 时间线实证：
   /// page→build潮恒定 715-725ms，updfl 与潮同刻）。
   void _onSelectedChanged() {
-    if (!mounted || !_isCurrentPage) return;
+    if (!mounted) return;
+    // ⚠️ 翻走复位【绝不能】挂在 sel 变化瞬间：PageView 拖过半页 sel 即变，
+    // 但用户手指还按着（可能拖回）——此刻复位 _isZooming 会让「下滑关闭」
+    // 手势复活 → 拖动中的垂直分量触发 maybePop → 整个 DetailPage 被销毁
+    // → 4096 全断 + 网格误重开 + 双击重放（真机 dp-dispose/dp-init 循环
+    // 实证 2026-09-11）。复位由停稳边沿驱动（_onPageScrollingForReset）。
+    // departure 页继续走压级/补建（原语义，为翻回备好显示档）。
     // 【实验·原图直出·翻页让位】上一页/更早页的在队 4096 立即压到队列
     // 最低档：原图直出后每页一个 400-900ms 长任务，连翻 N 页不压级 =
-    // 当前页排队等前面 N-1 页份。先压级再 attach——本页自己的 4096 尚
-    // 未入队（下方补建发起 p50 恒排最前）；在跑的不可中断（MethodChannel
-    // 语义），最坏等一份解码时长。
+    // 当前页排队等前面 N-1 页份。⚠️ 本图自己的 4096 除外——本页正是
+    // 即将观看的页（拖动跨页又拖回：翻走时 _handleAbandoned 已压过级，
+    // 拖回不恢复 =「拖回后图不再变清晰」真机实证 2026-09-11）。
     ServicePolicy.instance.deprioritizeQueued(
-      (t) => t.tag?.startsWith('full4096:') ?? false,
+      (t) => (t.tag?.startsWith('full4096:') ?? false) &&
+          t.tag != 'full4096:${_photo.id}',
     );
-    // 【pick 短路页的渐进补建】1152 已就绪（pick 命中 full，_loadedFinalImage
-    // = true）的页在成为当前页时必须补上 progressive 接线 + 4096 发起——
-    // 否则该页恒糊（预取就绪页的短路，真机实证）。直通/heavy 路径的页由
-    // _updateViewWithFinalImage 内的 _attachProgressive 覆盖（幂等）。
-    if (_loadedFinalImage && _progressiveStream == null) {
-      final progressive = _attachProgressive();
-      if (progressive != null) {
-        setState(() => _imageProvider = progressive);
+    // 【pick 短路页的渐进补建 + 断链自愈】1152 已就绪（pick 命中 full，
+    // _loadedFinalImage = true）的页在成为当前页时必须补上 progressive
+    // 接线 + 4096 发起——否则该页恒糊（预取就绪页的短路，真机实证）。
+    // 【断链自愈】completer 已死（拖动跨页触发 evict viewerHd 置 _dead，
+    // 拖回时 _loadedFinalImage 标志仍在但 requestUpTo 全哑火）→ 清字段
+    // 重建渐进链：_attachProgressive 会 resolve 出新 completer（cache
+    // 条目已逐出）+ 发起 4096 + 补查 flush，升档恢复。
+    if (_loadedFinalImage) {
+      final completer = _progressiveStream?.completer;
+      final dead = _progressiveStream == null ||
+          completer is! ProgressiveImageCompleter ||
+          completer.isDead;
+      if (dead) {
+        _progressiveStream = null;
+        final progressive = _attachProgressive();
+        if (progressive != null) {
+          setState(() => _imageProvider = progressive);
+        }
+      } else {
+        // 活链：恢复本图 4096 优先级（requestUpTo 幂等，重复/已覆盖即跳过）。
+        completer.requestUpTo(kViewerUltraThumbSize,
+            priority: RequestPriority.viewerHd);
       }
     }
     if (_loadedFinalImage || _loadingFinalImage) return;
@@ -430,6 +603,36 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 与 build 同链（probe 直通 → p50 full → updfl），一图一次守卫在
     // _probePassThrough 内（_passThroughProbed）。
     _loadLocalImage(context);
+  }
+
+  /// 翻走复位（停稳边沿驱动，见 _onSelectedChanged 注释）：PageView 滚动
+  /// 结束且本页已非当前页时归位缩放——「放大翻走再翻回不保留缩放态」
+  ///（用户定稿 2026-09-11）。停稳时手势必然已结束，此刻清 _isZooming/
+  /// 沉浸标志不会复活任何活手势。
+  ///
+  /// 复位动作全部静默（setInvisibly 不触发 scaleState 通知链/回调），
+  /// controller.reset() 的重建落在本页（不在视口）无视觉影响。拖过半又
+  /// 拖回（停稳时仍是当前页）不复位——没真正离开，保留缩放态。
+  void _onPageScrollingForReset() {
+    if (!mounted) return;
+    if (_inherited?.pageScrollingNotifier.value ?? true) return; // 滚动中
+    if (_isCurrentPage) return;
+    debugPrint(
+        '[ZR] reset id=${_photo.id} idx=${widget.pageIndex} zoom=$_isZooming');
+    final zoomed =
+        _isZooming ||
+        _scaleStateController.scaleState != PhotoViewScaleState.initial;
+    _initialScale = null;
+    _photoViewController.reset();
+    _scaleStateController.setInvisibly(PhotoViewScaleState.initial);
+    if (zoomed && _isZooming) {
+      _isZooming = false;
+      widget.shouldDisableScroll?.call(false);
+      // 【沉浸粘性】翻走复位不写 isZoomedNotifier=false：沉浸态连续翻页
+      // 栏保持隐藏（用户定稿 2026-09-12）。退出沉浸=当前页显式缩回或
+      // 沉浸态单击（detail_page 顶层 onTap）。
+      _inherited?.zoomTransformNotifier.value = ZoomTransform.identity;
+    }
   }
 
   /// 初始 provider 按 ImageCache 分级取最高可用级（原图 > 512 > cell）。
@@ -648,10 +851,14 @@ class _ZoomableImageState extends State<ZoomableImage> {
 
   @override
   void dispose() {
+    debugPrint('[DT] zi-dispose id=${widget.photo.id} idx=${widget.pageIndex}');
     _inherited?.selectedIndexNotifier.removeListener(_onSelectedChanged);
     _inherited?.pageScrollingNotifier.removeListener(_onPageScrollingChanged);
+    _inherited?.pageScrollingNotifier.removeListener(_onPageScrollingForReset);
     if (_routeListenerAttached) {
-      ModalRoute.of(context)?.animation?.removeStatusListener(_onHdRouteStatus);
+      // 用挂载时缓存的 _routeAnimation：此处 element 已 defunct，
+      // 不得做 ancestor lookup（见 _routeAnimation 字段注释）。
+      _routeAnimation?.removeStatusListener(_onHdRouteStatus);
     }
     _hdFlushTimer?.cancel();
     _hdFlushTimer = null;
@@ -697,11 +904,14 @@ class _ZoomableImageState extends State<ZoomableImage> {
       content = PhotoViewGestureDetectorScope(
         axis: Axis.vertical,
         child: PhotoView(
-          // 切原图时 key 变化强制重建 PhotoView，让调整后的 zoom 生效
-          //（ente 同款；gaplessPlayback 让同尺寸替换不闪底层）。
-          key: ValueKey(_loadedFinalImage),
-          // 双击由 detail_page 顶层捕获分发（ballistic 中 ignorePointer
-          // 屏蔽页内 tap）→ core 内不注册双击手势，防双重触发。
+          // 【换链不重建·渐进架构】不设 key：原 ValueKey(_loadedFinalImage)
+          // 在三级加载换 provider 时翻转 = wrapper element remount（strip96
+          // 起步页真机实证无 [PVW] update 打点），deactivate 链路杀死进行中
+          // 的手势/双击动画（「清晰前双击后左右滑必翻页」的组成根因）。
+          // 渐进架构下换帧职能已全数移出 key 重建：completer 偷 1152 帧、
+          // wrapper _imageSize 重建 scaleBoundaries、core build 的 [PVC]
+          // compensate 补偿 scale、缩放中切图的 controller 重建修正
+          //（_updatePhotoViewController）。gaplessPlayback 同尺寸替换不闪。
           enableDoubleTap: false,
           coreKey: _coreKey,
           imageProvider: _imageProvider,
@@ -710,7 +920,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
           scaleStateController: _scaleStateController,
           scaleStateChangedCallback: _scaleStateChangedCallback,
           minScale: PhotoViewComputedScale.contained,
-          onEdgeX: widget.onEdgeX,
           gaplessPlayback: true,
           heroAttributes: PhotoViewHeroAttributes(
             tag: 'photo_${_photo.id}',
@@ -1085,31 +1294,10 @@ class _ZoomableImageState extends State<ZoomableImage> {
           MediaQuery.devicePixelRatioOf(context),
     );
     if (isNeighbor) {
-      // 邻页：p250 预解码 1152；完成走 _updateViewWithFinalImage 的
-      // 「预建页只换 1152 显示」分支（非当前页不 attach 4096）。
-      if (!_loadingFinalImage && !_loadedFinalImage) {
-        _loadingFinalImage = true;
-        final gen = _loadGeneration;
-        final full = buildImageProvider(
-          _ref,
-          targetWidth: fullTw,
-          priority: RequestPriority.prefetchFull,
-        );
-        precacheImage(full, context)
-            .then((_) {
-              if (!mounted || gen != _loadGeneration) return;
-              if (!_loadedFinalImage) {
-                _updateViewWithFinalImage(full);
-              }
-            })
-            .catchError((Object e) {
-              if (gen != _loadGeneration) return;
-              if (mounted) {
-                setState(() => _showingThumbnailFallback = true);
-                _notifyReadyOnce();
-              }
-            });
-      }
+      // 邻页：预取不在本方法发起（_fireHeavyLoads 的 150ms heavy 窗在
+      // 飞行动画内！）——由停稳信号驱动（路由 completed / 滚动停止，
+      // 见 _prefetchNeighborFullIfAny）。此处只确保路由监听已挂。
+      _ensureRouteListener();
       return;
     }
     if (_passThroughInFlight) {
@@ -1178,17 +1366,23 @@ class _ZoomableImageState extends State<ZoomableImage> {
       completer.setOnFrameReady(_tryFlushHd);
     }
     if (!_routeListenerAttached) {
-      _routeListenerAttached = true;
-      final animation = ModalRoute.of(context)?.animation;
-      if (animation == null || animation.isCompleted) {
-        _routeSettled = true;
-      } else {
-        animation.addStatusListener(_onHdRouteStatus);
-      }
+      _ensureRouteListener();
     }
     // 翻页滚动结束驱动 flush（见 _tryFlushHd 扣帧注释）：先摘再加防重。
     _inherited?.pageScrollingNotifier.removeListener(_onPageScrollingChanged);
     _inherited?.pageScrollingNotifier.addListener(_onPageScrollingChanged);
+    // 路由早已 settled（翻页 attach / 重建恢复）时直接发起；push 场景
+    // 由 _onHdRouteStatus completed 驱动（requestUpTo 幂等）。
+    if (_routeSettled) {
+      _startHdNow();
+      // 【重建恢复补查 flush】State 重建（insets 变化等）场景：4096 帧可能
+      // 早已解完 held——held 时刻的 onFrameReady 指向【旧 State】（已
+      // dispose），新 attach 的 setOnFrameReady 不会补发；requestUpTo 又被
+      // 幂等吞掉 → 帧永久 held =「双击放大后迟迟不替换清晰原图」（真机
+      // 实证 2026-09-11）。attach 时主动补查：有 held 帧即走闸（幂等——
+      // 无帧 no-op，闸不开自动排 timer）。
+      _tryFlushHd();
+    }
     return progressive;
   }
 

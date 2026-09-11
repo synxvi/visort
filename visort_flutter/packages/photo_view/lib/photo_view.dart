@@ -255,7 +255,6 @@ class PhotoView extends StatefulWidget {
     this.onTapUp,
     this.onTapDown,
     this.onScaleEnd,
-    this.onEdgeX,
     this.customSize,
     this.gestureDetectorBehavior,
     this.tightMode,
@@ -295,7 +294,6 @@ class PhotoView extends StatefulWidget {
     this.onTapUp,
     this.onTapDown,
     this.onScaleEnd,
-    this.onEdgeX,
     this.customSize,
     this.gestureDetectorBehavior,
     this.tightMode,
@@ -343,7 +341,6 @@ class PhotoView extends StatefulWidget {
 
   /// [visort fork] X 边缘溢出回调：放大且无缩放变化时，图片在 X 边界
   /// 继续拖动触发（参数：+1=右拖溢出→上一张，-1=左拖溢出→下一张）。
-  final ValueChanged<int>? onEdgeX;
 
   /// Attributes that are going to be passed to [PhotoViewCore]'s
   /// [Hero]. Leave this property undefined if you don't want a hero animation.
@@ -544,7 +541,6 @@ class _PhotoViewState extends State<PhotoView>
                 onTapUp: widget.onTapUp,
                 onTapDown: widget.onTapDown,
                 onScaleEnd: widget.onScaleEnd,
-                onEdgeX: widget.onEdgeX,
                 enableDoubleTap: widget.enableDoubleTap,
                 coreKey: widget.coreKey,
                 outerSize: computedOuterSize,
@@ -574,7 +570,6 @@ class _PhotoViewState extends State<PhotoView>
                 onTapUp: widget.onTapUp,
                 onTapDown: widget.onTapDown,
                 onScaleEnd: widget.onScaleEnd,
-                onEdgeX: widget.onEdgeX,
                 enableDoubleTap: widget.enableDoubleTap,
                 coreKey: widget.coreKey,
                 outerSize: computedOuterSize,

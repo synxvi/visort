@@ -47,10 +47,10 @@ import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/ui/screens/album_picker_screen.dart';
 
 import 'detail_page_state.dart';
-import 'fast_scroll_physics.dart';
 import 'filmstrip.dart';
 import 'photo_details_sheet.dart';
 import 'wallpaper_crop_page.dart';
+import 'page_settle_takeover.dart';
 import 'zoomable_image.dart';
 
 // ─────────────── 栏位常量（主分支 photo_viewer.dart 同款） ───────────────
@@ -222,8 +222,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// State 单例，经 Inherited 下发——放 widget 实例字段会随 rebuild 丢失）。
   final DoubleTapIntentHolder _doubleTapIntent = DoubleTapIntentHolder();
 
-  /// [photo_view fork] X 边缘溢出翻页动画进行中：期间忽略重复回调防连翻。
-  bool _edgePageAnimating = false;
 
   /// 顶层双击路由表：pageIndex → 该页 ZoomableImage 的双击处理
   /// （Scrollable ballistic 中 ignorePointer 屏蔽页内 tap，双击必须
@@ -262,6 +260,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   void initState() {
     super.initState();
+    debugPrint('[DT] dp-init');
     _files = List.of(widget.files);
     _thumbFiles = List.of(widget.files);
     _thumbDeleteAnim = AnimationController(
@@ -313,16 +312,54 @@ class _DetailPageState extends ConsumerState<DetailPage>
   bool _routeStatusHooked = false;
 
   /// PageController → _thumbPagePos 泵（条锁步输入，见字段注释）。
+  ///
+  /// ⚠️ 停稳边沿的广播【不能只靠本方法】：它由 position pixels 变化驱动，
+  /// 而「jumpToPage 到同页」（快甩中双击的跳停）/惯性结束的 activity 切换
+  /// 都不改 pixels → isScrollingNotifier 已 false 而本方法不再跑 →
+  /// _pageScrolling 永久卡 true → 4096 flush/trim 全部饿死（真机 7763
+  /// 实证：用户停留 2.7s 双击放大，图仍 1152 糊）。根治在
+  /// _onIsScrollingChanged（activity 通知驱动，见其注释）。
   void _onPageScroll() {
     if (!_pageController.hasClients) return;
+    // 惰性挂 activity 通知（position 在 hasClients 后才存在，一次即够）。
+    if (!_scrollingListenerAttached) {
+      _scrollingListenerAttached = true;
+      _pageController.position.isScrollingNotifier
+          .addListener(_onIsScrollingChanged);
+    }
     final p = _pageController.page;
     if (p != null) {
       _thumbPagePos.value = p;
     }
     // 【翻页中扣帧】广播滚动状态（值变化才写，每帧调用零 notifier 抖动）。
+    _syncScrollingFlag();
+  }
+
+  /// isScrollingNotifier 是否已挂监听（惰性，见 _onPageScroll）。
+  bool _scrollingListenerAttached = false;
+
+  /// 停稳边沿的【唯一可靠驱动】：position.isScrollingNotifier 是
+  /// ValueNotifier，ScrollActivity 任何切换（drag/ballistic/idle/jump）
+  /// 都会通知——与 pixels 是否变化无关。此前只靠 _onPageScroll（pixels
+  /// 驱动）轮询比对，jumpToPage 同页/惯性静停场景边沿丢失，_pageScrolling
+  /// 卡 true → 4096 flush 永不执行（「翻页后糊」根因）+ trim 饿死。
+  void _onIsScrollingChanged() {
+    if (!_pageController.hasClients) return;
+    _syncScrollingFlag();
+  }
+
+  void _syncScrollingFlag() {
     final scrolling = _pageController.position.isScrollingNotifier.value;
-    if (_pageScrolling.value != scrolling) {
-      _pageScrolling.value = scrolling;
+    if (_pageScrolling.value == scrolling) return;
+    _pageScrolling.value = scrolling;
+    // [PS] 停稳边沿打点（4096 flush/trim 全靠此信号驱动）。
+    debugPrint(
+        '[PS] edge scrolling=$scrolling page=${_pageController.position.pixels.toStringAsFixed(1)}');
+    // 【停稳统一 trim】拖动中被 gate 的 trim 在此执行（见
+    // _trimDistantViewerCacheGate）。
+    if (!scrolling && _trimPending) {
+      _trimPending = false;
+      _trimDistantViewerCache(_selectedIndexNotifier.value);
     }
   }
 
@@ -376,6 +413,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
     if (status == AnimationStatus.dismissed) {
       _removeChromeEntry();
       _evictViewedViewerCache();
+      // 沉浸态 pop 的系统栏恢复（原挂在 dispose 里的匿名 dismissed
+      // listener 是死代码——dispose 发生时动画早已 dismissed，不会再有
+      // 新通知，2026-09-11 审查 P1）。此刻 reverse 飞行已收尾、网格已
+      // 稳定，系统栏 insets 动画（~250ms）不再有 Hero 可闪残影。
+      if (enableFullScreenNotifier.value) {
+        enableFullScreenNotifier.value = false;
+        restoreEdgeToEdgeBars();
+      }
       // live 注册表随 pop 收尾清空：opaque:false 路由 dispose 可能延迟/
       // 不触发，残留条目会被【下一次 push】的飞行 shuttle 误当图源
       //（全程低档不升级，「飞行动画分辨率低」的半个根因；另一半是
@@ -457,6 +502,23 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 缓存（上限 96-160MB）——网格缩略图被 LRU 逐出，pop 返回后整屏重新
   /// 解码 = 「网格界面加载慢」。窗口内的保留（±3 立即翻回零重解码），
   /// 其余随走随清，pop 时缓存主体仍是网格缩略图。
+  ///
+  /// 【拖动中 gate】PageView 滚动中（拖动跨页又拖回/惯性未停）的
+  /// onPageChanged 不立即 trim——HD 逐出（evict viewerHd）在 completer
+  /// 无 wrapper listener 时会真 dispose（_dead），用户「没完全滑过去」的
+  /// 路过就杀掉当前页的升档链 =「拖回后图不再变清晰」（真机实证
+  /// 2026-09-11）。滚动中的 trim 挂 pending，停稳（isScrollingNotifier
+  /// false 边沿）以届时 sel 统一执行。
+  bool _trimPending = false;
+
+  void _trimDistantViewerCacheGate(int currentIndex) {
+    if (_pageScrolling.value) {
+      _trimPending = true;
+      return;
+    }
+    _trimDistantViewerCache(currentIndex);
+  }
+
   void _trimDistantViewerCache(int currentIndex) {
     // HD 窄窗先行：不受下方 1152 宽窗的 early return（集合 ≤14 张）影响
     //——两张 HD 就值得逐远端（内存权重完全不同，见 _hdIds doc）。
@@ -532,6 +594,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   @override
   void dispose() {
+    debugPrint('[DT] dp-dispose');
     _heavyStripGateTimer?.cancel();
     _heavyStripGateTimer = null;
     _chromeInsertTimer?.cancel();
@@ -540,10 +603,15 @@ class _DetailPageState extends ConsumerState<DetailPage>
     _viewerMenuCtl?.close();
     _viewerMenuScrolling.dispose();
     // 沉浸残留修复（真机实测）：沉浸态直接 pop 时引擎窗口上仍挂着
-    // HIDE_NAVIGATION|IMMERSIVE_STICKY，返回网格后手势条消失。pop 时若仍
-    // 沉浸：先复位 notifier（使 200ms 延迟进沉浸的竞态回调失效）再恢复
-    // 系统栏。ente 原版 dispose 即有此恢复（setSystemUIOverlayStyle +
-    // edgeToEdge），移植时丢失。恢复顺序须在 notifier.dispose() 之前。
+    // HIDE_NAVIGATION|IMMERSIVE_STICKY，返回网格后手势条消失。主恢复
+    // 路径在 _onRouteAnimationStatus 的 dismissed 分支（正常 pop：
+    // reverse → dismissed → dispose，恢复时机在飞行收尾后）。
+    // 【放大态 pop 闪残影】不可在 reverse 同窗立即 restoreEdgeToEdgeBars
+    //（insets 动画与 Hero 飞行同窗 → 页 element 重建 → 飞行起点闪回
+    // 默认框，真机实证 2026-09-11）——故 dismissed 分支先行。
+    // 此处只兜「dismissed 分支未走到」的异常退场（removeRoute 等动画
+    // 不到 dismissed 的路径）：dispose 时飞行必然已结束，立即恢复无
+    // 残影竞态。恢复顺序须在 notifier.dispose() 之前。
     if (enableFullScreenNotifier.value) {
       enableFullScreenNotifier.value = false;
       restoreEdgeToEdgeBars();
@@ -557,6 +625,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
     _evictViewedViewerCache();
     isZoomedNotifier.removeListener(_onZoomedForImmersive);
     _pageController.removeListener(_onPageScroll);
+    if (_scrollingListenerAttached && _pageController.hasClients) {
+      _pageController.position.isScrollingNotifier
+          .removeListener(_onIsScrollingChanged);
+    }
     _pageController.dispose();
     _selectedIndexNotifier.dispose();
     enableFullScreenNotifier.dispose();
@@ -688,48 +760,53 @@ class _DetailPageState extends ConsumerState<DetailPage>
           }
           if (_detailsOpen) _animateClose();
         },
-        child: Scaffold(
-          extendBodyBehindAppBar: true,
-          resizeToAvoidBottomInset: false,
-          backgroundColor: Colors.black,
-          // 【沉浸切换 State 重建修复·2026-09-10】SystemChrome 隐藏/恢复
-          // 系统栏 → WindowInsets 动画 → MediaQuery padding 抖动传导进
-          // body → PageView 页 element 整个销毁重建（模拟器 [DT]
-          // state-dispose/new 成对实证：进沉浸后 270ms 全部页 State 换
-          // 血，doubleTapZoom 动画随旧 core 死亡 =「双击没反应」；顶/底
-          // 栏跟手浮层随重建抖动 =「栏抖一下」）。viewer 全屏黑底，本就
-          // 不消费系统栏 padding——在此剥除，insets 抖动进不了页子树。
-          body: MediaQuery(
-            data: MediaQuery.of(context).copyWith(
-              padding: EdgeInsets.zero,
-              viewInsets: EdgeInsets.zero,
-            ),
-            child: Center(
-            child: Stack(
-              children: [
-                // 图片随面板上推（唯一驱动源 _panelExtent）。
-                ValueListenableBuilder<double>(
-                  valueListenable: _panelExtent,
-                  builder: (_, extent, pageView) {
-                    final mq = MediaQuery.of(context);
-                    final availH =
-                        mq.size.height -
-                        (_kBottomChromeHeight + mq.viewPadding.bottom);
-                    // clamp ≥ 0:杜绝关闭回弹时图片「过冲到正常位置以下」的闪烁。
-                    final pushPx = (extent * availH * _kImagePushFactor).clamp(
-                      0.0,
-                      availH,
-                    );
-                    return Transform.translate(
-                      offset: Offset(0, -pushPx),
-                      child: pageView,
-                    );
-                  },
-                  child: _buildPageView(),
-                ),
-              ],
-            ),
+        // 【沉浸切换 State 重建根治·2026-09-11】MediaQuery 剥除从 body 内
+        // 提到 Scaffold 外：沉浸 SystemChrome 隐藏/恢复系统栏 → insets 动画
+        // → **Scaffold 自身的 LayoutBuilder** 读 MediaQuery relayout（栈实证
+        // _RenderLayoutBuilder.performLayout → Sliver 逐层 update →
+        // framework 4066 deactivate+inflate 分支）——剥在 body 内护不住
+        // Scaffold 本体，整树仍换血 = 首次双指捏合/双击的手势 State 被杀
+        //（真机 [AR]+[DT] 铁证：zoomedIn 上报 3ms 后全组 zi-init、recognizer
+        // dispose、resolve rejected）。viewer 全屏黑底不消费任何系统栏
+        // insets，整页剥除；栏挂 root Overlay（路由外）用真实 viewPadding
+        // 不受影响。栏自身的显隐动画值驱动（AnimatedBuilder 读路由动画），
+        // 对本子树重建免疫。
+        child: MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            padding: EdgeInsets.zero,
+            viewInsets: EdgeInsets.zero,
+            viewPadding: EdgeInsets.zero,
           ),
+          child: Scaffold(
+            extendBodyBehindAppBar: true,
+            resizeToAvoidBottomInset: false,
+            backgroundColor: Colors.black,
+            body: Center(
+              child: Stack(
+                children: [
+                  // 图片随面板上推（唯一驱动源 _panelExtent）。
+                  ValueListenableBuilder<double>(
+                    valueListenable: _panelExtent,
+                    builder: (_, extent, pageView) {
+                      // body 外已剥 viewPadding（见上），availH 用屏高 − 栏位
+                      // 常量（原读 mq.viewPadding.bottom 已恒 0，语义不变）。
+                      final mq = MediaQuery.of(context);
+                      final availH =
+                          mq.size.height -
+                          (_kBottomChromeHeight + mq.viewPadding.bottom);
+                      // clamp ≥ 0:杜绝关闭回弹时图片「过冲到正常位置以下」的闪烁。
+                      final pushPx = (extent * availH * _kImagePushFactor)
+                          .clamp(0.0, availH);
+                      return Transform.translate(
+                        offset: Offset(0, -pushPx),
+                        child: pageView,
+                      );
+                    },
+                    child: _buildPageView(),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -737,7 +814,20 @@ class _DetailPageState extends ConsumerState<DetailPage>
   }
 
   Widget _buildPageView() {
-    return GestureDetector(
+    // 页内回弹接管（PageSettleTakeOver）：弹回动画全程子树可交互——
+    // 原生 ballistic 屏蔽视口指针，「翻页弹回没停稳前反向拖无法平移
+    // 图片」的根（真机体感 2026-09-12）。速度通道（轻扫翻页）放大态
+    // 关闭：贴边外拖是精细操作，手指速度天然超阈值会被误判成轻扫
+    // 强制翻页（真机实证 2026-09-12）。child 固定，zoomed 变化只换参。
+    return ValueListenableBuilder<bool>(
+      valueListenable: isZoomedNotifier,
+      builder: (context, zoomed, child) => PageSettleTakeOver(
+        controller: _pageController,
+        enabled: !_swipeLocked && !_popping,
+        flingTakeOver: !zoomed,
+        child: child!,
+      ),
+      child: GestureDetector(
       // [顶层双击] Scrollable ballistic/拖动中 ignorePointer 屏蔽页内 tap
       // （翻页未停稳双击失灵的根因）——双击在 PageView 之上捕获，按当前
       // 页索引分发到该页 ZoomableImage（→ PhotoViewCore.doubleTapZoom）。
@@ -747,6 +837,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
       // drag/scale；与页内 onTap 共存的单击 300ms 延迟与此前一致。
       behavior: HitTestBehavior.translucent,
       onDoubleTapDown: (d) => _lastDoubleTapDown = d.globalPosition,
+      // 【沉浸粘性的退出补口】沉浸态（isZoomedNotifier 粘住）下单击 =
+      // 退出沉浸拉回栏（Google Photos/系统相册同款 tap toggle）。经
+      // isZoomedNotifier 写 false 走 _onZoomedForImmersive 既有链
+      // （_fullscreenBeforeZoom 复位一并归位）。与双击共存有 300ms
+      // 单击延迟（等双击窗口），标准行为；普通态 tap 无操作。
+      onTap: () {
+        if (isZoomedNotifier.value) {
+          isZoomedNotifier.value = false;
+        }
+      },
       onDoubleTap: () {
         final down = _lastDoubleTapDown;
         if (down == null) return;
@@ -783,8 +883,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
             onSwipeUp: () => _showDetails(file),
             // 面板打开时下滑 → 收面板；否则默认返回。
             onSwipeDown: _detailsOpen ? _animateClose : null,
-            // 放大后平移到 X 边缘继续拖 → 翻页（photo_view fork onEdgeX）。
-            onEdgeX: _handleEdgePage,
             onFullLoaded: _onFullImageLoaded,
             onHdLoaded: _onHdLoaded,
           );
@@ -817,6 +915,12 @@ class _DetailPageState extends ConsumerState<DetailPage>
               if (index == _selectedIndexNotifier.value) {
                 _pagerDrivenByThumb = false;
                 _pagerDrivenN.value = false;
+                // 条驱动（条甩动/点按）到达 target 同样要 trim 远端缓存：
+                // 此前此分支裸 return，纯点按浏览时 onPageChanged 全程
+                // 走不到 trim → _viewedFullIds 只进不出，~50MB 滞留
+                //（2026-09-11 审查 P1）。gate 自带滚动闸（跳页滚动中转
+                // _trimPending，停稳边沿 flush）。
+                _trimDistantViewerCacheGate(index);
               }
               return;
             }
@@ -828,7 +932,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
               // 快甩扫过 20+ 页时每页 full(4.4MB)都记入 _viewedFullIds，若
               // 不 trim 则浏览期缓存撑爆、网格缩略图被逐（审查实证 P1——
               // _trimDistantViewerCache 注释声明的场景原样发生）。
-              _trimDistantViewerCache(index);
+              _trimDistantViewerCacheGate(index);
               return; // 跟手场景 filmstrip 已就位，不程序回滚
             }
             // 迟到回声守卫：条停稳/跟手主张后 800ms 内到达、与主张只差 1 格
@@ -849,7 +953,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
             cachePerfEvent('page idx=$index id=${_files[index].id}');
             widget.onIndexChanged?.call(index);
             _syncThumbTo(index);
-            _trimDistantViewerCache(index);
+            _trimDistantViewerCacheGate(index);
             _prefetchPageNeighbors(index);
           },
           // 【翻页手感对齐 immich·2026-09-10】标准 PageScrollPhysics：
@@ -859,40 +963,24 @@ class _DetailPageState extends ConsumerState<DetailPage>
           // 程序滚动，不经 physics，不受影响。
           // 【微弹手感·对齐 aves】snap 由 iOS 弹簧驱动（Bouncing 物理），
           // 落页带轻微过冲回弹；PageScrollPhysics 保持整页吸附。
-          physics: _shouldDisableScroll || _swipeLocked || _popping
+          // 【aves 对齐·放大态翻页解锁】放大态不再禁用 PageView 滚动：
+          // fork 的 recognizer 已有 arena 让位（贴边外拖 resolve(rejected)），
+          // PageView 保持可滚即可原生接管翻页（跟手/视差/Bouncing 全原生）
+          // ——此前把放大态锁 NeverScrollable 让手势悬空 =「放大后无法
+          // 翻页」的根。图内平移仍由 recognizer 深节点先收事件先 accept
+          // 赢得 arena，不会被翻页抢走（aves 同款机制）。
+          // _shouldDisableScroll 字段保留（shouldDisableScroll 回调链/
+          // 垂直手势门仍用），仅退出 physics 判定。
+          physics: _swipeLocked || _popping
               ? const NeverScrollableScrollPhysics()
               : const PageScrollPhysics(parent: BouncingScrollPhysics()),
           controller: _pageController,
           itemCount: _files.length,
       ),
+      ),
     );
   }
 
-  /// [photo_view fork] 放大后 X 边缘溢出 → 翻页（dir>0 右拖→上一张，<0 左拖→下一张）。
-  void _handleEdgePage(int dir) {
-    if (_detailsOpen || _edgePageAnimating) return;
-    if (!_pageController.hasClients) return;
-    _edgePageAnimating = true;
-    final future = dir < 0
-        ? _pageController.nextPage(
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOut,
-          )
-        : _pageController.previousPage(
-            duration: const Duration(milliseconds: 300),
-            curve: Curves.easeOut,
-          );
-    unawaited(
-      future.whenComplete(() {
-        _edgePageAnimating = false;
-        // 旧页的放大态翻页后残留（新页 postFrame 也会复位，这里兜底
-        // 翻页动画期间 PageView 已恢复可滚）。
-        if (_shouldDisableScroll) {
-          setState(() => _shouldDisableScroll = false);
-        }
-      }),
-    );
-  }
 
   // （F22 删除空壳 _preloadFiles）邻页图片由 ImageCache +
   // allowImplicitScrolling 预渲染处理，无需显式预加载（ente 有服务端
@@ -1404,10 +1492,12 @@ class _DetailPageState extends ConsumerState<DetailPage>
         _kThumbSyncDuration + const Duration(milliseconds: 80),
         () {
           if (token == _thumbDriveToken) {
-            if (_pagerDrivenByThumb) {
-            }
             _pagerDrivenByThumb = false;
             _pagerDrivenN.value = false;
+            // 兜底超时（onPageChanged 未走到 target）也补一次 trim：
+            // 点按远端页正常到达时 trim 已在 onPageChanged 做过，此处
+            // 幂等重入无害（差集运算）；异常路径（未到达）保证不漏。
+            _trimDistantViewerCacheGate(_selectedIndexNotifier.value);
           }
         },
       );
@@ -2512,17 +2602,21 @@ class _PageParallaxTransition extends StatelessWidget {
       animation: controller,
       child: child,
       builder: (context, child) {
-        if (!controller.hasClients || !controller.position.haveDimensions) {
-          return child!;
+        // ⚠️ 两分支必须输出【同构结构】（ClipRect+Transform 恒在）：builder
+        // 曾在无 dimensions 时直接 return child——Scaffold relayout（沉浸
+        // insets 链）触发 rebuild 时分支翻转 = 新旧 child runtimeType 不匹配
+        // → Element.updateChild 走 deactivate+inflate 分支（framework
+        // 4066）→ 整链 ZoomableImage State 全组换血 = 首次捏合手势被杀
+        //（模拟器栈实证 2026-09-11）。同构化后永远原位更新。
+        Offset dx = Offset.zero;
+        if (controller.hasClients && controller.position.haveDimensions) {
+          final page = controller.page!;
+          final position = (page - index).clamp(-1.0, 1.0);
+          final w = controller.position.viewportDimension;
+          dx = Offset(position * w / 2, 0);
         }
-        final page = controller.page!;
-        final position = (page - index).clamp(-1.0, 1.0);
-        final w = controller.position.viewportDimension;
         return ClipRect(
-          child: Transform.translate(
-            offset: Offset(position * w / 2, 0),
-            child: child,
-          ),
+          child: Transform.translate(offset: dx, child: child),
         );
       },
     );

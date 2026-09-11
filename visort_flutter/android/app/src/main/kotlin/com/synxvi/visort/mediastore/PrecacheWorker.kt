@@ -54,7 +54,8 @@ class PrecacheWorker(appContext: Context, params: WorkerParameters) :
                     val code = runCatching {
                         repo.precacheFullImage(info.id, tw, info.dateModifiedMs)
                     }.getOrDefault(3)
-                    if (code == 0) generated++ else if (code == 1) skipped++
+                    if (code == 0) generated++
+                    else if (code == 1 || code == 2) skipped++ // 2=小图豁免
                     // 每 16 张查配额（walkTopDown 有成本）：写满即收工。
                     // 0.95 阈值 + skip 段也查（无 generated>0 门槛）——配额
                     // 装不下全库时，被 trim 挤掉的老图重解码写回再挤掉 =

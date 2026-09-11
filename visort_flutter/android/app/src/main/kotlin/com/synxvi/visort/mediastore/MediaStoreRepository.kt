@@ -869,11 +869,12 @@ class MediaStoreRepository(private val context: Context) {
         //    ⚠️ 用显示宽(旋转后)算,非原始位图宽:竖拍照片原始位图横躺
         //    (如 4096×3072 + orientation 90 → 显示 3072×4096),targetWidth
         //    对齐显示宽才能解出正确分辨率。
-        //    ⚠️ 用 displayW/sampleSize > targetWidth(非 displayW/(sample*2) >= target):
-        //    后者要求 displayW >= 2*target 才下采样,对 displayW≈target 的相机原图(3072 vs 2880)
-        //    会得 sample=1 → 解全图 12MP + compress 大 JPEG + dart 再解一遍,比 readBytes 还慢。
-        //    改成 > targetWidth:只要 displayW > target 就 sample≥2,解码宽度落到 (target/2, target]。
-        //    例:displayW=3072, target=2880 → sample=2(解码 1536);displayW=4096 → sample=2(解码 2048)。
+        //    阈值保持 > targetWidth(×1.5 试验已于 2026-09-10 当日回滚):
+        //    提阈让解码宽度带整体上移 2.25×——3072×4096 主力照片从 768 宽
+        //    变 1536 宽,内存/解码/回传全翻倍 = 飞行动画卡 + 大图桶 128MB
+        //    装不下变重条目被 LRU 逐出 → 面板打开即灰占位(真机实证)。
+        //    「1200 被砍半到 600」窄区间的清晰度损失留待精确缩放方案
+        //    (sample 后 createBitmap 到目标宽)立项,不动主流照片档位。
         val displayW = if (rotationDegrees == 90 || rotationDegrees == 270) origH else origW
         var sampleSize = 1
         while (displayW / sampleSize > safeTarget) {
@@ -934,10 +935,18 @@ class MediaStoreRepository(private val context: Context) {
     /// 传入可省去 exists 分支的一次单行查询——全库重扫时上千张 skip 各省
     /// 一次查询；null 则自查（单张调用路径不变）。
     ///
-    /// @return 0=已生成 1=缓存已存在（校验有效）跳过 3=失败（源图缺失/损坏）
+    /// @return 0=已生成 1=缓存已存在（校验有效）跳过 2=小图豁免（原图
+    ///   ≤ 档位，解码本就 sample=1 原样直出 <30ms，blob 无收益——省盘
+    ///   省预缓存时间，配额留给大图）3=失败（源图缺失/损坏）
     fun precacheFullImage(id: String, targetWidth: Int, dateModifiedMs: Long? = null): Int {
         val safeTarget = targetWidth.coerceIn(960, 4096)
         val longId = id.toLongOrNull() ?: return 3
+        // 小图豁免（2026-09-10）：判定 max(WIDTH, HEIGHT) ≤ 档位——照片
+        // orientation 只有 0/90/180/270，displayW ≡ max(边)（竖拍旋转后
+        // 大边即显示宽），与 decodeSampledBitmap 的采样判定精确等价：
+        // 豁免 ⟺ sample 恒 1 原样解码。纯 DB 单行查询（WIDTH/HEIGHT 是
+        // 扫描时提取的列），零文件 IO。
+        if (queryOrigMaxSide(longId)?.let { it <= safeTarget } == true) return 2
         // 已缓存（文件存在且 mtime 有效）→ 跳过（与 readFullCache 的校验一致，
         // 但不 decode——预生成只关心文件在不在）。
         val file = File(File(fullCacheDir, safeTarget.toString()), "$longId.jpg")
@@ -954,6 +963,25 @@ class MediaStoreRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.w(TAG, "precacheFullImage 失败 id=$id: ${e.message}")
             3
+        }
+    }
+
+    /// 单图原始大边（MediaStore WIDTH/HEIGHT 列，不含 EXIF 方向——大边
+    /// 与方向无关，正是采样判定的 displayW）。失败/缺列 null。
+    private fun queryOrigMaxSide(id: Long): Int? {
+        return try {
+            contentResolver.query(
+                collection, arrayOf(
+                    MediaStore.Images.Media.WIDTH,
+                    MediaStore.Images.Media.HEIGHT,
+                ), "${MediaStore.Images.Media._ID} = ?", arrayOf(id.toString()), null
+            )?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0) && !c.isNull(1)) {
+                    maxOf(c.getInt(0), c.getInt(1))
+                } else null
+            }
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -1173,10 +1201,55 @@ class MediaStoreRepository(private val context: Context) {
             Log.w(TAG, "fullCacheStats count 查询失败: ${e.message}")
             0
         }
+        // 小图豁免数（与 precacheFullImage 豁免判定同源：两边均 ≤ 档位
+        // ⟺ 大边 ≤ 档位，纯 DB 聚合零文件 IO）+ GIF 数（同 trashed 口径）
+        // ——设置页「数量组成」行用。⚠️ 不可用 MAX(w,h)：Q+ MediaProvider
+        // 把 selection 解析成内部查询（非直通 SQL），函数调用被静默吞掉
+        // = 子句失效查回全部（真机实证 smallExempt 恒等于 total）。
+        val safeTw = targetWidth.coerceIn(960, 4096)
+        var smallExempt = 0
+        var gifCount = 0
+        try {
+            val bundle = android.os.Bundle().apply {
+                putString(
+                    android.content.ContentResolver.QUERY_ARG_SQL_SELECTION,
+                    "(${MediaStore.Images.Media.MIME_TYPE} IS NULL OR ${MediaStore.Images.Media.MIME_TYPE} != ?)" +
+                        " AND ${MediaStore.Images.Media.WIDTH} <= ? AND ${MediaStore.Images.Media.HEIGHT} <= ?",
+                )
+                putStringArray(
+                    android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
+                    arrayOf("image/gif", safeTw.toString(), safeTw.toString()),
+                )
+                putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+            }
+            smallExempt = contentResolver.query(
+                collection, arrayOf(MediaStore.Images.Media._ID), bundle, null
+            )?.use { it.count } ?: 0
+            val gifBundle = android.os.Bundle().apply {
+                putString(
+                    android.content.ContentResolver.QUERY_ARG_SQL_SELECTION,
+                    "${MediaStore.Images.Media.MIME_TYPE} = ?",
+                )
+                putStringArray(
+                    android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS,
+                    arrayOf("image/gif"),
+                )
+                putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+            }
+            gifCount = contentResolver.query(
+                collection, arrayOf(MediaStore.Images.Media._ID), gifBundle, null
+            )?.use { it.count } ?: 0
+        } catch (e: Exception) {
+            Log.w(TAG, "fullCacheStats smallExempt/gif 查询失败: ${e.message}")
+            smallExempt = 0
+            gifCount = 0
+        }
         val bytes = imageCacheBytes()
         return mapOf(
             "cached" to cached,
             "total" to total,
+            "smallExempt" to smallExempt,
+            "gifCount" to gifCount,
             "full" to (bytes["full"] ?: 0L),
             "thumb" to (bytes["thumb"] ?: 0L),
         )
@@ -1231,6 +1304,28 @@ class MediaStoreRepository(private val context: Context) {
             }
             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
                 ?: return null
+            // 【超宽 blob 自愈】×1.5 采样试验期（2026-09-10）生成的 blob 解码
+            // 宽度超档位（如 1152 档里 1536 宽 = 12MP decodeByteArray 80-90ms，
+            // 整段落在打开飞行动画窗内 = 顿挫，真机实证；正常 768 宽 ~40ms）
+            // ——当时清理只删了 >600K 文件，250-400K 的 1536 宽残留躲过。
+            // 判失效删文件走重解：采样判定保证合法 blob 宽 ≤ targetWidth
+            //（容差 1.1 吸收无符号取整），重解后写回正确尺寸，此后永久正常。
+            // ⚠️ 只查宽度、绝不查高度：decodeSampledBitmap 的采样仅约束
+            // 显示宽（while displayW/sampleSize > target），高度不受控——
+            // 竖高图（1080×2400 截图）合法 blob 高远超 targetWidth×1.1，
+            // 查高会误删 → 重解写回同尺寸 → 再读再删 = 永久自愈循环 +
+            // 每次打开全量解码（2026-09-11 审查 P1）。
+            if (bitmap.width > targetWidth * 11 / 10) {
+                Log.w(
+                    TAG,
+                    "readFullCache 超宽 blob 自愈 id=$id tw=$targetWidth " +
+                        "${bitmap.width}x${bitmap.height}",
+                )
+                bitmap.recycle()
+                val len = file.length()
+                if (file.delete()) fullBytesCounter.addIfReady(-len)
+                return null
+            }
             logColorProbe("blobRead tw=$targetWidth", id, bitmap)
             val w = bitmap.width
             val h = bitmap.height
@@ -1567,7 +1662,18 @@ class MediaStoreRepository(private val context: Context) {
         val srcAspect = srcW.toDouble() / srcH.toDouble()
         val aspectErr = abs(gotAspect / srcAspect - 1.0)
         val reqErr = abs(reqAspect / srcAspect - 1.0)
-        if (aspectErr <= max(0.02, reqErr)) {
+        // 【分辨率下限·mini 欠采样根治】系统 loadThumbnail 对小请求框（实测
+        // 346/464 档）常直接返回全局 mini 缓存（240×320 / 320×240）——mini
+        // 是源图等比缩小，aspect 校验天然拦不住（err=0），但短边只有请求的
+        // ~69%：方形 cell cover 显示放大 1.44× = 网格缩略图发糊。命中呈
+        // 「分层」：3:4 / 4:3 主摄照片与 mini 比例恰好匹配全中招，其它比例
+        //（16:9/全屏）被 aspect 校验拒绝走自解故清晰（真机实证：同批 3:4
+        // 照片全糊、t793/t62 实测 240×320/320×240，2026-09-11）。加短边
+        // 下限 80%：mini 69% 被拒，系统正常 fit-inside 路径（≥90%）不受
+        // 影响。reqShort 已 clamp 到源短边，小图（源 < 请求）返回原图本身
+        // 恒 100% 不误伤。
+        val gotShort = min(bitmap.width, bitmap.height)
+        if (gotShort * 100 >= reqShort * 80 && aspectErr <= max(0.02, reqErr)) {
             writeThumbnailCache(longId, width, height, dateModifiedMs, bytes, crop = true)
             return bytes
         }
