@@ -76,6 +76,21 @@ class PhotoViewScaleStateController {
     _scaleStateNotifier.updateIgnoring(newValue);
   }
 
+  /// 双击放大专用入口：同值也通知。[setInvisibly] 的同值守卫在
+  /// 「scaleState 残留 zoomedIn」时会静默吞掉通知——外层沉浸/锁链
+  ///（zoomable 的 scaleStateChangedCallback）与视觉失联 =「双击放大
+  /// 成功但顶/底栏不隐藏」（真机实证 2026-09-12：渲染未落位时缩回
+  /// 动画被换帧重建杀死，终态归位 listener 一并死亡 → 残留）。值相同
+  /// 时直接推 stream（broadcast，与普通通知同路径），不同走原逻辑。
+  void setZoomedInExplicitly() {
+    if (_scaleStateNotifier.value == PhotoViewScaleState.zoomedIn) {
+      prevScaleState = PhotoViewScaleState.zoomedIn;
+      _scaleStateChangeListener();
+      return;
+    }
+    setInvisibly(PhotoViewScaleState.zoomedIn);
+  }
+
   void _scaleStateChangeListener() {
     _outputScaleStateCtrl.sink.add(scaleState);
   }

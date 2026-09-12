@@ -418,6 +418,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
       // 新通知，2026-09-11 审查 P1）。此刻 reverse 飞行已收尾、网格已
       // 稳定，系统栏 insets 动画（~250ms）不再有 Hero 可闪残影。
       if (enableFullScreenNotifier.value) {
+        debugPrint('[IMM] fs=false @dismissed');
         enableFullScreenNotifier.value = false;
         restoreEdgeToEdgeBars();
       }
@@ -613,6 +614,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // 不到 dismissed 的路径）：dispose 时飞行必然已结束，立即恢复无
     // 残影竞态。恢复顺序须在 notifier.dispose() 之前。
     if (enableFullScreenNotifier.value) {
+      debugPrint('[IMM] fs=false @dispose');
       enableFullScreenNotifier.value = false;
       restoreEdgeToEdgeBars();
     }
@@ -651,16 +653,19 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   /// 沉浸模式联动（isZoomedNotifier → enableFullScreenNotifier）。
   void _onZoomedForImmersive() {
+    debugPrint('[IMM] zoomed=${isZoomedNotifier.value} fs=${enableFullScreenNotifier.value} before=$_fullscreenBeforeZoom');
     if (!mounted) return;
     if (isZoomedNotifier.value) {
       _fullscreenBeforeZoom ??= enableFullScreenNotifier.value;
       if (!enableFullScreenNotifier.value) {
+        debugPrint('[IMM] fs=true @zoomed');
         enableFullScreenNotifier.value = true;
       }
     } else {
       final restore = _fullscreenBeforeZoom ?? false;
       _fullscreenBeforeZoom = null;
       if (enableFullScreenNotifier.value != restore) {
+        debugPrint('[IMM] fs=$restore @restore');
         enableFullScreenNotifier.value = restore;
       }
     }
@@ -843,6 +848,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
       // （_fullscreenBeforeZoom 复位一并归位）。与双击共存有 300ms
       // 单击延迟（等双击窗口），标准行为；普通态 tap 无操作。
       onTap: () {
+        debugPrint('[IMM] tap zoomed=${isZoomedNotifier.value}');
         if (isZoomedNotifier.value) {
           isZoomedNotifier.value = false;
         }
@@ -950,6 +956,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
               return;
             }
             _selectedIndexNotifier.value = index;
+            // sel 更新即刷 chrome entry：面板内容（_buildPanelOverlay 的
+            // _selectedFile）在 entry builder 求值，翻页不经 setState
+            //（shouldDisableScroll 同值短路），不补此链 = 面板信息不随
+            // 翻页实时变化（真机实证 2026-09-12）。
+            _scheduleChromeRefresh();
             cachePerfEvent('page idx=$index id=${_files[index].id}');
             widget.onIndexChanged?.call(index);
             _syncThumbTo(index);
@@ -973,7 +984,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
           // 垂直手势门仍用），仅退出 physics 判定。
           physics: _swipeLocked || _popping
               ? const NeverScrollableScrollPhysics()
-              : const PageScrollPhysics(parent: BouncingScrollPhysics()),
+              // 【snap 快收尾】默认 PageScrollPhysics spring 过阻尼
+              //（100/1.1）尾巴长 =「最后一小段减速感」；Snap 版
+              // stiffness 200 / ratio 0.9 快落位轻弹（真机体感实证
+              // 2026-09-12）。parent Bouncing 保留 overscroll 手感。
+              : const SnapPageScrollPhysics(parent: BouncingScrollPhysics()),
           controller: _pageController,
           itemCount: _files.length,
       ),
@@ -1479,6 +1494,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
     _claimStripIndex(i);
     if (i == _selectedIndexNotifier.value) return;
     _selectedIndexNotifier.value = i;
+    _scheduleChromeRefresh(); // 面板信息随 sel 实时变化（见 onPageChanged 注释）
     widget.onIndexChanged?.call(i);
     _thumbCenterIndex?.value = i;
     if (_pageController.hasClients) {
@@ -2128,6 +2144,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // 跳回恢复的那张：主图 + 选中态 + 缩略图条居中。
     final newIndex = removedIndex.clamp(0, _files.length - 1);
     _selectedIndexNotifier.value = newIndex;
+    _scheduleChromeRefresh(); // 面板信息随 sel 实时变化（见 onPageChanged 注释）
     widget.onIndexChanged?.call(newIndex);
     if (_pageController.hasClients) _pageController.jumpToPage(newIndex);
     _syncThumbTo(newIndex);
@@ -2156,6 +2173,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
     setState(() => _detailsOpen = true);
     // 面板打开期间底栏/缩略图条需可见、顶栏随占比淡出:强制退出全屏(edge-to-edge)。
     if (enableFullScreenNotifier.value) {
+      debugPrint('[IMM] fs=false @panel');
       enableFullScreenNotifier.value = false;
       restoreEdgeToEdgeBars();
     }

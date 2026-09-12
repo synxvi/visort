@@ -148,11 +148,15 @@ class ProbeLog with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // paused 及更深状态：同步冲刷（进程随时可能被杀）。
+    // paused 及更深状态：冲刷（进程随时可能被杀）。
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
+      // ⚠️ 只走 _flush()：其内部自带串行 flush 链（wrote 才 flush）。
+      // 此前外部再 _sink?.flush() 与内部 Future 链并发 =「Bad state:
+      // StreamSink is bound to a stream」（diag 实证，审查 P2）；且
+      // _rotating 中外部 flush 会撞 close。wrote=false 时缓冲本空无需
+      // 冲刷；IOSink 无同步 flush，内部链已是最快路径。
       _flush();
-      _sink?.flush();
     }
   }
 

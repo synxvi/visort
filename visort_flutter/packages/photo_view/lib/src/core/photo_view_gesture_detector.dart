@@ -166,6 +166,10 @@ class PhotoViewGestureRecognizer extends ScaleGestureRecognizer {
 
   @override
   void rejectGesture(int pointer) {
+    // 同步清 fork 侧指针表（基类 rejectGesture 只清它自己的）：否则
+    // 残留死指针位置构成假 span——虽被 _yielded 挡住不参与判定，属
+    // 脏状态（审查 P2：多指让位场景的隐患源头），一行根除。
+    _pointerLocations.remove(pointer);
     _yielded = true;
     super.rejectGesture(pointer);
   }

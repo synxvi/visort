@@ -147,10 +147,13 @@ void main() {
       await g2.moveBy(const Offset(-50, 0)); // 总 -500
       await tester.pump(const Duration(milliseconds: 16));
     }
+    // 断言取拖动中（让位→原生滚动的事实本身）；松手后 spring 接管
+    // 快收尾，位置随时窗变化不可断言。
+    final offsetDuringDrag = pageController.hasClients ? pageController.offset : 0.0;
     await g2.up();
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(pageController.hasClients && pageController.offset > 0, true,
+    expect(offsetDuringDrag > 0, true,
         reason: '贴边外拖应让位给 PageView 原生滚动（offset > 0）');
   });
 
@@ -246,12 +249,12 @@ void main() {
         reason: '前置自检：图片应已贴左边界');
 
     // 2) 贴边外拖让位：PageView 接管露出下一张（offset > 0）。
+    // 断言取拖动中（让位事实）；松手后 spring 快收尾位置随时窗变化。
     final g2 = await tester.startGesture(const Offset(400, 300));
     for (var i = 0; i < 4; i++) {
       await g2.moveBy(const Offset(-30, 0)); // 总 -120
       await tester.pump(const Duration(milliseconds: 16));
     }
-    await tester.pump();
     final offsetAtYield = pageController.hasClients ? pageController.offset : 0.0;
     expect(offsetAtYield, greaterThan(0),
         reason: '前置自检：外拖应让位 PageView（露出下一张）');
@@ -588,5 +591,98 @@ void main() {
 
     expect(pageController.hasClients ? pageController.offset : 0.0, 0.0,
         reason: '放大态贴边外拖松手应弹回当前页，不得被速度通道强制翻页');
+  });
+
+  // 过程断言（2026-09-12 用户实证「后半动画没有直接显示下一张」）：
+  // 拖一半松手翻页 → 两拍接管 → 动画进行中（50ms 处）offset 必须仍在
+  // 途中——瞬到 800 = 动画被瞬完。
+  testWidgets('拖一半松手翻页：动画过程可见（不瞬跳）', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final pageController = PageController();
+    await tester.pumpWidget(buildApp(pageController: pageController));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // 慢拖到 0.56 页（450px，过半页断点）松手——零速位置通道翻页。
+    final g = await tester.startGesture(const Offset(400, 300));
+    for (var i = 0; i < 9; i++) {
+      await g.moveBy(const Offset(-50, 0));
+      await tester.pump(const Duration(milliseconds: 40));
+    }
+    await g.up();
+    // 两拍接管窗。
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(milliseconds: 16));
+    final afterBeats = pageController.offset;
+    // 动画进行中（首 tick dt=0 是 Ticker 语义，第二帧起 dt 递增）：
+    // 再两帧（16+50ms）后 offset 必须在途中。
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(milliseconds: 50));
+    final mid = pageController.offset;
+    expect(mid, greaterThan(afterBeats + 5),
+        reason: '动画应进行中（offset 持续增长），瞬到终点=动画瞬完');
+    expect(mid, lessThan(799),
+        reason: '50ms 处不应已到终点（弹簧 110 从 450 走 350px 需 ~250ms）');
+    await tester.pumpAndSettle();
+    expect(pageController.offset, 800.0, reason: '最终落位下一页');
+  });
+
+  // 用户实证（2026-09-12）：上滑面板偶尔多翻一页/回前一页——垂直手势
+  // 松手时的水平抖动/回勾被速度通道（只采 dx）劫持成水平轻扫。修复：
+  // dy 主导的手势速度通道静默。手写事件复刻：垂直大位移 + 收尾水平抖。
+  testWidgets('垂直手势松手（水平抖动）→ 速度通道静默不翻页', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final pageController = PageController();
+    await tester.pumpWidget(buildApp(pageController: pageController));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // 上滑：dy -160（垂直主导），仅末步带水平回勾 dx -8（累计 < 18
+    // slop 不滚 PageView；16ms/-8px ≈ -500px/s > 250 阈值——修复前
+    // 速度通道劫持翻页）。harness 无垂直手势层（真机 zoomable 有，
+    // 垂直 slop 先赢），此处验证组件的速度采样静默。
+    const pointer = 7;
+    await tester.sendEventToBinding(PointerDownEvent(
+      pointer: pointer,
+      position: const Offset(400, 400),
+      timeStamp: Duration.zero,
+    ));
+    await tester.pump(const Duration(milliseconds: 16));
+    var t = 16;
+    final path = <Offset>[
+      const Offset(400, 380), const Offset(400, 355),
+      const Offset(400, 330), const Offset(400, 305),
+      const Offset(400, 280), const Offset(400, 260),
+      const Offset(392, 244),
+    ];
+    Offset prev = const Offset(400, 400);
+    for (final pos in path) {
+      await tester.sendEventToBinding(PointerMoveEvent(
+        pointer: pointer,
+        position: pos,
+        delta: pos - prev,
+        timeStamp: Duration(milliseconds: t),
+      ));
+      prev = pos;
+      t += 16;
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await tester.sendEventToBinding(PointerUpEvent(
+      pointer: pointer,
+      position: prev,
+      timeStamp: Duration(milliseconds: t),
+    ));
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pumpAndSettle();
+
+    expect(pageController.offset, 0.0,
+        reason: '垂直主导手势（上滑面板）不得被水平速度通道翻页');
   });
 }

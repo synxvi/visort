@@ -120,12 +120,18 @@ class DoubleTapIntentHolder {
   ///（真机实证：恢复默认大小后又回到放大态、栏再消失）。
   bool zoomIn = false;
 
+  /// 意图存活窗（用户双击 1s / 重放 150ms）。重放续写若沿用 1s 窗，
+  /// 放大动画正常完成后意图仍活 1s——期间任何无关重建（pop 往返/页
+  /// 重建）都会幽灵重放放大（审查 P2）。150ms 覆盖 insets 连环重建
+  /// 间隔（~20ms/轮，需逐轮重放续命），动画正常完成后无重建即过期。
+  Duration window = const Duration(seconds: 1);
+
   /// 匹配本图、在时间窗内、且为放大意图的待处理坐标（否则 null 并视情
   /// 况消费清除）。
   Offset? takeFor(String id) {
     final t = at;
     if (t == null || global == null || photoId != id) return null;
-    if (DateTime.now().difference(t) > const Duration(seconds: 1) || !zoomIn) {
+    if (DateTime.now().difference(t) > window || !zoomIn) {
       clear();
       return null;
     }

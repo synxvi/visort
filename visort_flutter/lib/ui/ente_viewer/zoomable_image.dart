@@ -370,8 +370,18 @@ class _ZoomableImageState extends State<ZoomableImage> {
         widget.shouldDisableScroll!(value != PhotoViewScaleState.initial);
       }
       _isZooming = value != PhotoViewScaleState.initial;
+      debugPrint('[IMM] cb state=$value -> notifier=$_isZooming cur=$_isCurrentPage');
       final state = InheritedDetailPageState.maybeOf(context);
-      state?.isZoomedNotifier.value = _isZooming;
+      // ⚠️ 共享 notifier 只准【当前页】写：notifier 表达「当前页放大态」，
+      // 驱动沉浸联动。翻页期的回弹边沿会触发翻走页复位（setInvisibly
+      // 经 stream 通知本 callback）与预建页订阅回放（initial）——这些
+      // 「别页」的 initial 若照写，会把当前页刚写入的 true 同毫秒覆盖回
+      // false = 沉浸闪进闪退（真机 [IMM] 实证 2026-09-12：fs=true 后
+      // 紧跟 fs=false @restore，「翻页后双击放大不进沉浸」的根，非稳定
+      // 触发=只在双击撞上回弹边沿窗口时发生）。
+      if (_isCurrentPage) {
+        state?.isZoomedNotifier.value = _isZooming;
+      }
       // 【放大升档触发】离散状态信号（无数值判据边界）：进入放大态即
       // 请求 4096（immich loadOriginal 语义的按需版）。幂等——重复
       // zoomedIn/已到位请求被 requestUpTo 吞。放大态与翻页/条/网格
@@ -402,7 +412,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
       widget.shouldDisableScroll?.call(hasPendingZoom);
       if (hasPendingZoom) {
         inh?.isZoomedNotifier.value = true;
-        _handleTopDoubleTap(pending);
+        _handleTopDoubleTap(pending, replay: true);
         return;
       }
       // 【沉浸粘性】新页 initial 不写 isZoomedNotifier=false：沉浸态翻页
@@ -474,6 +484,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 并禁用上下滑手势。与 initState postFrame 的初始上报对齐，同步复位。
     if (_isZooming) {
       _isZooming = false;
+      debugPrint('[IMM] cb=false @replace-photo');
       widget.shouldDisableScroll?.call(false);
       final state = _inherited;
       state?.isZoomedNotifier.value = false;
@@ -622,6 +633,9 @@ class _ZoomableImageState extends State<ZoomableImage> {
     final zoomed =
         _isZooming ||
         _scaleStateController.scaleState != PhotoViewScaleState.initial;
+    // 停掉残余的程序化缩放动画（双击 300ms 窗内甩翻走的场景）：复位后
+    // tick 仍写放大值 = 翻回该页放大态（审查 P2，见 core 方法注释）。
+    _coreKey.currentState?.cancelProgrammaticAnimations();
     _initialScale = null;
     _photoViewController.reset();
     _scaleStateController.setInvisibly(PhotoViewScaleState.initial);
@@ -781,8 +795,10 @@ class _ZoomableImageState extends State<ZoomableImage> {
     return syncDone;
   }
 
-  /// 顶层双击（global）→ core 局部坐标 → 精准缩放。
-  void _handleTopDoubleTap(Offset globalPosition) {
+  /// 顶层双击（global）→ core 局部坐标 → 精准缩放。[replay] = 重放
+  /// 调用（initState postFrame）：续写意图用 150ms 短窗（见
+  /// DoubleTapIntentHolder.window doc），防正常完成后 1s 内的幽灵重放。
+  void _handleTopDoubleTap(Offset globalPosition, {bool replay = false}) {
     final box = context.findRenderObject();
     if (box is! RenderBox || !box.hasSize) return;
     // 【双击意图重放】记录待处理意图（State 持有单例，见 initState 注释）：
@@ -799,7 +815,10 @@ class _ZoomableImageState extends State<ZoomableImage> {
         ..global = globalPosition
         ..photoId = _photo.id
         ..at = DateTime.now()
-        ..zoomIn = !zoomed;
+        ..zoomIn = !zoomed
+        ..window = replay
+            ? const Duration(milliseconds: 150)
+            : const Duration(seconds: 1);
     }
     _coreKey.currentState?.doubleTapZoom(box.globalToLocal(globalPosition));
   }
@@ -1451,16 +1470,17 @@ class _ZoomableImageState extends State<ZoomableImage> {
         _scaleStateController.scaleState == PhotoViewScaleState.zoomedIn &&
         _photoViewController.scale != null;
     if (!shouldFixPosition) return;
-    final prevImageInfo = await _resolveImageInfo(previewImageProvider);
+    final prevSize = await _resolveImageSize(previewImageProvider);
     if (!mounted) return; // await 期间 dispose：下文重建 controller/订阅已无意义
-    final finalImageInfo = await _resolveImageInfo(finalImageProvider);
+    final finalSize = await _resolveImageSize(finalImageProvider);
+    if (finalSize == null) return; // 尺寸不可得：跳过修正（视觉小跳换解码安全）
     final previousScale = _photoViewController.scale!;
     final previousRelativeScale = _initialScale != null && _initialScale! > 0
         ? previousScale / _initialScale!
         : null;
     final scale =
         previousScale /
-        (finalImageInfo.image.width / prevImageInfo.image.width);
+        (finalSize.width / prevSize!.width);
     final currentPosition = _photoViewController.value.position;
     // 旧 controller 的订阅已取消，重建前 dispose 旧实例（stream/notifier
     // 不 close 会随每张「缩放中切原图」累积泄漏，审查实证 P2）。
@@ -1483,20 +1503,32 @@ class _ZoomableImageState extends State<ZoomableImage> {
     _scaleStateController.scaleState = PhotoViewScaleState.zoomedIn;
   }
 
-  /// 解析 ImageProvider 首帧拿尺寸（ente 用 Flutter getImageInfo 顶层函数，
-  /// 3.44 已移除，改用 resolve + listener 等价实现）。
-  Future<ImageInfo> _resolveImageInfo(ImageProvider provider) {
+  /// 解析 ImageProvider 首帧拿【尺寸】（ente 用 Flutter getImageInfo 顶层
+  /// 函数，3.44 已移除，改用 resolve + listener 等价实现）。
+  ///
+  /// ⚠️ 只读探测必须 containsKey 守卫：resolve 在缓存外会【发起解码】
+  ///（实证）——本调用只为拿宽高算换算比，未命中直接返回 null 跳过修正
+  ///（省一次整图解码 + cache 占位；ImageInfo 的帧归 completer 管，尺寸
+  /// 非资源不涉释放——旧实现持 ImageInfo 属无用引用，审查 P2）。
+  Future<Size?> _resolveImageSize(ImageProvider provider) async {
+    if (!PaintingBinding.instance.imageCache.containsKey(provider)) {
+      return null;
+    }
     final stream = provider.resolve(ImageConfiguration.empty);
-    final completer = Completer<ImageInfo>();
+    final completer = Completer<Size?>();
     late ImageStreamListener listener;
     listener = ImageStreamListener(
       (info, _) {
-        if (!completer.isCompleted) completer.complete(info);
+        if (!completer.isCompleted) {
+          completer.complete(Size(
+            info.image.width.toDouble(),
+            info.image.height.toDouble(),
+          ));
+        }
         stream.removeListener(listener);
       },
       onError: (Object e, StackTrace? s) {
-        if (!completer.isCompleted)
-          completer.completeError(e, s ?? StackTrace.empty);
+        if (!completer.isCompleted) completer.complete(null);
         stream.removeListener(listener);
       },
     );

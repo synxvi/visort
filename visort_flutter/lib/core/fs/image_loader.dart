@@ -238,20 +238,26 @@ class _AndroidBytesImageProvider
   /// 防）。
   Future<ui.Image> loadJpegImageForUpgrade(ImageDecoderCallback decode) async {
     final tw = targetWidth!;
-    final r = await ServicePolicy.instance
-        .run(
-          priority,
-          () => _msChannel.readSampledJpeg(
+    final r = await ServicePolicy.instance.run(
+      priority,
+      // ⚠️ timeout 必须在 job 内（channel 调用上）：裹在 run 外会把
+      // 4096 单飞排队（40ms 轮询）+ ServicePolicy 排队都计入 8s——
+      // 连发时等待者被误杀 TimeoutException，该图 4096 请求已消费
+      // 永不再发 = 永久停 1152（审查 P2）。job 内计时 = 只量
+      // channel+解码本身；且超时抛出必走 _run4096Exclusive 的 finally
+      // 清 owner——连带根治「owner 卡死无超时 → 等待者死循环」。
+      () => _msChannel
+          .readSampledJpeg(
             ref.relativePath,
             targetWidth: tw,
-          ),
-          // ⚠️ tag 必须与 _handleAbandoned 的压级匹配串
-          //（'full4096:${id}'）一致：缺 tag 时三处 deprioritizeQueued
-          // 永不命中 = 快速翻页离屏压级死代码，在途 4096 全 p150 挤占
-          // 邻取预取（2026-09-11 审查 P1）。
-          tag: 'full4096:${ref.id}',
-        )
-        .timeout(const Duration(seconds: 8));
+          )
+          .timeout(const Duration(seconds: 8)),
+      // ⚠️ tag 必须与 _handleAbandoned 的压级匹配串
+      //（'full4096:${id}'）一致：缺 tag 时三处 deprioritizeQueued
+      // 永不命中 = 快速翻页离屏压级死代码，在途 4096 全 p150 挤占
+      // 邻取预取（2026-09-11 审查 P1）。
+      tag: 'full4096:${ref.id}',
+    );
     final buffer = await ui.ImmutableBuffer.fromUint8List(r.bytes);
     // 原图 bytes 原样（EXIF orientation 由引擎 SkCodec 应用）：原尺寸解。
     final codec = await decode(buffer);

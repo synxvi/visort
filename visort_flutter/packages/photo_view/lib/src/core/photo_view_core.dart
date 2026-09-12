@@ -140,6 +140,20 @@ class PhotoViewCoreState extends State<PhotoViewCore>
   bool get isProgrammaticZoomingActive =>
       programmaticScaleAnimationActive || _doubleTapController.isAnimating;
 
+  /// [visort fork] 停掉一切进行中的程序化缩放动画（onScaleStart 同款
+  /// 清理）。翻走复位（zoomable_image._onPageScrollingForReset）必须
+  /// 先调：双击动画 300ms 窗内甩翻走时，复位后残余 tick 仍会写放大
+  /// 值 → 翻回该页是放大态（「翻走不保留缩放态」失效，审查 P2）。
+  /// stop() 不触发 status 回调，programmaticScaleAnimationActive 手动
+  /// 同步复位（理由见 onScaleStart 注释）。
+  void cancelProgrammaticAnimations() {
+    _scaleAnimationController.stop();
+    _positionAnimationController.stop();
+    _rotationAnimationController.stop();
+    _doubleTapController.stop();
+    programmaticScaleAnimationActive = false;
+  }
+
   /// [visort fork] 精准双击：scale 与 position 同步插值的专用动画
   /// （300ms decelerate，主分支算法）。
   late final AnimationController _doubleTapController;
@@ -325,7 +339,9 @@ class PhotoViewCoreState extends State<PhotoViewCore>
       curve: Curves.decelerate,
     );
     if (zooming) {
-      scaleStateController.setInvisibly(PhotoViewScaleState.zoomedIn);
+      // 同值也通知（见 controller 方法 doc）：残留 zoomedIn 时
+      // setInvisibly 静默吞通知 = 外层沉浸链失联（栏不隐藏）。
+      scaleStateController.setZoomedInExplicitly();
     }
   }
 
@@ -440,9 +456,12 @@ class PhotoViewCoreState extends State<PhotoViewCore>
         controller.position = clampPosition();
       }
     }
-    // 缩回动画结束：scale==initialScale 时状态归 initial（否则 _blindScaleListener
-    // 报 zoomedOut → 外层 shouldDisableScroll/isZoomed 残留 true）。
-    if (status == AnimationStatus.completed && scale == scaleBoundaries.initialScale) {
+    // 缩回动画结束：scale≈initialScale（1e-3 容差吸收 compensate 的
+    // tween ratio 换算舍入；精确相等在换帧后失准 → zoomedIn 残留）时
+    // 状态归 initial（否则 _blindScaleListener 报 zoomedOut → 外层
+    // shouldDisableScroll/isZoomed 残留 true）。
+    if (status == AnimationStatus.completed &&
+        (scale - scaleBoundaries.initialScale).abs() < 1e-3) {
       scaleStateController.setInvisibly(PhotoViewScaleState.initial);
     }
   }
@@ -578,6 +597,16 @@ class PhotoViewCoreState extends State<PhotoViewCore>
               begin: scaleTween.begin! * ratio,
               end: scaleTween.end! * ratio,
             );
+          }
+          // 【捏合中换帧】_scaleBefore 同步换算（同 tween 的道理）：
+          // onScaleUpdate 每帧 newScale = _scaleBefore × details.scale——
+          // 换帧后 childSize 变、controller.scale 已 ×ratio，而基线还在
+          // 旧坐标系 → 下一 update 瞬间写回旧坐标 scale = 视觉跳 ratio
+          // 倍（探针实测 750→1500，审查 P2）。onScaleEnd 的纯平移甩动
+          // 判定（_scaleBefore/_scale == 1.0）两侧同乘不受影响。
+          final sb = _scaleBefore;
+          if (sb != null) {
+            _scaleBefore = sb * ratio;
           }
         }
       }

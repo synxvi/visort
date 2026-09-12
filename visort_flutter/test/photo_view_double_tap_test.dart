@@ -120,4 +120,43 @@ void main() {
     expect(controller.position, Offset.zero, reason: '中心双击锚点即中心，position 归零');
     expect(scaleStateController.scaleState, PhotoViewScaleState.zoomedIn);
   });
+
+  // 用户实证（2026-09-12）：渲染未落位时双击放大成功但顶/底栏不隐藏。
+  // 根因：缩回动画被换帧重建杀死 → 终态归位 listener 一并死亡 →
+  // scaleState 残留 zoomedIn；下次双击放大 setInvisibly(zoomedIn) 撞
+  // 同值守卫静默吞通知 → 外层沉浸链失联。修复：双击放大走
+  // setZoomedInExplicitly（同值也推 stream）。
+  testWidgets('残留 zoomedIn 后双击放大：callback 必须收到通知（栏隐藏链）', (tester) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final controller = PhotoViewController();
+    final scaleStateController = PhotoViewScaleStateController();
+    final states = <PhotoViewScaleState>[];
+    await tester.pumpWidget(buildApp(
+      controller: controller,
+      scaleStateController: scaleStateController,
+      states: states,
+    ));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // 第一次双击放大（正常链路：states 收到 zoomedIn）。
+    await doubleTapAt(tester, const Offset(400, 300));
+    expect(states.last, PhotoViewScaleState.zoomedIn);
+
+    // 模拟残留：外层通知已消费（清空），scaleState 停 zoomedIn、
+    // 视觉回到 initial（缩回动画被杀、归位 listener 死亡的现场）。
+    states.clear();
+    controller.setScaleInvisibly(600);
+    controller.position = Offset.zero;
+
+    // 再次双击放大：视觉 initial → zooming=true → setZoomedInExplicitly
+    // ——值已 zoomedIn，必须仍推 stream（修复前被守卫吞掉）。
+    await doubleTapAt(tester, const Offset(400, 300));
+
+    expect(states, contains(PhotoViewScaleState.zoomedIn),
+        reason: '残留 zoomedIn 时双击放大必须重新通知（沉浸链「栏不隐藏」的根）');
+  });
 }
