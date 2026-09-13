@@ -34,9 +34,6 @@ import 'detail_page_state.dart';
 import 'gallery_groups.dart' show GalleryGroups;
 import 'thumbnail_widget.dart' show ThumbnailPlaceHolder;
 
-/// ente 常量（core/constants.dart dragSensitivity = 8）：上滑详情/下滑关闭阈值。
-const double _kDragSensitivity = 8.0;
-
 /// 重加载（512 缩略图 + 下采样原图）起跳延迟。
 ///
 /// 缩略图条快甩联动主图（跟手 jumpToPage / 停止后 animateToPage 扫过）
@@ -57,11 +54,16 @@ class ZoomableImage extends StatefulWidget {
   final String? tagPrefix;
   final Decoration? backgroundDecoration;
 
-  /// 上滑（>8px）→ 详情面板（visort 适配：外层 DetailPage 决定展示）。
-  final VoidCallback? onSwipeUp;
+  /// 垂直拖拽逐帧转发（非放大态）：语义判定（呼出/收回面板/退出）统一在
+  /// DetailPage——那里持有面板 controller，可全程跟手驱动（旧「>8px 一次
+  /// 性触发 swipe」链面板各跑各的动画，多次拖拽动画断掉不接续）。
+  final GestureDragUpdateCallback? onViewerVerticalDrag;
 
-  /// 下滑（>8px）→ 返回（visort 适配：外层 DetailPage 面板打开时改为收面板）。
-  final VoidCallback? onSwipeDown;
+  /// 垂直拖拽松手（snap 展开或收回由速度+位置决定）。
+  final GestureDragEndCallback? onViewerVerticalDragEnd;
+
+  /// 垂直拖拽被系统打断（通知栏下拉等）：按当前位置 snap 收尾。
+  final VoidCallback? onViewerVerticalDragCancel;
 
   /// 原图（下采样）就绪回调（外层记录 id，退出时 evict 缓存）。
   final ValueChanged<String>? onFullLoaded;
@@ -81,8 +83,9 @@ class ZoomableImage extends StatefulWidget {
     this.shouldDisableScroll,
     this.tagPrefix,
     this.backgroundDecoration,
-    this.onSwipeUp,
-    this.onSwipeDown,
+    this.onViewerVerticalDrag,
+    this.onViewerVerticalDragEnd,
+    this.onViewerVerticalDragCancel,
     this.onFullLoaded,
     this.onHdLoaded,
   });
@@ -1021,24 +1024,15 @@ class _ZoomableImageState extends State<ZoomableImage> {
       );
     }
 
-    // 垂直手势（ente 原版）：缩放中禁用；下滑关闭、上滑详情。阈值 8px。
-    final GestureDragUpdateCallback? verticalDragCallback = _isZooming
-        ? null
-        : (d) {
-            if (!_isZooming) {
-              if (d.delta.dy > _kDragSensitivity) {
-                if (widget.onSwipeDown != null) {
-                  widget.onSwipeDown!();
-                } else {
-                  unawaited(Navigator.maybePop(context));
-                }
-              } else if (d.delta.dy < (_kDragSensitivity * -1)) {
-                widget.onSwipeUp?.call();
-              }
-            }
-          };
+    // 垂直手势：缩放中禁用（平移图片）；否则逐帧转发给 DetailPage 统一
+    // 跟手驱动（呼出/收回详情面板、下滑退出）。recognizer 本身保留在此
+    // 层——arena 竞争行为（垂直赢 PageView 翻页 / 输 photo_view 放大态）
+    // 与旧链完全一致。
     return GestureDetector(
-      onVerticalDragUpdate: verticalDragCallback,
+      onVerticalDragUpdate: _isZooming ? null : widget.onViewerVerticalDrag,
+      onVerticalDragEnd: _isZooming ? null : widget.onViewerVerticalDragEnd,
+      onVerticalDragCancel:
+          _isZooming ? null : widget.onViewerVerticalDragCancel,
       child: Stack(
         children: [
           content,
@@ -1227,6 +1221,28 @@ class _ZoomableImageState extends State<ZoomableImage> {
     if (_loadedFinalImage && _progressiveStream == null && _isCurrentPage) {
       _imageProvider = _attachProgressive() ?? _imageProvider;
     }
+    // 【邻页渐进直挂】此前邻页预建走 _pickCachedProvider 低档（cell/720
+    // bytes），翻到才换渐进链——换链窗口 provider 错位 = 滑动条掠过大图
+    // 时闪起始页/低清跳变（真机实证 2026-09-12，非放大态同样触发）。
+    // 邻页 build 直挂渐进链（p250 不抢当前页门），与 heavy 预取的 1152
+    // 同 key 同类型 → completer 首帧同步命中 cache；翻到时 bump 回 p50
+    //（下方当前页分支），全程零换链。
+    if (_progressiveStream == null && !_isCurrentPage && _isNeighborPage) {
+      final progressive =
+          _attachProgressive(priority: RequestPriority.prefetchFull);
+      if (progressive != null) _imageProvider = progressive;
+    }
+    // 【翻到 bump】邻页预载的渐进 1152 任务（p250）在本页成为当前页时
+    // 升 p50 插队——否则预载慢于翻页节奏时翻到还要等 p250 队尾。
+    if (_isCurrentPage && _progressiveStream != null) {
+      _bumpFullToPriority(
+        computeViewerTargetWidth(
+          MediaQuery.sizeOf(context).width *
+              MediaQuery.devicePixelRatioOf(context),
+        ),
+        RequestPriority.viewerImage,
+      );
+    }
     _probePassThrough(context);
     if (!_loadedSmallThumbnail &&
         !_loadedLargeThumbnail &&
@@ -1366,7 +1382,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// 调用点：_pickCachedProvider 的 full 同步命中（pick 短路修复）与
   /// _updateViewWithFinalImage（直通/heavy 异步路径）。幂等：已有活流返回
   /// 先前 provider。返回渐进 provider（GIF/非安卓返回 null，调用方回退）。
-  ImageProvider? _attachProgressive() {
+  ImageProvider? _attachProgressive({int priority = RequestPriority.viewerImage}) {
     if (_progressiveStream != null) return null; // 已接（幂等）
     if (!Platform.isAndroid || _photo.mime == 'image/gif') return null;
     final tw = computeViewerTargetWidth(
@@ -1376,6 +1392,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
     final progressive = buildProgressiveViewerProvider(
       _ref,
       baseTargetWidth: tw,
+      priority: priority,
     );
     _progressiveProvider = progressive;
     _progressiveStream = progressive.resolve(const ImageConfiguration());

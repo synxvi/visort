@@ -165,6 +165,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
   bool _detailsOpen = false;
   AnimationController? _panelCtrl;
 
+  /// 图片区垂直拖拽跟手状态：激活后由指针逐帧驱动 _panelCtrl（上滑呼出
+  /// /面板开着上下全程跟手，与把手条同款手感）。
+  bool _panelDragActive = false;
+
+  /// 激活前累计位移：面板关着时判向（上滑过阈呼出 / 下滑过阈退出）。
+  double _panelDragAccum = 0;
+
+  /// 图片区垂直拖拽激活阈值：与旧 swipe 8px 感知阈值一致（超即跟手）。
+  static const double _kPanelDragActivateSlop = 8.0;
+
   // ─────────────── 底栏缩略图条 ───────────────
   /// 条居中项双向桥（Filmstrip.center）：外部写 = 程序滚动+聚焦指令
   ///（主图翻页联动/删除同步）；条滚动中组件实时写（跟手联动入口）。
@@ -886,9 +896,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
               }
             },
             backgroundDecoration: const BoxDecoration(color: Colors.black),
-            onSwipeUp: () => _showDetails(file),
-            // 面板打开时下滑 → 收面板；否则默认返回。
-            onSwipeDown: _detailsOpen ? _animateClose : null,
+            // 图片区垂直拖拽统一跟手链：上滑呼出/开着上下全程跟手/下滑退出。
+            onViewerVerticalDrag: _handleViewerVerticalDrag,
+            onViewerVerticalDragEnd: _handleViewerVerticalDragEnd,
+            onViewerVerticalDragCancel: _handleViewerVerticalDragCancel,
             onFullLoaded: _onFullImageLoaded,
             onHdLoaded: _onHdLoaded,
           );
@@ -914,6 +925,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
             );
           },
           onPageChanged: (index) {
+            debugPrint('[TSB] opc idx=$index driven=$_pagerDrivenByThumb sel=${_selectedIndexNotifier.value}');
             if (_popping) return; // pop 冻结：主图不再换页（源端 Hero 稳定）
             if (_pagerDrivenByThumb) {
               // 缩略图条驱动主图:跨多页时中间页忽略,不回弹缩略图条;
@@ -1491,6 +1503,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   /// 缩略图条滚动停止/点按 → 主图跟随。靠 `i == 当前` 天然防回环。
   void _onThumbPageChanged(int i) {
+    debugPrint('[TSB] i=$i sel=${_selectedIndexNotifier.value}');
     _claimStripIndex(i);
     if (i == _selectedIndexNotifier.value) return;
     _selectedIndexNotifier.value = i;
@@ -1517,6 +1530,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
           }
         },
       );
+      debugPrint('[TSB] a2p i=$i');
       unawaited(
         _pageController
             .animateToPage(
@@ -2167,7 +2181,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 同步动画:_panelExtent(0..1,相对屏高)是图片上推 / 顶栏淡出 / 缩略图条淡出的
   /// 唯一驱动源。Overlay 自有面板:单一 _panelCtrl 驱动面板位移 + 图片上推,严格同步,
   /// 无路由(不误 pop)、无 DSS(无 snap 卡 ticker)。value 0=关闭/1=展开。
-  void _showDetails(MsImageInfo info) {
+  ///
+  /// [beginDragging]：图片区上滑跟手呼出——value 停在 0 由指针逐帧驱动
+  /// （见 [_handleViewerVerticalDrag]），不跑自动展开动画。
+  void _showDetails(MsImageInfo info, {bool beginDragging = false}) {
     if (_detailsOpen) return;
     // setState:PopScope 的 canPop 依赖 _detailsOpen,不重建则系统返回直接退出。
     setState(() => _detailsOpen = true);
@@ -2186,6 +2203,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
           _panelExtent.value = _panelCtrl!.value * _kDetailInitial;
         });
     _panelCtrl!.value = 0;
+    if (beginDragging) return; // 跟手呼出：指针驱动，无自动动画
     // 打开:easeOut(前快后慢)。
     _panelCtrl!.animateTo(
       1,
@@ -2250,6 +2268,64 @@ class _DetailPageState extends ConsumerState<DetailPage>
     } else {
       _animateClose();
     }
+  }
+
+  /// 图片区垂直拖拽统一入口（ZoomableImage 逐帧转发 delta，非放大态）。
+  ///
+  /// 跟手语义（预期：呼出后手指相当于一直按在面板把手上）：
+  ///  - 已激活：面板逐帧跟随（上滑 value 增/下滑 value 减）——增量式写入，
+  ///    中途反向立即跟随，snap 动画被 value setter 隐式 stop 就地冻结。
+  ///  - 面板开着未激活：单帧 |dy| 过阈即激活（snap 动画进行中再拖 = 从
+  ///    当前值接续，修「多次拖拽动画断掉不接续」——旧链一次触发后守卫
+  ///    吞帧，两个动画各跑各的）。
+  ///  - 面板关着：累计位移判向——上滑过阈【呼出并直接进入跟手】（value
+  ///    从 0 起由指针驱动，不再自动展开）；下滑过阈退出大图（旧 onSwipeDown
+  ///    兜底链，非跟手，保持原行为）。
+  ///
+  /// 水平拖到不了这里：VerticalDrag recognizer 在 arena 输给 PageView 的
+  /// 水平 drag 后不再收事件（翻页照旧）；放大态回调整体为 null（平移图片，
+  /// 既有语义）。点击收面板（onImageTap）也不受影响（tap recognizer 在
+  /// slop 后被 reject，不触发）。
+  void _handleViewerVerticalDrag(DragUpdateDetails d) {
+    final dy = d.delta.dy;
+    if (_panelDragActive) {
+      final ctrl = _panelCtrl;
+      if (ctrl != null) {
+        ctrl.value = (ctrl.value - dy / slideOutForPanel()).clamp(0.0, 1.0);
+      }
+      return;
+    }
+    if (_detailsOpen) {
+      if (dy.abs() >= _kPanelDragActivateSlop) {
+        _panelDragActive = true;
+        _panelCtrl?.stop();
+      }
+      return;
+    }
+    _panelDragAccum += dy;
+    if (_panelDragAccum <= -_kPanelDragActivateSlop) {
+      _panelDragActive = true;
+      final file = _fileAt(_selectedIndexNotifier.value);
+      if (file != null) _showDetails(file, beginDragging: true);
+    } else if (_panelDragAccum >= _kPanelDragActivateSlop) {
+      unawaited(Navigator.maybePop(context));
+    }
+  }
+
+  /// 图片区垂直拖拽松手：snap 二值（复用把手条同一收尾）。
+  void _handleViewerVerticalDragEnd(DragEndDetails d) {
+    _panelDragAccum = 0; // 未激活序列（单击等）也要清，防下次激活阈值漂移
+    if (!_panelDragActive) return;
+    _panelDragActive = false;
+    _onPanelDragEnd(d);
+  }
+
+  /// 图片区垂直拖拽被系统打断（通知栏下拉等）：零速按位置二值收尾。
+  void _handleViewerVerticalDragCancel() {
+    _panelDragAccum = 0;
+    if (!_panelDragActive) return;
+    _panelDragActive = false;
+    _onPanelDragEnd(DragEndDetails());
   }
 
   /// 详情面板 Overlay:固定 _kDetailInitial 可用区高度,Transform 跟随 _panelCtrl
