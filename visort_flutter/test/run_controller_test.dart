@@ -58,8 +58,14 @@ class FakeFileSystem implements FileSystemRepository {
     return true;
   }
 
+  /// deleteBatch 抛「用户取消系统弹窗」（2026-09-13 审查 P2 回归测试用）。
+  bool throwConsentCancelOnDelete = false;
+
   @override
   Future<Set<String>> deleteBatch(List<String> ids, String root) async {
+    if (throwConsentCancelOnDelete) {
+      throw ConsentCancelledException(ids.toSet());
+    }
     final ok = <String>{};
     for (final id in ids) {
       if (existing.contains(_key(root, id))) {
@@ -130,6 +136,23 @@ void main() {
     expect(fs.batchMoves.single.destPath, r'D:\Dest\General');
     // delete 走 deleteBatch（批量），验证结果而非 fs.deletes 单删记录
     expect(done.results!.deleted.length, 1);
+  });
+
+  test('用户取消删除弹窗 → 计 skipped 不误报 delete_failed（审查 P2）', () async {
+    fs.existing.add(r'D:\src' + '/' + 'b.jpg');
+    fs.throwConsentCancelOnDelete = true;
+
+    final decisions = LinkedHashMap<String, Decision>();
+    decisions['b.jpg'] = Decision.delete();
+
+    final session = _buildSession(decisions);
+    final events = await runner.run(session).toList();
+
+    final done = events.lastWhere((e) => e.done == true);
+    // 取消 ≠ 失败：不删除、不报错、计 skipped（决策保留可重跑）。
+    expect(done.results!.deleted, isEmpty);
+    expect(done.results!.errors, isEmpty);
+    expect(done.results!.skipped, contains('b.jpg'));
   });
 
   test('move 到根目录：destDir = destinationParent', () async {

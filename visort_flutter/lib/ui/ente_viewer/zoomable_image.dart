@@ -59,6 +59,13 @@ class ZoomableImage extends StatefulWidget {
   /// 性触发 swipe」链面板各跑各的动画，多次拖拽动画断掉不接续）。
   final GestureDragUpdateCallback? onViewerVerticalDrag;
 
+  /// 垂直拖拽开始（2026-09-13 审查 P2）：DetailPage 侧复位面板跟手状态。
+  /// 双指捏合会静默摘除 update/end/cancel 三回调（recognizer 随 _isZooming
+  /// 重建），在途手势的 end/cancel 不再派发 → 激活态残留，下一次垂直手势
+  /// 直接进跟手分支跳过判向（呼出/退出判定双失效一次）——新手势 start
+  /// 即复位，闭合这个跨手势窗口。
+  final GestureDragStartCallback? onViewerVerticalDragStart;
+
   /// 垂直拖拽松手（snap 展开或收回由速度+位置决定）。
   final GestureDragEndCallback? onViewerVerticalDragEnd;
 
@@ -84,6 +91,7 @@ class ZoomableImage extends StatefulWidget {
     this.tagPrefix,
     this.backgroundDecoration,
     this.onViewerVerticalDrag,
+    this.onViewerVerticalDragStart,
     this.onViewerVerticalDragEnd,
     this.onViewerVerticalDragCancel,
     this.onFullLoaded,
@@ -338,6 +346,14 @@ class _ZoomableImageState extends State<ZoomableImage> {
   void _requestUltraUpgrade({String from = 'zoom'}) {
     final completer = _progressiveStream?.completer;
     if (completer is! ProgressiveImageCompleter) return;
+    // trim 记录点（2026-09-13 审查 P1 修复）：真实发起 4096 的时刻才入
+    // _hdIds——zoom/route/startNow 三源全经此漏斗。此前记录挂在
+    // _attachProgressive（邻页直挂也触发），把只挂了 1152 base 的轻量
+    // 邻页混进 HD 重条目集合：停稳 trim（距离≠0 即逐出）与直挂窗口
+    //（±1）天然相交 → 渐进键被逐出 cache → 翻到放大时 _tryFlushHd
+    // setState 换 provider 重 resolve 造新 completer → 4096 帧推给无人
+    // 听的旧 completer（completer 分裂，放大恒停 1152）。
+    widget.onHdLoaded?.call(_photo.id);
     cachePerfEvent('hd-req id=${_photo.id} tw=${kViewerUltraThumbSize} from=$from');
     debugPrint('[HDDBG] req id=${_photo.id} from=$from settled=$_routeSettled');
     completer.requestUpTo(kViewerUltraThumbSize,
@@ -597,6 +613,9 @@ class _ZoomableImageState extends State<ZoomableImage> {
         }
       } else {
         // 活链：恢复本图 4096 优先级（requestUpTo 幂等，重复/已覆盖即跳过）。
+        // trim 记录同 _requestUltraUpgrade（4096 发起才入 _hdIds，审查 P1
+        // 修复——直挂页翻到成为当前页走此支，须补记）。
+        widget.onHdLoaded?.call(_photo.id);
         completer.requestUpTo(kViewerUltraThumbSize,
             priority: RequestPriority.viewerHd);
       }
@@ -884,6 +903,14 @@ class _ZoomableImageState extends State<ZoomableImage> {
     }
     _hdFlushTimer?.cancel();
     _hdFlushTimer = null;
+    // 摘除渐进 completer 的 onFrameReady（2026-09-13 审查 P3）：completer
+    // 仍存活于大桶时，_tryFlushHd 闭包会强持有已 dispose 的 State 直至条目
+    // 被逐出（邻页直挂放大挂载数量）。setOnFrameReady(null) 即摘（API 注释
+    // 语义），_tryFlushHd 首行 mounted 守卫保安全。
+    final progressiveCompleter = _progressiveStream?.completer;
+    if (progressiveCompleter is ProgressiveImageCompleter) {
+      progressiveCompleter.setOnFrameReady(null);
+    }
     if (kLiveViewerProviders[_photo.id] == _imageProvider) {
       kLiveViewerProviders.remove(_photo.id);
     }
@@ -957,7 +984,12 @@ class _ZoomableImageState extends State<ZoomableImage> {
             final screenWidth = screenDimensions.width;
             final screenHeight = screenDimensions.height;
             final aspectRatioOfScreen = screenWidth / screenHeight;
-            final aspectRatioOfImage = _photo.width / _photo.height;
+            // 病态行守卫（2026-09-13 审查 P3，对齐 _aspectHeroFrame）：损坏项
+            // MediaStore WIDTH/HEIGHT 单边为 0 → aspect=Infinity/NaN → 零高
+            // 占位框（Hero 飞行期视觉异常）。回退全屏等比分支。
+            final aspectRatioOfImage = (_photo.width > 0 && _photo.height > 0)
+                ? _photo.width / _photo.height
+                : aspectRatioOfScreen;
             final double screenRelativeImageWidth;
             final double screenRelativeImageHeight;
             if (aspectRatioOfImage > aspectRatioOfScreen) {
@@ -1029,6 +1061,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 层——arena 竞争行为（垂直赢 PageView 翻页 / 输 photo_view 放大态）
     // 与旧链完全一致。
     return GestureDetector(
+      onVerticalDragStart: _isZooming ? null : widget.onViewerVerticalDragStart,
       onVerticalDragUpdate: _isZooming ? null : widget.onViewerVerticalDrag,
       onVerticalDragEnd: _isZooming ? null : widget.onViewerVerticalDragEnd,
       onVerticalDragCancel:
@@ -1230,7 +1263,19 @@ class _ZoomableImageState extends State<ZoomableImage> {
     if (_progressiveStream == null && !_isCurrentPage && _isNeighborPage) {
       final progressive =
           _attachProgressive(priority: RequestPriority.prefetchFull);
-      if (progressive != null) _imageProvider = progressive;
+      // hasFrame 守卫（2026-09-13 审查 P1）：1152 未就绪时直挂会把 pick 的
+      // 低清档覆盖成无帧灰框——_stealBaseFrame 偷不到帧返回 null 且不补帧，
+      // 「首帧同步命中 cache」的前提（预取已完成）被「开图立即慢拖」打破，
+      // 灰框持续到预取完成（旧链此窗口显示 cell/720 低清）。无帧时保留
+      // pick 的低档显示，_progressiveStream 照持：预取照跑（p250），帧到
+      // 后由 onFrameReady→_tryFlushHd 的换链分支（provider 尚未上屏）换上，
+      // 翻到时 updfl/probe 换链亦不受影响。
+      final completer = _progressiveStream?.completer;
+      if (progressive != null &&
+          completer is ProgressiveImageCompleter &&
+          completer.hasFrame) {
+        _imageProvider = progressive;
+      }
     }
     // 【翻到 bump】邻页预载的渐进 1152 任务（p250）在本页成为当前页时
     // 升 p50 插队——否则预载慢于翻页节奏时翻到还要等 p250 队尾。
@@ -1396,7 +1441,10 @@ class _ZoomableImageState extends State<ZoomableImage> {
     );
     _progressiveProvider = progressive;
     _progressiveStream = progressive.resolve(const ImageConfiguration());
-    widget.onHdLoaded?.call(_photo.id); // trim 记录（翻页窄窗用）
+    // onHdLoaded 不在此调（2026-09-13 审查 P1 修复）：本方法邻页直挂也会
+    // 进来，而此时只挂了 1152 base、未发起 4096——提前记入 _hdIds 会被
+    // 停稳 trim 逐出渐进键（见 _requestUltraUpgrade 内注释）。记录移到
+    // 4096 真实发起时刻（_requestUltraUpgrade / _onSelectedChanged 活链支）。
     final completer = _progressiveStream!.completer;
     if (completer is ProgressiveImageCompleter) {
       completer.setOnFrameReady(_tryFlushHd);

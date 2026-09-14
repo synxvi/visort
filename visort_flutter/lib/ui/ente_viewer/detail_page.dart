@@ -21,6 +21,7 @@
 //   - 删除 OCR/QR/社交/全景/编辑/guest/共享/云端（不含视频播放）
 
 import 'dart:async';
+import 'dart:typed_data';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -172,6 +173,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 激活前累计位移：面板关着时判向（上滑过阈呼出 / 下滑过阈退出）。
   double _panelDragAccum = 0;
 
+  /// 下滑退出 maybePop 一次性守卫（审查 P2，见 _handleViewerVerticalDrag）。
+  bool _dismissRequested = false;
+
   /// 图片区垂直拖拽激活阈值：与旧 swipe 8px 感知阈值一致（超即跟手）。
   static const double _kPanelDragActivateSlop = 8.0;
 
@@ -196,6 +200,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// AnimatedList 的布局重排式（重排会在移除项占槽期间把高亮项排到
   /// 右边一格 = "跳到第二个又弹回来"）。
   late final AnimationController _thumbDeleteAnim;
+
+  /// 删除动画的缓出包装（easeOutCubic）：淡出/缩收/平移统一曲线。
+  late final Animation<double> _thumbDeleteFx;
 
   /// 正在删除的条索引（-1 = 无）。
   int _thumbDeleteIndex = -1;
@@ -276,6 +283,13 @@ class _DetailPageState extends ConsumerState<DetailPage>
     _thumbDeleteAnim = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 250),
+    );
+    // 删除动画统一走 easeOutCubic（2026-09-14 用户反馈动画生硬）：
+    // controller 默认线性——淡出/平移机械感，系统相册同款缓出曲线。
+    // Filmstrip 内的被删格缩收/邻格平移都读这条曲线。
+    _thumbDeleteFx = CurvedAnimation(
+      parent: _thumbDeleteAnim,
+      curve: Curves.easeOutCubic,
     );
     // 栏入 root Overlay（时序注释见 _chromeEntry 声明）。延迟 100ms：
     // 条初始带（~24 item × resolve）若与 push 首帧同帧会切碎飞行帧节奏
@@ -406,9 +420,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
       // ⚠️ physics 只锁【手势】惯性——条甩动跨档驱动的 animateToPage
       //（DrivenScrollActivity）不受 physics 拦截，淡出 200ms 内大图
       // 继续平移 = 真机实证「网格已显示 + 滚动中大图残留」闪烁。同值
-      // jumpTo 把一切在途 Activity 替换为 idle hold（值不变零视觉跳变）。
+      // 换 Idle activity 把一切在途 Activity 替换为 idle hold（值不变零
+      // 视觉跳变）。【勿用 jumpTo】（2026-09-13 审查 P2）：SDK jumpTo 末尾
+      // 无条件 goBallistic(0.0)——快甩半路位置时 physics 会自建弹回最近页
+      // 的 0 速弹簧，pop 淡出中大图继续滚 ~200ms（page_settle_takeover
+      // 类 doc「写入架构」段的同款机理，全仓唯一漏网入口）。
       if (_pageController.hasClients) {
-        _pageController.jumpTo(_pageController.position.pixels);
+        final dynamic dynPos = _pageController.position;
+        // ignore: invalid_use_of_protected_member
+        dynPos.beginActivity(
+            IdleScrollActivity(dynPos as ScrollActivityDelegate));
       }
       if (mounted) setState(() {});
     }
@@ -656,6 +677,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
     _thumbPagePos.dispose();
     _pagerDrivenN.dispose();
     _flingLimit.dispose();
+    // 补漏（2026-09-13 审查 P3）：同文件其余 14 个 notifier 均在此 dispose，
+    // 这两个独缺——无 native 资源，但补齐 dispose 纪律（dispose 后误写至少
+    // 撞 debug 断言，不再静默）。
+    _pageScrolling.dispose();
+    chromeSuppressed.dispose();
     super.dispose();
   }
 
@@ -898,6 +924,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
             backgroundDecoration: const BoxDecoration(color: Colors.black),
             // 图片区垂直拖拽统一跟手链：上滑呼出/开着上下全程跟手/下滑退出。
             onViewerVerticalDrag: _handleViewerVerticalDrag,
+            onViewerVerticalDragStart: _handleViewerVerticalDragStart,
             onViewerVerticalDragEnd: _handleViewerVerticalDragEnd,
             onViewerVerticalDragCancel: _handleViewerVerticalDragCancel,
             onFullLoaded: _onFullImageLoaded,
@@ -1346,16 +1373,30 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                 initialIndex: widget.initialIndex,
                                 center: _thumbCenterIndex!,
                                 frozen: _thumbFrozen,
-                                thumbnail: (i) => buildThumbnailProvider(
-                                  imageRefFromMediaStoreId(_thumbFiles[i].id),
-                                  size: _kThumbLoadSize,
-                                  squareCrop: true, // 方形 cover item
-                                ),
+                                thumbnail: (i) {
+                                  // 越界兜底（2026-09-14 真机 ⚠ 防线）：
+                                  // entry 刷新与内部重建存在时序窗，旧
+                                  // itemCount 索引收缩后的列表会 RangeError
+                                  //（release = 黄 ⚠）。钳到最近合法项渲染，
+                                  // 窗口结束后 itemCount 对齐自然恢复。
+                                  if (_thumbFiles.isEmpty) {
+                                    return _kEmptyThumbImage;
+                                  }
+                                  final j =
+                                      i.clamp(0, _thumbFiles.length - 1);
+                                  return buildThumbnailProvider(
+                                    imageRefFromMediaStoreId(
+                                      _thumbFiles[j].id,
+                                    ),
+                                    size: _kThumbLoadSize,
+                                    squareCrop: true, // 方形 cover item
+                                  );
+                                },
                                 onCenterChanged: _onThumbCenterChanged,
                                 onSettled: _onThumbSettled,
                                 onTap: _onThumbSettled,
                                 onItemBuild: _prefetchStripItem,
-                                deleteAnim: _thumbDeleteAnim,
+                                deleteAnim: _thumbDeleteFx,
                                 deleteIndex: _thumbDeleteIndex,
                                 pagePos: _thumbPagePos,
                                 pagerDriven: _pagerDrivenN,
@@ -1520,7 +1561,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
       Future.delayed(
         _kThumbSyncDuration + const Duration(milliseconds: 80),
         () {
-          if (token == _thumbDriveToken) {
+          // mounted 守卫（2026-09-13 审查 P3）：300ms 内下滑退出 viewer 时
+          // State 已 dispose，回调写 _pagerDrivenN 撞 debugAssertNotDisposed
+          //（同文件 150ms 删位补位/toast 淡出 delayed 均有此守卫，此处独缺）。
+          if (mounted && token == _thumbDriveToken) {
             _pagerDrivenByThumb = false;
             _pagerDrivenN.value = false;
             // 兜底超时（onPageChanged 未走到 target）也补一次 trim：
@@ -1981,6 +2025,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
   ///  4. 主图在旧数据上 animateToPage(next) 滑动（300ms），完成后删数据
   ///     + pixels 校正（同帧）。
   void _removeCurrentAndAdvance(String message, {MsImageInfo? undoPhoto}) {
+    debugPrint('[DEL] enter idx=${_selectedIndexNotifier.value} files=${_files.length} thumbs=${_thumbFiles.length} busy=$_deletingInProgress');
     if (!mounted || _deletingInProgress) return;
     // 最后一张:直接退出,不 setState——否则 viewer 会先 rebuild 成空 Scaffold,
     // 在 pop 动画期间露出一帧空白。气泡先挂（root Overlay 独立于路由，pop
@@ -1998,6 +2043,13 @@ class _DetailPageState extends ConsumerState<DetailPage>
     final next = index < _files.length - 1 ? index + 1 : index - 1;
     _deletingInProgress = true;
     _suppressThumbScroll = true;
+    // ─ 条：补位动画 ─
+    // ⚠️ deleteIndex 必须先于 frozen 置位（2026-09-14 真机反馈「下一格
+    // 直接跳变不滑入」根因）：filmstrip 在 frozen 置 true 的瞬间触发
+    // travel 补位（依赖 widget.deleteIndex >= 0 判定删除场景），顺序
+    // 颠倒时 frozen 回调读到 -1 → travel 不启动 → 250ms 后 removeAt
+    // 对齐 = 下一格同帧跳变成聚焦项。
+    _thumbDeleteIndex = index;
     // 条联动一并冻结（Filmstrip.frozen）：offset 冻结 + 渲染照常——删除
     // 前后聚焦格模型同构，中心项不动，下一项顶入原聚焦格（见 filmstrip
     // 文件头）；frozen 解除时组件对齐 center 补聚焦（删末项场景）。
@@ -2007,23 +2059,31 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // 选中态/聚焦位/主图三处错位。锁后手势全部失效，动画必然走完。
     setState(() => _swipeLocked = true);
 
-    // ─ 条：平移补位动画 ─
-    _thumbDeleteIndex = index;
-    // center 翻页延迟到补位**后段**（150ms）：立即切会让 B 在框外就完成
-    // 放大（120ms）再推入——放大先于进框，观感错序（真机反馈）。后段
-    // 切换 = B 进框途中放大（150+120 ≈ 补位 250ms 收尾，同时到达），
-    // 被删项全程保持放大态淡出（框内置空观感更强）。_thumbDeleteIndex
-    // 守卫防早到 timer 误切（理论上 300ms 删除窗口挡住连续删除，纯防御）。
-    Future.delayed(const Duration(milliseconds: 150), () {
-      if (mounted && _thumbDeleteIndex == index) {
-        _thumbCenterIndex?.value = next;
-      }
-    });
+    // center 预写已删（2026-09-14）：补位 travel 改由 filmstrip 在
+    // didUpdateWidget（deleteIndex 新增沿，entry 已重建）自触发，不走
+    // center 通道——此处任何时机的写入都会撞 stale-widget 或 frozen 吞
+    // 掉。收缩对齐用的 center 新值仍由下方 anim .then 写入。
     unawaited(
       _thumbDeleteAnim.forward(from: 0).then((_) {
+        debugPrint('[DEL] thumb-anim done mounted=$mounted');
         if (!mounted) return;
-        setState(() => _thumbFiles.removeAt(index));
-        _thumbCenterIndex?.value = min(index, _thumbFiles.length - 1);
+        setState(() {
+          _thumbFiles.removeAt(index);
+          debugPrint('[DEL] removedAt=$index thumbs=${_thumbFiles.length}');
+        });
+        // 立即标脏条 entry（2026-09-14 真机 ⚠ 根修）：removeAt 收缩了
+        // _thumbFiles，但条挂 root Overlay、setState 不重建 entry——若
+        // postFrame 刷新前条内部因删位动画/时钟重建一次，旧 itemCount
+        // 索引已收缩列表 = _thumbFiles[i] RangeError → release 渲染
+        // ErrorWidget（深底黄色 ⚠，真机实证）。静止条会把旧 n 挂到下次
+        // 事件前，必须立即对齐（.then 上下文非 build 阶段，直接标脏安全）。
+        _chromeEntry?.markNeedsBuild();
+        // 删空守卫（2026-09-13 真机实证 ⚠）：min(index, -1) = -1 喂进
+        // center → Filmstrip clamp(0,-1) 产出 -1 → thumbnail(-1)
+        // RangeError → 条内 ErrorWidget（黄色 ⚠）。空列表不写 center。
+        if (_thumbFiles.isNotEmpty) {
+          _thumbCenterIndex?.value = min(index, _thumbFiles.length - 1);
+        }
         _thumbDeleteIndex = -1;
       }),
     );
@@ -2037,6 +2097,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
             curve: Curves.easeOut,
           )
           .then((_) {
+            debugPrint('[DEL] page-anim done mounted=$mounted');
             if (!mounted) return;
             final arrived = _pageController.page?.round() ?? -1;
             if (arrived != next) {
@@ -2155,6 +2216,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
       );
       _indexById = null; // 结构变更，查表重建
     });
+    // 同 removeAt：立即对齐条 entry（插回扩列表虽不崩，但旧 n 少渲一格
+    // 会挂到下次事件前）。
+    _chromeEntry?.markNeedsBuild();
     // 跳回恢复的那张：主图 + 选中态 + 缩略图条居中。
     final newIndex = removedIndex.clamp(0, _files.length - 1);
     _selectedIndexNotifier.value = newIndex;
@@ -2286,6 +2350,17 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 水平 drag 后不再收事件（翻页照旧）；放大态回调整体为 null（平移图片，
   /// 既有语义）。点击收面板（onImageTap）也不受影响（tap recognizer 在
   /// slop 后被 reject，不触发）。
+  /// 图片区垂直拖拽开始：面板跟手三状态复位（2026-09-13 审查 P2）。
+  /// 双指捏合静默摘除 update/end/callback（recognizer 随 _isZooming 重建），
+  /// 在途手势 end/cancel 不再派发 → 激活态/accum/退出守卫残留到下一次
+  /// 垂直手势（直接进跟手分支跳过判向）。新手势 start 即复位，见
+  /// zoomable_image onViewerVerticalDragStart 注释。
+  void _handleViewerVerticalDragStart(DragStartDetails d) {
+    _panelDragActive = false;
+    _panelDragAccum = 0;
+    _dismissRequested = false;
+  }
+
   void _handleViewerVerticalDrag(DragUpdateDetails d) {
     final dy = d.delta.dy;
     if (_panelDragActive) {
@@ -2308,13 +2383,21 @@ class _DetailPageState extends ConsumerState<DetailPage>
       final file = _fileAt(_selectedIndexNotifier.value);
       if (file != null) _showDetails(file, beginDragging: true);
     } else if (_panelDragAccum >= _kPanelDragActivateSlop) {
-      unawaited(Navigator.maybePop(context));
+      // 一次性守卫（2026-09-13 审查 P2）：累计制下慢滑（~100px/s）跨越
+      // pop 动画全程（~200ms）时 accum 单调增长、每帧连发 maybePop——pop
+      // 完成后 lastEntry 已是相册路由，下一帧把相册一并弹掉（双弹）。本
+      // 手势内只发一次，end/cancel 复位。
+      if (!_dismissRequested) {
+        _dismissRequested = true;
+        unawaited(Navigator.maybePop(context));
+      }
     }
   }
 
   /// 图片区垂直拖拽松手：snap 二值（复用把手条同一收尾）。
   void _handleViewerVerticalDragEnd(DragEndDetails d) {
     _panelDragAccum = 0; // 未激活序列（单击等）也要清，防下次激活阈值漂移
+    _dismissRequested = false;
     if (!_panelDragActive) return;
     _panelDragActive = false;
     _onPanelDragEnd(d);
@@ -2323,6 +2406,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 图片区垂直拖拽被系统打断（通知栏下拉等）：零速按位置二值收尾。
   void _handleViewerVerticalDragCancel() {
     _panelDragAccum = 0;
+    _dismissRequested = false;
     if (!_panelDragActive) return;
     _panelDragActive = false;
     _onPanelDragEnd(DragEndDetails());
@@ -2485,6 +2569,19 @@ class _DetailPageState extends ConsumerState<DetailPage>
 ///  - 定位在缩略图条**上方**（全局 toast 的 bottomInset+76 落在缩略图条
 ///    区域内，真机反馈遮挡缩略图条）；
 ///  - 文案区可点穿（不挡主图手势），撤回 icon 是唯一交互点。
+/// 条缩略图闭包越界兜底图（1×1 透明 PNG）：仅在 entry 刷新时序窗内
+/// 被渲染一瞬，窗口结束即被真实档替换。见 Filmstrip thumbnail 闭包注释。
+final _kEmptyThumbImage = MemoryImage(
+  Uint8List.fromList(const [
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+    0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00,
+    0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+    0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+  ]),
+);
+
 class _DeleteToastView extends StatefulWidget {
   const _DeleteToastView({required this.message, required this.onUndo});
 

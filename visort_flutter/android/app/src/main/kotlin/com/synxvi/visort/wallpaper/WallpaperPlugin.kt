@@ -51,6 +51,9 @@ class WallpaperPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         channel?.setMethodCallHandler(null)
         channel = null
         appContext = null
+        // 对齐 MediaStorePlugin 的 shutdown 模式（2026-09-13 审查 P3）：
+        // 引擎 detach（app 退出 / add-to-app 反复 attach）后线程不再存活。
+        ioExecutor.shutdownNow()
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {

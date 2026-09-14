@@ -49,6 +49,8 @@
 //   - [pagePos]/[pagerDriven]：主图翻页连续位置（PageController.page）
 //     与「主图正被条程序驱动」标记——锁步跟随的门控。
 
+import 'dart:async' show scheduleMicrotask;
+
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/gestures.dart' show HorizontalDragGestureRecognizer;
 import 'package:flutter/material.dart';
@@ -196,6 +198,9 @@ class _FilmstripState extends State<Filmstrip>
     with SingleTickerProviderStateMixin {
   // ── 几何状态（唯一真相；布局为其纯函数）──
   late int _sel; // selection（锚点项）
+
+  /// 删除补位 travel 的一次性武装标志（见 didUpdateWidget 触发点注释）。
+  bool _deleteTravelArmed = false;
   double _selDx = 0; // selection 中心相对视口中心的偏移（px）
 
   /// 非零 focus fraction（通常 0~2 项；1 = 聚焦大样式）。
@@ -255,7 +260,14 @@ class _FilmstripState extends State<Filmstrip>
   @override
   void initState() {
     super.initState();
-    _sel = widget.initialIndex.clamp(0, widget.itemCount - 1);
+    // itemCount==0（删除清空后的短暂窗口，viewer pop 前仍会 build）：
+    // clamp(0, -1) 返回 -1 → _buildItem(-1) → thumbnail(-1) RangeError →
+    // 该项变 ErrorWidget（release 深底 + 大号黄色 ⚠，2026-09-13 真机实证）。
+    // 三处 clamp（initState/didUpdateWidget/_travelTo）+ _visibleItems 渲染
+    // 兜底同款守卫。
+    _sel = widget.itemCount == 0
+        ? 0
+        : widget.initialIndex.clamp(0, widget.itemCount - 1);
     _focus[_sel] = 1.0;
     widget.center.addListener(_onExternalCenter);
     widget.frozen?.addListener(_onFrozenChanged);
@@ -288,12 +300,30 @@ class _FilmstripState extends State<Filmstrip>
     if (old.itemCount != widget.itemCount) {
       _cancelAnims();
       _phase = _Phase.idle;
-      _sel = widget.center.value.clamp(0, widget.itemCount - 1);
+      _deleteTravelArmed = false;
+      // 删空窗口守卫（见 initState 注释）：clamp(0, -1) 会产出 -1。
+      _sel = widget.itemCount == 0
+          ? 0
+          : widget.center.value.clamp(0, widget.itemCount - 1);
       _selDx = 0;
+      // 对齐项直接聚焦 1.0（2026-09-14 删除动画改版）：收缩场景 travel
+      // 已在删位窗内把该格撑宽（0.99+），此处收口为 1——不再有「解除后
+      // 补撑开」的第二段放大（用户否决：两侧间隙重新撑开）。增长（撤回
+      // 插回）同理由：center 数值不变（同槽位）→ notifier 不通知，无
+      // 后续路径补焦，必须在此直接聚焦。
       _focus
-        ..clear()
-        ..[_sel] = 0.0;
+        ..clear();
+      if (widget.itemCount > 0) _focus[_sel] = 1.0;
       _stopClock();
+    }
+    // 删除补位 travel 触发点（2026-09-14「下一格跳变不滑入」根修）：
+    // deleteIndex 从 -1 变 ≥0 的这一帧，entry 已带新值重建（didUpdateWidget
+    // 正是重建本身）——此刻 widget.deleteIndex 才是新鲜的。microtask 推到
+    // 本帧 build 结束后启动 travel（滑移+变宽 260ms 与删位缩没同窗）。
+    // frozen 回调里触发不行：notifier 同步回调时 entry 未重建，读到 -1。
+    if (widget.deleteIndex >= 0 && old.deleteIndex < 0) {
+      _deleteTravelArmed = true;
+      scheduleMicrotask(_fireDeleteTravel);
     }
   }
 
@@ -369,6 +399,9 @@ class _FilmstripState extends State<Filmstrip>
   /// 向两侧展开到缓冲边界为止（O(视口)，与列表长度无关）。
   List<(int, double)> _visibleItems() {
     final n = widget.itemCount;
+    // 渲染侧兜底（见 initState 注释）：空列表零项输出——_sel 在删空窗口
+    // 可能短暂越界，绝不进入 _buildItem。
+    if (n <= 0) return const [];
     final out = <(int, double)>[(_sel, _selDx)];
     var d = 0.0;
     for (var i = _sel + 1; i < n; i++) {
@@ -470,6 +503,20 @@ class _FilmstripState extends State<Filmstrip>
 
   // ─────────────── 程序滑移（外部指令/点按） ───────────────
 
+  /// 删除补位 travel 的一次性触发（didUpdateWidget 武装，microtask 执行
+  /// ——build 结束后启动，_travelTo 内的 setState 安全）。g 取被删格的
+  /// 下一格；删末项则取上一格（detail_page 的 next 镜像规则）。
+  void _fireDeleteTravel() {
+    if (!mounted || !_deleteTravelArmed) return;
+    _deleteTravelArmed = false;
+    if (widget.deleteAnim == null || widget.itemCount <= 1) return;
+    final del = widget.deleteIndex;
+    if (del < 0) return;
+    final g = del + 1 < widget.itemCount ? del + 1 : del - 1;
+    if (g < 0 || g == _sel) return;
+    _travelTo(g);
+  }
+
   void _onExternalCenter() {
     final g = widget.center.value;
     if (g == _sel &&
@@ -478,7 +525,10 @@ class _FilmstripState extends State<Filmstrip>
         !_lockstepDirty) {
       return; // 已就位（回声/同位重写）
     }
-    if (_isFrozen) return; // 删除流程：解除时统一对齐
+    // frozen 一般吞掉外部指令（pop 淡出等）；删除补位的 travel 不走
+    // center 通道——由 didUpdateWidget 的 deleteIndex 新增沿触发（见其
+    // 注释：此处 widget.deleteIndex 是 stale 值，不可作删除判定依据）。
+    if (_isFrozen) return;
     if (_lockstepActive) return; // 主图拖动中：pagePos 已锁步跟随
     if (_phase == _Phase.dragging || _phase == _Phase.flinging) {
       return; // 条自身手势进行中：忽略（对标 e() 静止门控）
@@ -489,6 +539,8 @@ class _FilmstripState extends State<Filmstrip>
 
   /// 滑移到 g：近距弹簧（运动中无聚焦），远距（> 一屏）同帧落位。
   void _travelTo(int g) {
+    // 删空窗口守卫（见 initState 注释）：clamp(0, -1) 会产出 -1。
+    if (widget.itemCount == 0) return;
     g = g.clamp(0, widget.itemCount - 1);
     _cancelAnims();
     // 锚点换基（屏幕位置连续）：新 selDx = 旧值 + 有符号距离。
@@ -528,6 +580,8 @@ class _FilmstripState extends State<Filmstrip>
       // 值，phase 归 idle（onTick 的 idle 分支自动停表）。解除时由下方
       // 对齐逻辑补焦到位（删除流程同链路）。
       _cancelAnims();
+      // 删除补位的 travel 由 _onExternalCenter 放行触发（见其注释——
+      // 此处 widget.deleteIndex 尚为 stale -1，不可在此触发）。
       if (_phase != _Phase.idle) {
         _phase = _Phase.idle;
         setState(() {});
@@ -731,6 +785,8 @@ class _FilmstripState extends State<Filmstrip>
 
   @override
   Widget build(BuildContext context) {
+    debugPrint(
+        '[FS] build n=${widget.itemCount} sel=$_sel dx=${_selDx.toStringAsFixed(1)} frozen=${widget.frozen?.value}');
     return ColoredBox(
       color: Colors.black,
       child: LayoutBuilder(
@@ -774,39 +830,38 @@ class _FilmstripState extends State<Filmstrip>
     widget.onItemBuild?.call(context, i);
     final f = _fOf(i).clamp(0.0, 1.0);
     final w = _wOf(f), h = _kImgHN;
-    Widget item = Positioned(
-      left: _vw / 2 + dx - w / 2,
-      top: 0,
-      width: w,
-      height: kFilmstripHeight,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => _handleTap(i),
-        child: Align(
-          alignment: Alignment.bottomCenter,
-          // 底基准 = 条底 2（系统 gap_bottom，普通/聚焦一致——高度恒定
-          // 后垂直方向全程静止，动画纯水平）。
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: _kGapBottom),
-            child: Opacity(
-              opacity: 0.5 + 0.5 * f,
-              child: SizedBox(
-                width: w,
-                height: h,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(_kRadius),
-                  child: Image(
-                    image: widget.thumbnail(i),
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                    frameBuilder: (c, child, frame, wasSync) {
-                      if (wasSync || frame != null) return child;
-                      return Stack(
-                        fit: StackFit.expand,
-                        children: [ThumbnailPlaceHolder(), child],
-                      );
-                    },
-                  ),
+    Widget content = GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _handleTap(i),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        // 底基准 = 条底 2（系统 gap_bottom，普通/聚焦一致——高度恒定
+        // 后垂直方向全程静止，动画纯水平）。
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: _kGapBottom),
+          child: Opacity(
+            opacity: 0.5 + 0.5 * f,
+            child: SizedBox(
+              width: w,
+              height: h,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(_kRadius),
+                child: Image(
+                  image: widget.thumbnail(i),
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  frameBuilder: (c, child, frame, wasSync) {
+                    if (wasSync || frame != null) return child;
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [ThumbnailPlaceHolder(), child],
+                    );
+                  },
+                  // errorBuilder（2026-09-13 审查 P3）：损坏文件解码失败无
+                  // 此分支会渲染 ErrorWidget 灰盒——与网格/大图的占位家族
+                  // 统一为 ThumbnailPlaceHolder（保留「这里有张图」空间感）。
+                  errorBuilder: (c, error, stackTrace) =>
+                      const ThumbnailPlaceHolder(),
                 ),
               ),
             ),
@@ -816,26 +871,35 @@ class _FilmstripState extends State<Filmstrip>
     );
     // 删除补位（透传渲染）：被删项保持当前样式原地淡出；其后项平移
     // 补位——紧邻项跨入聚焦格(43.5)平移多，其余平移一格(28)。
+    // ⚠️ 动画必须包在 Positioned 内侧（2026-09-14 真机 ⚠ 根因）：旧写法
+    // AnimatedBuilder(child: item) 把 Positioned 包进 Opacity/Transform，
+    // Positioned 失去 Stack 直系关系 → ParentData 挂载异常 → release 渲染
+    // ErrorWidget（深底黄 ⚠，任意删除必现；debug 仅红字日志视觉自愈被
+    // 掩盖）。Positioned 恒为 Stack 直接子级，动画只包内容。
     final anim = widget.deleteAnim;
     if (anim != null && widget.deleteIndex >= 0) {
       if (i == widget.deleteIndex) {
-        item = AnimatedBuilder(
+        content = AnimatedBuilder(
           animation: anim,
-          child: item,
-          builder: (_, child) => Opacity(opacity: 1 - anim.value, child: child),
-        );
-      } else if (i > widget.deleteIndex) {
-        final d = i == widget.deleteIndex + 1 ? _step(1.0, 0.0) : _step(0.0, 0.0);
-        item = AnimatedBuilder(
-          animation: anim,
-          child: item,
-          builder: (_, child) => Transform.translate(
-            offset: Offset(-anim.value * d, 0),
-            child: child,
+          child: content,
+          // 缩小然后消失（2026-09-14 用户反馈对齐系统相册）：scale 1→0
+          // 完全缩没 + 同步淡出，easeOutCubic 前段缩大半后从容收尾。
+          // ⚠️ 右侧格【不做】 translate 补位：几何左移已由冻结时触发的
+          // travel 全权驱动（_selDx→0 滑移 + 旧格 focus 缩窄 + 新格变宽
+          // 同步），再叠 translate = 双重运动 + removeAt 对齐跳变。
+          builder: (_, child) => Opacity(
+            opacity: 1 - anim.value,
+            child: Transform.scale(scale: 1 - anim.value, child: child),
           ),
         );
       }
     }
-    return item;
+    return Positioned(
+      left: _vw / 2 + dx - w / 2,
+      top: 0,
+      width: w,
+      height: kFilmstripHeight,
+      child: content,
+    );
   }
 }

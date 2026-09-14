@@ -528,11 +528,17 @@ class _PhotoDetailsSheetState extends ConsumerState<PhotoDetailsSheet> {
 }
 
 /// EXIF DateTime("2024:01:15 10:30:00") → 毫秒时间戳;解析失败返回 null。
+/// 年份 <1970 视为脏值返回 null（2026-09-13 审查 P3）：老相机/修复工具
+/// 写出的全零 "0000:00:00 00:00:00" 会构造出负值毫秒时间戳（非 null），
+/// formatSmartDate 的 ms<=0 兜底显示 "-" 但不回退 dateAddedMs——与 Kotlin
+/// 索引链 isLenient=false 的严格标准对齐，null 才能让 ?? 回退生效。
 int? _parseExifDateTime(String s) {
   final p = s.trim().split(RegExp(r'[: ]'));
   if (p.length < 6) return null;
+  final year = int.tryParse(p[0]) ?? 0;
+  if (year < 1970) return null;
   final dt = DateTime(
-    int.tryParse(p[0]) ?? 0,
+    year,
     int.tryParse(p[1]) ?? 0,
     int.tryParse(p[2]) ?? 0,
     int.tryParse(p[3]) ?? 0,

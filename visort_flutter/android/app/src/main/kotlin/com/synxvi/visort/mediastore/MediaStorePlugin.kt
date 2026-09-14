@@ -77,6 +77,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
     private var channel: MethodChannel? = null
     private var eventChannel: EventChannel? = null
     private var mediaObserver: ContentObserver? = null
+    private var changeStreamHandler: MediaChangeStreamHandler? = null
     private var binding: ActivityPluginBinding? = null
     private var activity: Activity? = null
     private var repository: MediaStoreRepository? = null
@@ -122,6 +123,17 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
 
     /// 待处理的回收站/恢复请求（弹窗异步，P1a）
     private var pendingTrashResult: Result? = null
+
+    // 同步入位标志（2026-09-13 审查 P2）：delete/move/rename 的 pending 检查
+    // 在主线程、置位在 IO 完成回调里——窗口期内（MANAGE_MEDIA 直批可达数秒）
+    // 第二个同方法调用可通过守卫，两请求先后完成时 pending 被后者覆盖、前者
+    // Result 悬挂且 onActivityResult 结果错配。进 handler 同步置位、全部
+    // 出口复位（mainHandler 串行化，无并发写）。
+    private var deleteInFlight = false
+    private var moveInFlight = false
+    private var renameInFlight = false
+    // trash 成功后清盘缓存的 id 集（对齐 DELETE 路径的预缓存泄漏防线）。
+    private var pendingTrashIds: List<String> = emptyList()
     private var pendingRestoreResult: Result? = null
 
     // ──────────── FlutterPlugin 生命周期 ────────────
@@ -135,6 +147,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         // EventChannel：ContentObserver 变更通知。Dart 订阅后图库变化收到结构化事件，
         // 触发精准增量刷新（P1c：insert/update/delete + id/bucketId）。
         val streamHandler = MediaChangeStreamHandler(resolver)
+        changeStreamHandler = streamHandler
         eventChannel = EventChannel(binding.binaryMessenger, EVENTS_CHANNEL).also {
             it.setStreamHandler(streamHandler)
         }
@@ -162,6 +175,8 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         channel = null
         eventChannel?.setStreamHandler(null)
         eventChannel = null
+        changeStreamHandler?.shutdown()
+        changeStreamHandler = null
         ioExecutor.shutdownNow()
     }
 
@@ -214,6 +229,11 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         pendingFavoriteResult = null
         pendingTrashResult?.error("DETACHED", "Activity 已分离", null)
         pendingTrashResult = null
+        pendingTrashIds = emptyList()
+        // 同步位一并复位（IO 窗口期 detach 后不再有回调清理）。
+        deleteInFlight = false
+        moveInFlight = false
+        renameInFlight = false
         pendingRestoreResult?.error("DETACHED", "Activity 已分离", null)
         pendingRestoreResult = null
     }
@@ -292,10 +312,16 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 val pending = pendingTrashResult ?: return true
                 pendingTrashResult = null
                 if (resultCode == Activity.RESULT_OK) {
+                    // 入站即清盘缓存 blob（2026-09-13 审查 P2，对齐 DELETE
+                    // 路径的预缓存泄漏防线）：回收站条目退出主库，30 天后系统
+                    // 清空/外部清空无对账信号，残留 blob 侵蚀缓存有效容量；
+                    // restore 场景按需重生成（一次解码）。
+                    clearImageCacheFilesAsync(pendingTrashIds)
                     pending.success(true)
                 } else {
                     pending.error(MsError.TrashCancelled.code, MsError.TrashCancelled.message, null)
                 }
+                pendingTrashIds = emptyList()
                 return true
             }
             REQUEST_RESTORE -> {
@@ -686,10 +712,12 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             result.error(MsError.QueryFailed("requestTrash 未返回系统弹窗").code, null, null); return
         }
         pendingTrashResult = result
+        pendingTrashIds = ids
         try {
             act.startIntentSenderForResult(intentSender, REQUEST_TRASH, null, 0, 0, 0)
         } catch (e: Exception) {
             pendingTrashResult = null
+            pendingTrashIds = emptyList()
             result.error(MsError.QueryFailed("启动回收站弹窗失败: ${e.message}").code, e.message, null)
         }
     }
@@ -865,8 +893,13 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         }
         val width = call.argument<Int>("width") ?: 256
         val height = call.argument<Int>("height") ?: 256
-        // 源图 DATE_MODIFIED（毫秒，可空）：磁盘缩略图缓存校验用
-        val dateModifiedMs = call.argument<Long?>("dateModifiedMs")
+        // 源图 DATE_MODIFIED（毫秒，可空）：磁盘缩略图缓存校验用。
+        // Number 兼容收（2026-09-13 审查 P3，对齐 precacheFullImage/
+        // setFullCacheQuota/detectHdrs 三处既有加固）：Dart int 0（损坏行
+        // DATE_MODIFIED 双 NULL 的 fallback）以 32 位 Integer 过 codec，
+        // argument<Long?> 拆箱即 CCE → QUERY_FAILED → Dart 回退 readBytes
+        // 全图；正常毫秒时间戳 >2^31 恒 Long 安全，仅 0 值暴露。
+        val dateModifiedMs = call.argument<Number>("dateModifiedMs")?.toLong()
         // 方形 cover 显示（网格 cell/封面）→ 长图走 centerCrop；
         // contain 显示（大图渐进链）→ fit-inside（全图 aspect）
         val squareCrop = call.argument<Boolean>("squareCrop") ?: false
@@ -1185,9 +1218,10 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         if (ids.isEmpty()) {
             result.success(0); return
         }
-        if (pendingDeleteResult != null) {
+        if (pendingDeleteResult != null || deleteInFlight) {
             result.error(MsError.InvalidArg("已有删除请求进行中").code, null, null); return
         }
+        deleteInFlight = true
 
         // createDeleteRequest 内含 MANAGE_MEDIA 逐 URI delete 的磁盘 IO
         //（数百张可达数秒，主线程执行 ANR）——下 ioExecutor；
@@ -1198,6 +1232,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
             } catch (e: Exception) {
                 Log.e(TAG, "handleRequestDelete 异常: ${e.message}", e)
                 mainHandler.post {
+                    deleteInFlight = false
                     result.error(MsError.QueryFailed("requestDelete 异常: ${e.message}").code, e.message, null)
                 }
                 return@execute
@@ -1209,6 +1244,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                         // 上报实际删除数——此前恒报 0，已删文件被 Dart 记为
                         // delete_failed（结果报告错误，重跑时文件已不存在）。
                         // 删除成功即清磁盘缓存文件（预缓存泄漏防线）。
+                        deleteInFlight = false
                         clearImageCacheFilesAsync(ids)
                         result.success(dr.deleted)
                     }
@@ -1216,6 +1252,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                         // 启动系统弹窗。记录直删数与弹窗 URI 数——弹窗结果
                         // 分支据此合成真实删除数（见 onActivityResult）。
                         pendingDeleteResult = result
+                        deleteInFlight = false // 弹窗期由 pending 守卫接管
                         pendingDeleteDirectCount = dr.alreadyDeleted
                         // 弹窗只覆盖直删失败的子集：ids.size - alreadyDeleted
                         // （旧协议记 ids.size，部分直删 + 授权的组合会虚报）。
@@ -1282,9 +1319,10 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         if (ids.isEmpty() || relativePath.isEmpty()) {
             result.success(0); return
         }
-        if (pendingMoveResult != null) {
+        if (pendingMoveResult != null || moveInFlight) {
             result.error(MsError.InvalidArg("已有移动请求进行中").code, null, null); return
         }
+        moveInFlight = true
 
         // moveToRelativePath 内含逐 URI update 的磁盘 IO（Run 一次可上千张，
         // 主线程执行必 ANR）——下 ioExecutor；弹窗启动与 result 回调回主线程。
@@ -1293,6 +1331,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 repo.moveToRelativePath(ids, relativePath)
             } catch (e: Exception) {
                 mainHandler.post {
+                    moveInFlight = false
                     result.error(MsError.QueryFailed("requestMove 异常: ${e.message}").code, e.message, null)
                 }
                 return@execute
@@ -1301,12 +1340,14 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 when (mr) {
                     is MediaStoreRepository.MoveResult.Done -> {
                         // 直接完成（MANAGE_MEDIA 或自有文件），返回实际成功 id 集
+                        moveInFlight = false
                         result.success(mr.movedIds)
                     }
                     is MediaStoreRepository.MoveResult.NeedsConsent -> {
                         // 需要用户授权（其他 app 的文件）——记录参数，授权通过后重新 doMove。
                         // alreadyMoved=弹窗前直移子集，取消时据此上报部分成功。
                         pendingMoveResult = result
+                        moveInFlight = false // 弹窗期由 pending 守卫接管
                         pendingMoveIds = ids
                         pendingMoveRelativePath = relativePath
                         pendingMoveAlreadyMoved = mr.alreadyMoved
@@ -1336,9 +1377,10 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
         if (id.isEmpty() || newName.isEmpty()) {
             result.success(0); return
         }
-        if (pendingRenameResult != null) {
+        if (pendingRenameResult != null || renameInFlight) {
             result.error(MsError.InvalidArg("已有重命名请求进行中").code, null, null); return
         }
+        renameInFlight = true
 
         // nameExistsInDir 预检 + renameTo update 都是磁盘 IO——下 ioExecutor，
         // 弹窗启动与 result 回调回主线程。
@@ -1347,6 +1389,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 // 预检：同目录同名（排除自身）→ 直接报错，弹窗前拦住
                 if (repo.nameExistsInDir(id, newName)) {
                     mainHandler.post {
+                        renameInFlight = false
                         result.error(MsError.NameExists.code, MsError.NameExists.message, null)
                     }
                     return@execute
@@ -1354,9 +1397,13 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 val rr = repo.renameTo(id, newName)
                 mainHandler.post {
                     when (rr) {
-                        is MediaStoreRepository.MoveResult.Done -> result.success(rr.movedIds.size)
+                        is MediaStoreRepository.MoveResult.Done -> {
+                            renameInFlight = false
+                            result.success(rr.movedIds.size)
+                        }
                         is MediaStoreRepository.MoveResult.NeedsConsent -> {
                             pendingRenameResult = result
+                            renameInFlight = false // 弹窗期由 pending 守卫接管
                             pendingRenameId = id
                             pendingRenameNewName = newName
                             try {
@@ -1370,6 +1417,7 @@ class MediaStorePlugin : FlutterPlugin, MethodCallHandler, ActivityAware,
                 }
             } catch (e: Exception) {
                 mainHandler.post {
+                    renameInFlight = false
                     result.error(MsError.QueryFailed("requestRename 异常: ${e.message}").code, e.message, null)
                 }
             }
@@ -1446,6 +1494,12 @@ class MediaChangeStreamHandler(private val resolver: android.content.ContentReso
         sink = null
     }
 
+    /// 引擎 detach 时回收分类线程池（2026-09-13 审查 P3，对齐主插件
+    /// ioExecutor 的 shutdown 模式；onCancel 只解订阅——Dart 侧可能重订）。
+    fun shutdown() {
+        ioPool.shutdownNow()
+    }
+
     /// 由 ContentObserver 调用。防抖 300ms 后分类并发送结构化事件（P1c）。
     /// [uri] 为 null（非 item 级变更）或无法解析 → 全量 refresh 兜底。
     /// 分类启发式（移植自 photo_manager PhotoManagerNotifyChannel）：
@@ -1494,11 +1548,18 @@ class MediaChangeStreamHandler(private val resolver: android.content.ContentReso
             )
             try {
                 var found = false
-                resolver.query(
+                val rowCursor = resolver.query(
                     itemUri,
                     arrayOf(MediaStore.Images.Media.DATE_ADDED, MediaStore.Images.Media.BUCKET_ID),
                     null, null, null
-                )?.use { c ->
+                )
+                // query 返回 null（provider 瞬时异常的温和形态，契约允许）与
+                // 抛异常同义（2026-09-13 审查 P3）：行大概率仍在，误发 delete
+                // 会让 Dart 精准移除活条目直到下次刷新——统一走 refresh 兜底。
+                if (rowCursor == null) {
+                    return listOf(mapOf<String, Any?>("type" to "refresh"))
+                }
+                rowCursor.use { c ->
                     if (c.moveToFirst()) {
                         found = true
                         val da = if (c.isNull(0)) 0L else c.getLong(0)

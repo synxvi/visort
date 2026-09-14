@@ -104,6 +104,9 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// 返回定位规则（对标系统相册）——向后滑→目标行贴视口底部；
   /// 向前滑→贴顶部；翻回原位→恢复打开时的网格视口。
   int _openViewerIndex = 0;
+
+  /// viewer 打开时的文件快照（审查 P2，见 _openViewer）。
+  List<MsImageInfo>? _viewerFiles;
   double _openScrollOffset = 0;
 
   /// viewer 翻页→网格返回定位节流：缩略图条快甩时 onIndexChanged 每个居中
@@ -681,7 +684,11 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     }
     // ⚠️ 无转圈：首屏未完成（firstPageLoaded=false 且无数据）时显示灰格占位网格，
     // 第一页到达后无缝替换；error 时显示错误页（可重试）。
-    if (gallery.error != null) {
+    // photos 非空时保留在屏数据（2026-09-13 审查 P2）：非首次加载失败
+    // （loadMore 翻页 / ContentObserver 静默刷新）把正在显示的网格整体替换
+    // 成全屏错误页 = 静默刷新的 silent 语义被失败路径击穿（binder 瞬时故障
+    // 在 Worker 跑批时概率放大）。错误页只在无数据（首开失败）时渲染。
+    if (gallery.error != null && gallery.photos.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -1274,8 +1281,10 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
   /// 返回时目标行已在正确位置（缩略图也随滚动预加载）。
   /// 快甩节流见 _viewerIndexThrottleTimer 注释。
   void _onViewerIndexChanged(int index) {
-    final photos = ref.read(galleryControllerProvider).photos;
-    if (index < 0 || index >= photos.length) return;
+    // 边界按【快照】判（审查 P2）：当前 photos 可能已被静默重载整体替换，
+    // 用它判长度会把重载收缩场景的合法 index 拒之门外（pop 不再重定位）。
+    final files = _viewerFiles;
+    if (files == null || index < 0 || index >= files.length) return;
     // 【翻页期间零网格重定位】只记 pending，jumpTo 移到 pop reverse 起点
     // 一次性冲刷（_flushViewerIndexReposition，Hero 目标行在 flight manifest
     // 构建前就位即可）。旧「翻页中 leading 节流 jumpTo」在每次翻页触发
@@ -1285,6 +1294,28 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     // 空闲在等 Future =「翻页解码慢」主体）。pop 时 viewer 关闭、解码池
     // 空闲，目标行一批 cell 几十 ms 出图，落位不闪。
     _pendingViewerIndex = index;
+  }
+
+  /// viewer 快照 index → 当前 photos index（2026-09-13 审查 P2）：查看期间
+  /// ContentObserver 静默重载整体替换列表（DESC 头部 ±k 项），旧按快照
+  /// index 直接算行偏移 = 落位偏 k 行 / 终点 cell 落 cacheExtent 外飞行
+  /// 退化。按照片 id 重定位；找不到（已删）或越界时保守 clamp。
+  int _remapViewerIndexToCurrent(int snapshotIndex) {
+    final files = _viewerFiles;
+    final photos = ref.read(galleryControllerProvider).photos;
+    if (photos.isEmpty) return 0;
+    if (files == null ||
+        snapshotIndex < 0 ||
+        snapshotIndex >= files.length) {
+      return snapshotIndex.clamp(0, photos.length - 1);
+    }
+    final id = files[snapshotIndex].id;
+    final current = photos.indexWhere((p) => p.id == id);
+    if (current < 0) return snapshotIndex.clamp(0, photos.length - 1);
+    if (current != snapshotIndex) {
+      debugPrint('[VRI] remap $snapshotIndex→$current id=$id');
+    }
+    return current;
   }
 
   /// 立即冲刷节流中的 pending 网格定位（viewer pop reverse 起点调用）。
@@ -1311,7 +1342,7 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
       // defer 标志（本冲刷在 reverse listener 序中先于 HeroController 的
       // flight 启动，标志必被读到；启动路径读后即复位）。
       HeroController.deferNextPopFlight = true;
-      _scrollToCellRow(pending);
+      _scrollToCellRow(_remapViewerIndexToCurrent(pending));
     }
   }
 
@@ -1400,6 +1431,11 @@ class _AlbumScreenState extends ConsumerState<AlbumScreen> {
     Rect? cellRect,
   ) {
     _openViewerIndex = index;
+    // 打开时的快照（2026-09-13 审查 P2）：查看期间 ContentObserver 静默
+    // 重载会整体替换 gallery.photos，pop 落位须按 id 把快照 index 重定位
+    // 到当前列表（_remapViewerIndexToCurrent），否则 DESC 头部 ±k 项漂移
+    // = 落位偏行 / Hero 飞行终点错位。
+    _viewerFiles = photos;
     // 按视图记录打开时的滚动 offset（日期视图用独立 controller，翻回原位时恢复）。
     _openScrollOffset = _timelineView
         ? (_timelineScrollCtrl.hasClients ? _timelineScrollCtrl.offset : 0)

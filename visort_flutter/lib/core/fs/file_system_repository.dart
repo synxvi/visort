@@ -12,6 +12,21 @@
 import 'image_ref.dart';
 import 'package:visort_flutter/core/config/models.dart';
 
+/// 用户在系统同意弹窗点了取消（2026-09-13 审查 P2）：取消 ≠ 失败——
+/// 上层（Run 流）应把这些 id 计入 skipped 而非 failed，不再整批红色
+/// 误报刷屏（决策保留、可重跑）。目前仅 Android trash 批量链抛出
+/// （TRASH_CANCELLED 类型化信号）；move 取消走「部分成功如实上报」
+/// 契约（alreadyMoved 子集），不抛本异常。
+class ConsentCancelledException implements Exception {
+  const ConsentCancelledException(this.ids);
+
+  /// 被取消的分块 id 集（调用方原样传入的 ids）。
+  final Set<String> ids;
+
+  @override
+  String toString() => 'ConsentCancelledException(${ids.length} ids)';
+}
+
 /// 图片元信息。对应 Python /api/image/`<index>`/meta 返回结构（app.py:585-614）
 class ImageMeta {
   const ImageMeta({

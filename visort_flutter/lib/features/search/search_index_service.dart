@@ -297,6 +297,12 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       }
       // 合并非覆盖：差集模式下 metas 只含本轮新增，存量来自 _metas。
       // 全量首轮时 _metas 为空，合并结果与原覆盖语义一致。
+      // 世代复查（2026-09-13 审查 P2）：末批的 _isStale 检查在其 await
+      // _saveProgress 之前——save 挂起期间用户关开关（cancel+clear 清空
+      // _metas）后，此处合并 = 本轮全量 metas 内存复活（DB 已清仅内存残留，
+      // 进程重启前搜索页持续显示旧数据）。与循环内检查点同款判定，stale
+      // 即放弃合并直接返回（finally 的世代校验会走复位）。
+      if (_isStale(mySeq)) return;
       // 复活守卫：合并前滤掉跑批期间被 forgetIds 删掉的 id（F11）。
       metas.removeWhere((id, _) => _forgotten.remove(id));
       _metas = {..._metas, ...metas};
@@ -557,15 +563,34 @@ class SearchIndexService extends Notifier<SearchIndexState> {
   /// 原注释称「正在写的批只含当时仍存在的 id」不成立：putAll 先落库、
   /// 写回在循环后，中途 forget 会被写回复活）。
   Future<void> forgetIds(Set<String> ids) async {
-    if (ids.isEmpty || _metas.isEmpty) return;
+    // _metas 为空只代表「无内存副本」，不代表「无 DB 数据」（2026-09-13
+    // 审查 P3：load 预热失败/完成前的删除会在此短路，search_index 行
+    // 残留已删照片的位置数据，直到反向收敛）——DB 行清理不依赖内存副本，
+    // 直接删。运行中批次由 _forgotten 守卫防写回复活。
+    if (ids.isEmpty) return;
+    if (_metas.isEmpty) {
+      // 首轮跑批中（存量空、本轮在 local metas 累积未合并）：登记全集
+      // 防 end 合并复活（id 一次性消费且 MediaStore 删后不复用，无误伤）。
+      _forgotten.addAll(ids);
+      await _store.deleteByIds(ids);
+      return;
+    }
     final hit = _metas.keys.where(ids.contains).toSet();
-    if (hit.isEmpty) return;
-    _forgotten.addAll(hit);
+    if (hit.isEmpty) {
+      // 不在存量内存，但可能在跑批中的 local metas——同样登记全集。
+      _forgotten.addAll(ids);
+      return;
+    }
+    // 登记全集（非仅内存交集）：跑批中的 local metas 未合并进 _metas，
+    // 交集判定会漏掉在途 id → end 合并复活（一次性消费，无误伤面）。
+    _forgotten.addAll(ids);
     for (final id in hit) {
       _metas.remove(id);
       _mtimes.remove(id);
     }
-    await _store.deleteByIds(hit);
+    // DB 删全集：不在内存的 id 行可能仍存在（load 缺口），删不存在的行是
+    // 幂等 no-op。
+    await _store.deleteByIds(ids);
     state = SearchIndexState(
       running: state.running,
       processed: state.processed,

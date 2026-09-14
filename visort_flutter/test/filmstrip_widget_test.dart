@@ -7,6 +7,7 @@
 //  - 深位：千张相册中后段打开 O(1) 定位、图源 index 对位；
 //  - 高速甩动视口不空窗；外部跳格同帧落位；慢滑不漂移；
 //  - 锁步：pagePos fraction 双项插值跟随、pagerDriven 让位。
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -82,6 +83,108 @@ void main() {
     center.value = 1;
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull, reason: '程序滑移路径应无异常');
+  });
+
+  testWidgets('删空窗口（itemCount 0 + center -1）零项渲染不抛异常（真机 ⚠ 回归）',
+      (tester) async {
+    // 2026-09-13 真机实证：删除清空后 center 被写 min(index, -1) = -1 →
+    // _sel = clamp(0, -1) = -1 → thumbnail(-1) RangeError → 条内 ErrorWidget
+    //（release 深底 + 大号黄色 ⚠）。三处 clamp 守卫 + _visibleItems 渲染
+    // 兜底后，敌意 -1 也必须零项自洽。
+    final center = ValueNotifier<int>(0);
+    await tester.pumpWidget(
+      _wrap(
+        Filmstrip(
+          itemCount: 1,
+          initialIndex: 0,
+          center: center,
+          thumbnail: (i) => MemoryImage(_png),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    center.value = -1; // 敌意值：渲染侧兜底不得依赖写入端守卫
+    await tester.pumpWidget(
+      _wrap(
+        Filmstrip(
+          itemCount: 0,
+          initialIndex: 0,
+          center: center,
+          thumbnail: (i) => MemoryImage(_png),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(tester.takeException(), isNull, reason: '删空窗口不应构建任何项');
+    expect(find.byType(Image), findsNothing);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('删除补位：travel 驱动下一格变宽滑入，对齐后无二次撑开（真机 ⚠/动画回归）',
+      (tester) async {
+    // 2026-09-14 删除动画改版：frozen 置位时触发 travel（滑移+新格变宽
+    // 同步），removeAt 收缩对齐时 focus 已是 1（无二次撑开）。回归点：
+    //  1. 全流程无异常（旧 translate 结构曾致 ParentData 挂载异常 ⚠）；
+    //  2. 终态聚焦格精确居中、方形 32；
+    //  3. 收缩对齐不重启动画（对齐帧后无残余运动）。
+    final center = ValueNotifier<int>(0);
+    final frozen = ValueNotifier<bool>(false);
+    final anim = AnimationController(
+      vsync: tester,
+      duration: const Duration(milliseconds: 250),
+    );
+    addTearDown(anim.dispose);
+    var itemCount = 3;
+    var deleteIndex = 0;
+    late StateSetter setState;
+    await tester.pumpWidget(
+      StatefulBuilder(
+        builder: (context, setState2) {
+          setState = setState2;
+          return _wrap(
+            Filmstrip(
+              itemCount: itemCount,
+              initialIndex: 0,
+              center: center,
+              frozen: frozen,
+              deleteAnim: anim,
+              deleteIndex: deleteIndex,
+              thumbnail: (i) => MemoryImage(_png),
+            ),
+          );
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 冻结 + 发起删除：travel 应立即接管（下一格滑向中心并变宽）。
+    frozen.value = true;
+    unawaited(anim.forward(from: 0));
+    await tester.pump(const Duration(milliseconds: 120));
+    expect(tester.takeException(), isNull, reason: '删位中帧无异常');
+
+    // 动画收尾 + removeAt 收缩对齐（detail_page 同款：动画完成即复位
+    // deleteIndex，否则终值 scale=0 会把该格压成零尺寸）。
+    await tester.pump(const Duration(milliseconds: 150));
+    itemCount = 2;
+    deleteIndex = -1;
+    center.value = 0;
+    setState(() {});
+    await tester.pump();
+    frozen.value = false;
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull, reason: '全流程无异常');
+    final img = _centerImageRect(tester);
+    expect(
+      (img.center.dx - _viewportW / 2).abs(),
+      lessThan(0.5),
+      reason: '补位完成：新聚焦格精确居中',
+    );
+    expect(img.width, closeTo(32, 0.5), reason: '新聚焦格方形 32（无二次撑开残迹）');
   });
 
   testWidgets('聚焦图方形居中且间隙均匀（变格宽 28/43.5）', (tester) async {

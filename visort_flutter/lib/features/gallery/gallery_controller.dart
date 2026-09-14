@@ -1057,6 +1057,12 @@ class GalleryController extends Notifier<GalleryState> {
   Future<String?> deletePhotos(List<String> ids) async {
     if (ids.isEmpty) return null;
     try {
+      // 静默窗先开（2026-09-13 审查 P3，与 trashPhoto 顺序对齐）：requestDelete
+      // 的系统删除完成 → observer 事件经 Kotlin 300ms 防抖先期到达（此刻
+      // 仍在下方 exists 复查的 await 中，静默窗未开）→ observer 分支移除 +
+      // count-1，复查链再 _applyBucketDeltaBatch 又 count-1 = 双减（末尾
+      // loadBuckets 校准兜住，可见窗数百 ms）。
+      _markSelfMutation();
       await _channel.requestDelete(ids);
       final gone = <String>[];
       final stuck = <String>[];
@@ -1070,7 +1076,6 @@ class GalleryController extends Notifier<GalleryState> {
         }
       }
       if (gone.isEmpty) return 'delete_failed';
-      _markSelfMutation();
       for (final id in gone) {
         evictImageCache(id);
       }
@@ -1297,7 +1302,11 @@ class GalleryController extends Notifier<GalleryState> {
       );
       return null;
     } on MsException catch (e) {
-      // 同名冲突等类型化错误：原样透传 code 名，UI 层直接当 i18n key
+      // 同名冲突等类型化错误转既有 i18n key（2026-09-13 审查 P3）：枚举名
+      // 是 camelCase（nameExists），i18n 表是 snake_case（name_exists）——
+      // 原样透传 code 名会 miss key，toast 直出英文标识符。rename 链可触达
+      // 的类型化错误只有同名冲突，其余走通用 catch。
+      if (e.code == MsErrorCode.nameExists) return 'name_exists';
       return e.code.name;
     } catch (e) {
       return e.toString();
@@ -1435,7 +1444,14 @@ class GalleryController extends Notifier<GalleryState> {
         // 新增/修改/兜底：防抖合并后按当前视图(单一枚举)重载对应第一页/相册数
         _observerDebounce?.cancel();
         _observerDebounce = Timer(const Duration(milliseconds: 400), () {
-          if (state.loadingMore) return;
+          // 撞上分页中不能直接丢（2026-09-13 审查 P3）：pending 机制只覆盖
+          // 「事件到达时在分页」，没覆盖「防抖到期时在分页」——直接 return
+          // 会把本批外部变更丢到下一次任意 MediaStore 变更才恢复。记
+          // _pendingObserverReload 交由 loadMore 完成后的 flush 补执行。
+          if (state.loadingMore) {
+            _pendingObserverReload = true;
+            return;
+          }
           switch (state.view) {
             case GalleryView.favorites:
               enterFavorites(silent: true);

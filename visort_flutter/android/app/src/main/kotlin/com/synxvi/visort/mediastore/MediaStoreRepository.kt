@@ -228,6 +228,14 @@ class MediaStoreRepository(private val context: Context) {
         trashedOnly: Boolean = false,
     ): ScanPage {
         val results = mutableListOf<MsImageInfo>()
+        // HEIC 尺寸复核待办（2026-09-13 审查 P2）：循环内只登记，cursor 关闭
+        // 后并行执行（大相册全量首开的串行流头读曾卡首屏 15-40s）。index =
+        // 该行即将 add 进 results 的下标（HEIC 块后无 continue，恒成立）。
+        data class HeicPendingRow(
+            val index: Int, val id: String, val uri: Uri,
+            val orientation: Int, val dateModified: Long,
+        )
+        val heicPending = mutableListOf<HeicPendingRow>()
         // 多查一列 _ID 用作 keyset 二级排序键；sortColumn 用于游标比较
         val projection = ArrayList<String>().apply {
             add(MediaStore.Images.Media._ID)
@@ -371,16 +379,16 @@ class MediaStoreRepository(private val context: Context) {
                     // HEIC/HEIF：MediaStore 对部分机型报错误尺寸（aves 同修，见
                     // aves MediaStoreImageProvider 复核逻辑）——inJustDecodeBounds
                     // 读容器真实尺寸覆盖。仅 HEIC 行付一次流头读成本，JPEG/PNG 零开销。
+                    // 登记后并行执行（见函数头 heicPending 注释），结果原地回填。
                     if (mime == "image/heic" || mime == "image/heif") {
                         val orient = if (idxOrient >= 0 && !cursor.isNull(idxOrient)) cursor.getInt(idxOrient) else 0
                         val longId = id.toLongOrNull()
                         if (longId != null) {
-                            val uri = ContentUris.withAppendedId(
-                                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
-                            )
-                            heicVerifiedSize(id, uri, orient, dateModified)?.let { (w, h) ->
-                                imgWidth = w; imgHeight = h
-                            }
+                            heicPending.add(HeicPendingRow(
+                                results.size, id, ContentUris.withAppendedId(
+                                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, longId
+                                ), orient, dateModified,
+                            ))
                         }
                     }
                     // isHdr 不在此检测：scan 路径保持零文件 IO（曾把 64KB 头读
@@ -412,6 +420,31 @@ class MediaStoreRepository(private val context: Context) {
         // 让下一页继续向前取，旧项不再永久不可达。窗口语义局限（非全局
         // 升序分页，而是"最近 N 条按升序排"，>60 条回收站时最旧项仍
         // 滞后一页可达）随设备支持 ASC 查询后消除。
+        // HEIC 并行复核（2026-09-13 审查 P2）：cursor 已关，临时 6 路小池并行
+        // 流头读（heicSizeCache 为 ConcurrentHashMap；heicVerifiedSize 自捕获
+        // 异常返回 null = 保留 MediaStore 原尺寸，语义与串行版一致）。结果只在
+        // 调用线程回填 results，无跨线程共享可变状态。[HEIC] 打点供真机核对。
+        if (heicPending.isNotEmpty()) {
+            val t0 = System.currentTimeMillis()
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(
+                minOf(6, heicPending.size)
+            )
+            try {
+                val futures = heicPending.map { p ->
+                    pool.submit(java.util.concurrent.Callable {
+                        heicVerifiedSize(p.id, p.uri, p.orientation, p.dateModified)
+                    })
+                }
+                heicPending.forEachIndexed { i, p ->
+                    futures[i].get()?.let { (w, h) ->
+                        results[p.index] = results[p.index].copy(width = w, height = h)
+                    }
+                }
+            } finally {
+                pool.shutdown()
+            }
+            Log.i(TAG, "[HEIC] verify n=${heicPending.size} dt=${System.currentTimeMillis() - t0}ms")
+        }
         if (sortBy == "dateTrashed" && asc && results.size > 1) {
             results.reverse()
         }
@@ -1001,6 +1034,16 @@ class MediaStoreRepository(private val context: Context) {
     /// 同款行为（系统 thumb vs 原图直读）。
     /// 超大图（>25MP，48MP 全像素模式 8160×6144 = 引擎全解 ~192MB bitmap
     /// OOM 风险）：仍走采样重压缩慢链（blob 缓存保留供二次秒读）。
+    /// 快链直回 bytes 的引擎可解 mime 白名单（2026-09-13 审查 P2 修复）：
+    /// Flutter 引擎 Skia codec 集不含 RAW/TIFF/SVG（HEIC/AVIF 走平台慢链
+    /// 更稳）——非白名单 mime 一律落采样重压缩慢链（平台 BitmapFactory
+    /// 代解出 JPEG bytes），否则 DNG ≤26MP 直回原始 bytes 引擎解不了 =
+    /// 4096 永久失败卡 1152（审查实证）。outMimeType 为 null（部分设备
+    /// 对冷门格式）保守走慢链——慢链失败兜底与直链失败等价，无回归面。
+    private val engineDirectMimes = setOf(
+        "image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp"
+    )
+
     fun readSampledJpeg(id: String, targetWidth: Int): Map<String, Any> {
         val safeTarget = targetWidth.coerceIn(960, 4096)
         val longId = id.toLongOrNull() ?: throw MsError.InvalidArg("非法图片 id: $id")
@@ -1019,7 +1062,13 @@ class MediaStoreRepository(private val context: Context) {
         val origH = boundsOpts.outHeight
         // 快链：全像素 ≤26MP（解码 bitmap ~100MB 上限内）直回原图 bytes。
         // EXIF orientation 交引擎（SkCodec 应用，immich/Flutter 同款）。
-        if (origW > 0 && origW.toLong() * origH <= 26_000_000L) {
+        // mime 门（2026-09-13 审查 P2）：非引擎可解格式（RAW/TIFF/HEIC…）
+        // 直回 bytes 引擎解码必败 → 慢链平台代解。[FP] 打点供真机核对路由。
+        val engineDirect = origW > 0 && boundsOpts.outMimeType in engineDirectMimes
+        if (!engineDirect && origW > 0) {
+            Log.i(TAG, "[FP] slow-chain mime=${boundsOpts.outMimeType} id=$id")
+        }
+        if (origW > 0 && origW.toLong() * origH <= 26_000_000L && engineDirect) {
             val input = contentResolver.openInputStream(uri)
                 ?: throw MsError.QueryFailed("无法打开 InputStream: $id")
             val bytes = input.use { it.readBytes() }

@@ -90,6 +90,29 @@ class _PageSettleTakeOverState extends State<PageSettleTakeOver>
 
   VelocityTracker? _tracker;
 
+  /// spring 被按下中断的标记（2026-09-13 审查 P2）：中断后若本指针序列是
+  /// 纯点击（无 move 样本 → drag recognizer 未参战、tap 赢 arena，原生不
+  /// 产生 ballistic），_scheduleTakeOver 两拍守卫不通过 = 页面停在两页之间
+  /// 无任何恢复路径——up/cancel 时就地起回最近页的弹簧补上这条路。
+  bool _springInterrupted = false;
+
+  /// 回最近页恢复（审查 P2）：spring 中断后无 ballistic 兜底的序列终点。
+  void _recoverToNearestPage() {
+    if (!mounted || !widget.enabled) return;
+    final ctrl = widget.controller;
+    if (!ctrl.hasClients) return;
+    final pos = ctrl.position;
+    final vp = pos.viewportDimension;
+    if (vp <= 0) return;
+    var page = (pos.pixels / vp).roundToDouble();
+    final maxPage = pos.maxScrollExtent / vp;
+    if (page < 0) page = 0;
+    if (page > maxPage) page = maxPage;
+    if ((page * vp - pos.pixels).abs() >= 0.5) {
+      _springTo(page * vp);
+    }
+  }
+
   /// 抬手速度（goBallistic 语义：-dx），含 synthesized 的完整轨迹估计
   /// ——physics 速度通道（只吃非合成事件）失效时的替代源。
   double _dragVelocity = 0;
@@ -171,7 +194,10 @@ class _PageSettleTakeOverState extends State<PageSettleTakeOver>
   /// spring 自驱到目标像素（零初速：弹簧从当前位置从容拉过去）。
   void _springTo(double target) {
     final ctrl = widget.controller;
-    final from = ctrl.hasClients ? ctrl.position.pixels : target;
+    // 无 clients 早退（2026-09-13 审查 P3）：旧写法 from 有 hasClients 兜底
+    // 分支，但后续仍裸取 ctrl.position → 兜底形同虚设（StateError）。
+    if (!ctrl.hasClients) return;
+    final from = ctrl.position.pixels;
     final sim = ScrollSpringSimulation(
       SnapPageScrollPhysics.snapSpring,
       from,
@@ -248,6 +274,7 @@ class _PageSettleTakeOverState extends State<PageSettleTakeOver>
   /// 已错过子树，下个手势起完全恢复。
   void _onDown(PointerDownEvent _) {
     _tracker = null; // 新指针序列：速度基线重置
+    if (_springTicker != null) _springInterrupted = true;
     _stopSpring();
     final ctrl = widget.controller;
     if (ctrl.hasClients && _isBallistic(ctrl.position)) {
@@ -275,6 +302,7 @@ class _PageSettleTakeOverState extends State<PageSettleTakeOver>
         _tracker!.addPosition(e.timeStamp, e.position);
       },
       onPointerUp: (e) {
+        final hadMoves = _tracker != null;
         final v = _tracker?.getVelocity().pixelsPerSecond;
         _tracker = null;
         // 主导轴过滤：垂直手势（上滑面板/下滑关闭）松手动量含水平抖动/
@@ -284,11 +312,22 @@ class _PageSettleTakeOverState extends State<PageSettleTakeOver>
         final dy = v?.dy ?? 0.0;
         _dragVelocity = dy.abs() <= dx.abs() ? -dx : 0.0;
         _scheduleTakeOver();
+        // 【中断恢复】（审查 P2）：spring 期间按下且本序列纯点击——drag
+        // recognizer 被 reject 无 ballistic，上面两拍守卫必然不通过，就地
+        // 回最近页。拖动过的序列交还原生 ballistic 链（takeOver 正常接管）。
+        final wasInterrupted = _springInterrupted;
+        _springInterrupted = false;
+        if (wasInterrupted && !hadMoves) _recoverToNearestPage();
       },
       onPointerCancel: (_) {
         _tracker = null;
         _dragVelocity = 0;
+        // 系统打断（通知栏下拉等）：无后续事件也无 ballistic，spring 在跑
+        // 或被中断过都同样回最近页（旧链 _stopSpring 后悬停两页间同族缺陷）。
+        final wasSpringing = _springTicker != null || _springInterrupted;
+        _springInterrupted = false;
         _stopSpring();
+        if (wasSpringing) _recoverToNearestPage();
       },
       child: widget.child,
     );

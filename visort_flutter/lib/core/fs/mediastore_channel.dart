@@ -29,6 +29,7 @@ enum MsErrorCode {
   trashCancelled,
   restoreCancelled,
   nameExists,
+  detached,
   unknown;
 
   static MsErrorCode fromString(String? code) => switch (code) {
@@ -40,6 +41,10 @@ enum MsErrorCode {
         'TRASH_CANCELLED' => MsErrorCode.trashCancelled,
         'RESTORE_CANCELLED' => MsErrorCode.restoreCancelled,
         'NAME_EXISTS' => MsErrorCode.nameExists,
+        // 系统弹窗期间 Activity 被 detach/重建（分屏/系统回收前台）——
+        // Kotlin cleanupBinding 六处发此码（2026-09-13 审查 P3 补齐映射，
+        // 此前落 unknown）。
+        'DETACHED' => MsErrorCode.detached,
         _ => MsErrorCode.unknown,
       };
 }

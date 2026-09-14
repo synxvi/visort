@@ -259,8 +259,31 @@ class _AndroidBytesImageProvider
       tag: 'full4096:${ref.id}',
     );
     final buffer = await ui.ImmutableBuffer.fromUint8List(r.bytes);
-    // 原图 bytes 原样（EXIF orientation 由引擎 SkCodec 应用）：原尺寸解。
-    final codec = await decode(buffer);
+    // 原图 bytes 原样（EXIF orientation 由引擎 SkCodec 应用）。原尺寸解的
+    // 例外（2026-09-13 审查 P1）：超过防崩阈值时等比降采样（与 _loadAsync
+    // 的 HD 兜底同款）——Kotlin 快链门槛 26MP 高于低内存机（<5GB）的
+    // 24MP 红线，24~26MP 恰好越线窗口曾以 ~104MB 全尺寸解码绕过该设备类
+    // 自己声明的防崩阈值。未超阈值返回原始尺寸（等效全分辨率解码），
+    // 高内存机（≥50MP 上限）行为不变。
+    final codec = await decode(
+      buffer,
+      getTargetSize: (int intrinsicWidth, int intrinsicHeight) {
+        final px = intrinsicWidth * intrinsicHeight;
+        final max = _cachedMaxDecodePixels;
+        if (px <= max) {
+          return ui.TargetImageSize(
+            width: intrinsicWidth,
+            height: intrinsicHeight,
+          );
+        }
+        final aspect = intrinsicWidth / intrinsicHeight;
+        final targetH = math.sqrt(max / aspect);
+        return ui.TargetImageSize(
+          width: (aspect * targetH).round(),
+          height: targetH.round(),
+        );
+      },
+    );
     final frame = await codec.getNextFrame();
     return frame.image;
   }
@@ -318,16 +341,22 @@ class _AndroidBytesImageProvider
       // [RAW] 排查打点：channel 回传时刻（与 [SP] 的任务完成时刻对齐——
       // 二者应同刻；[RAW] px 晚于 [SP] done = Dart→native 发起或回传被延迟）。
       final rawT0 = DateTime.now().microsecondsSinceEpoch ~/ 1000;
-      final r = await ServicePolicy.instance
-          .run(
-            key.priority,
-            () => _msChannel.readSampledImage(
+      final r = await ServicePolicy.instance.run(
+        key.priority,
+        // ⚠️ timeout 必须在 job 内（channel 调用上）——与 4096 档
+        // loadJpegImageForUpgrade 同款约定（2026-09-13 审查 P2）：裹在
+        // run 外会把 ServicePolicy 排队计入 5s，深队时当前页 1152 被误杀
+        // TimeoutException → 走下方 fallback 裸 readBytes（绕过六门限流
+        // + 全图下采样双解码）且原 job 仍在跑 = 同图双解码 IO 突刺。
+        // job 内计时 = 只量 channel 本身。
+        () => _msChannel
+            .readSampledImage(
               key.ref.relativePath,
               targetWidth: tw,
-            ),
-            tag: 'full${tw}:${key.ref.id}',
-          )
-          .timeout(const Duration(seconds: 5));
+            )
+            .timeout(const Duration(seconds: 5)),
+        tag: 'full${tw}:${key.ref.id}',
+      );
       debugPrint(
         '[RAW] px id=${key.ref.id} dt=${(DateTime.now().microsecondsSinceEpoch ~/ 1000) - rawT0}ms t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
       );
@@ -354,7 +383,15 @@ class _AndroidBytesImageProvider
     }
     // 兜底：readBytes 全图 + dart 侧下采样解码（codec 单帧转 image；非
     // GIF——GIF 已在 loadImage 分流到 MultiFrame 路径）。
-    final bytes = await _fs.readBytes(key.ref);
+    // 过 ServicePolicy 同优先级限流（2026-09-13 审查 P2）：裸调绕过六门
+    // 会与在途任务叠出 IO 突刺（快甩 fallback 连发时主线程 channel 回传
+    // 拥塞）。tag 带 FB 后缀与主链区分（压级匹配只对 full4096/full1152
+    // 前缀生效，不受影响）。
+    final bytes = await ServicePolicy.instance.run(
+      key.priority,
+      () => _fs.readBytes(key.ref),
+      tag: 'full${tw}FB:${key.ref.id}',
+    );
     final buffer = await ui.ImmutableBuffer.fromUint8List(
       bytes is Uint8List ? bytes : Uint8List.fromList(bytes),
     );
@@ -702,6 +739,12 @@ class _ProgressiveViewerImageCompleter extends ImageStreamCompleter
       targetWidth: _key.baseTargetWidth,
       priority: _key.priority,
     );
+    // containsKey 守卫（2026-09-13 审查 P3）：resolve 在缓存外必发起新解码
+    //（既有 1152 条目已被 LRU 挤出时），probe listener 因非同步回调摘除、
+    // 解码结果无人观看却照常跑完——与项目内其余只读探测的三态守卫约定
+    // 对齐（zoomable_image 的 probe 同款）。三态皆空直接放弃首帧。
+    final cache = PaintingBinding.instance.imageCache;
+    if (!cache.containsKey(base)) return null;
     final completer = base.resolve(const ImageConfiguration()).completer;
     if (completer == null) return null;
     ImageInfo? stolen;

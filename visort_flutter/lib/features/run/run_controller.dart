@@ -238,10 +238,17 @@ class RunController {
     // 批量删除（MediaStore createDeleteRequest 一次系统弹窗；桌面端逐个删）
     if (pendingDeleteIds.isNotEmpty) {
       final deletedIds = <String>{};
+      // 用户取消系统弹窗的分块（2026-09-13 审查 P2）：取消 ≠ 失败——计入
+      // skipped 而非 delete_failed，不再整批红色误报刷屏（决策保留可重跑）。
+      final cancelledDeleteIds = <String>{};
       for (var i = 0; i < pendingDeleteIds.length; i += kConsentBatchSize) {
         final chunk = pendingDeleteIds.sublist(
             i, math.min(i + kConsentBatchSize, pendingDeleteIds.length));
-        deletedIds.addAll(await _fs.deleteBatch(chunk, session.sourceDir));
+        try {
+          deletedIds.addAll(await _fs.deleteBatch(chunk, session.sourceDir));
+        } on ConsentCancelledException catch (e) {
+          cancelledDeleteIds.addAll(e.ids);
+        }
       }
       for (final entry in entries) {
         if (entry.value.action == DecisionAction.delete) {
@@ -250,6 +257,8 @@ class RunController {
           final imgRef = refOf(fileId);
           if (deletedIds.contains(imgRef.relativePath)) {
             deleted.add(fileId);
+          } else if (cancelledDeleteIds.contains(imgRef.relativePath)) {
+            skipped.add(fileId);
           } else {
             errors.add((file: fileId, reason: 'delete_failed'));
           }

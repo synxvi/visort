@@ -188,6 +188,13 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
     try {
       final ok = await _channel.requestTrash(ids);
       return ok ? ids.toSet() : const <String>{};
+    } on MsException catch (e) {
+      // 用户取消弹窗：取消 ≠ 失败（2026-09-13 审查 P2）——类型化透传给
+      // Run 层计 skipped。其他失败语义不变（空集 → delete_failed）。
+      if (e.code == MsErrorCode.trashCancelled) {
+        throw ConsentCancelledException(ids.toSet());
+      }
+      return const {};
     } catch (_) {
       return const {};
     }
