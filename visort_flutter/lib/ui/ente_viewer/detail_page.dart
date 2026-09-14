@@ -179,6 +179,15 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 图片区垂直拖拽激活阈值：与旧 swipe 8px 感知阈值一致（超即跟手）。
   static const double _kPanelDragActivateSlop = 8.0;
 
+  /// 下滑退出（面板关）触发阈值（2026-09-15 手感调优）：与呼出面板的
+  /// 激活 slop（8px，轻触即呼）分开——退出是破坏性方向，8px 极易误返回；
+  /// 72px ≈ 单指自然下划的四分之一屏内行程，明确意图才退。
+  static const double _kDismissDragThreshold = 72.0;
+
+  /// 面板跟手步进增益（2026-09-15 手感调优）：1:1 映射（手指滑全程
+  /// 像素面板才满）手感迟滞，×1.4 手指约七成行程面板到位。
+  static const double _kPanelDragGain = 1.4;
+
   // ─────────────── 底栏缩略图条 ───────────────
   /// 条居中项双向桥（Filmstrip.center）：外部写 = 程序滚动+聚焦指令
   ///（主图翻页联动/删除同步）；条滚动中组件实时写（跟手联动入口）。
@@ -486,7 +495,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 空回调、零调用接线：每张 ~9.5MB 三级条目会占满 ImageCache、挤掉网格
   /// 缩略图，表现为「打开关闭几次后滚动变卡」。
   final _viewedFullIds = <String>{};
-  int? _viewerTargetWidthPx;
+
+  /// 本会话实际用过的 viewer 解码档集合（2026-09-14 审查 P2）：加载侧
+  /// （zoomable）每次现算 computeViewerTargetWidth——viewer 内旋转屏幕后
+  /// 物理宽变长边，新档条目照常入缓存；evict 侧若只固化首向 tw（旧
+  /// `??=` 单值），新档大条目漏清（12MP ~13MB/张，pop 后挤压网格缩略
+  /// 图）。Set 收集每次 full 加载时的 tw，evict 逐档清（幂等，不存在
+  /// 的档 no-op）。
+  final _viewerTargetWidths = <int>{};
 
   /// 放大升档已就绪的 id 集合：2304 档 ~16MB / 4096 档 ~50MB 每张，远重于
   /// 1152 档 3MB——不进 _viewedFullIds 的 ±6 宽窗（14 张宽窗 × HD 内存 =
@@ -498,10 +514,13 @@ class _DetailPageState extends ConsumerState<DetailPage>
     _viewedFullIds.add(id);
     cachePerfEvent('fullLoaded id=$id n=${_viewedFullIds.length}');
     // 此时 context 处于活跃生命周期（zoomable_image 全图解码完成回调），
-    // MediaQuery 读取安全；dispose 阶段不可再读 inherited，故提前缓存。
-    _viewerTargetWidthPx ??= computeViewerTargetWidth(
-      MediaQuery.sizeOf(context).width *
-          MediaQuery.devicePixelRatioOf(context),
+    // MediaQuery 读取安全；dispose 阶段不可再读 inherited，故每次登记
+    // 实际 tw（旋转后新档入集合——evict 面与加载面同步，见字段 doc）。
+    _viewerTargetWidths.add(
+      computeViewerTargetWidth(
+        MediaQuery.sizeOf(context).width *
+            MediaQuery.devicePixelRatioOf(context),
+      ),
     );
   }
 
@@ -511,17 +530,20 @@ class _DetailPageState extends ConsumerState<DetailPage>
   }
 
   void _evictViewedViewerCache() {
-    final tw = _viewerTargetWidthPx;
     // 【pop 压级】滚动期间发起的 4096（每个 400-600ms）若已入队，pop 后
     // 会串行堵住网格 cell 解码（p200 排 p150 后）=「网格全占位几秒」。
     // 全部挪到弃置档，网格立即插前。
     ServicePolicy.instance.deprioritizeQueued(
       (t) => t.tag?.startsWith('full4096:') ?? false,
     );
-    if (tw == null || _viewedFullIds.isEmpty) return;
-    cachePerfEvent('evictAll R=pop n=${_viewedFullIds.length} tw=$tw');
+    if (_viewerTargetWidths.isEmpty || _viewedFullIds.isEmpty) return;
+    cachePerfEvent(
+        'evictAll R=pop n=${_viewedFullIds.length} tw=$_viewerTargetWidths');
     for (final id in _viewedFullIds) {
-      evictViewerImageCache(id, tw);
+      // 逐档清（viewer 内旋转过的会话有多档——旧实现只清首向档）。
+      for (final tw in _viewerTargetWidths) {
+        evictViewerImageCache(id, tw);
+      }
     }
     _viewedFullIds.clear();
     // HD 集合兜底：evictViewerImageCache 已含 2304 键（含翻页窄窗漏网的
@@ -555,11 +577,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // HD 窄窗先行：不受下方 1152 宽窗的 early return（集合 ≤14 张）影响
     //——两张 HD 就值得逐远端（内存权重完全不同，见 _hdIds doc）。
     _trimDistantHdCache(currentIndex);
-    final tw = _viewerTargetWidthPx;
     // 窗口 14 张（±6 + 当前）与 _prefetchPageNeighbors 的预取窗口 ±5 对齐
     //（留 1 档裕量）：±5 版真机实证 trim 仍按旧 ±3 清——dist4~5 刚解码
     // 入缓存即被驱逐（预取白跑 27ms、页到达重解）= 快甩残余 miss 主因。
-    if (tw == null || _viewedFullIds.length <= 14) return;
+    if (_viewerTargetWidths.isEmpty || _viewedFullIds.length <= 14) return;
     final indexById = _idIndex; // F19：O(1) 查表替线性扫
     final distant = <String>[];
     for (final id in _viewedFullIds) {
@@ -570,7 +591,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
       if ((i - currentIndex).abs() > 6) distant.add(id);
     }
     for (final id in distant) {
-      evictViewerImageCache(id, tw);
+      for (final tw in _viewerTargetWidths) {
+        evictViewerImageCache(id, tw);
+      }
       _viewedFullIds.remove(id);
     }
     if (distant.isNotEmpty) {
@@ -860,7 +883,21 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // 图片」的根（真机体感 2026-09-12）。速度通道（轻扫翻页）放大态
     // 关闭：贴边外拖是精细操作，手指速度天然超阈值会被误判成轻扫
     // 强制翻页（真机实证 2026-09-12）。child 固定，zoomed 变化只换参。
-    return ValueListenableBuilder<bool>(
+    return NotificationListener<ScrollStartNotification>(
+      onNotification: (n) {
+        // 【条驱动打断检测】（2026-09-14 审查 P2）：条驱动 220ms 窗口内
+        // 用户拖动主图会打断 DrivenScrollActivity，此后所有 onPageChanged
+        // 被 _pagerDrivenByThumb 无条件吞掉（兜底 timer 只复位 flag 不修
+        // sel）→ 宿主 sel/条聚焦停在点按目标页、主图实际显示用户拖到的
+        // 页。dragDetails 非空 = 用户手势发起（程序动画的 ScrollStart
+        // dragDetails 为 null）→ 即刻复位 flag，把控制权交还用户链。
+        if (n.dragDetails != null && _pagerDrivenByThumb) {
+          _pagerDrivenByThumb = false;
+          _pagerDrivenN.value = false;
+        }
+        return false;
+      },
+      child: ValueListenableBuilder<bool>(
       valueListenable: isZoomedNotifier,
       builder: (context, zoomed, child) => PageSettleTakeOver(
         controller: _pageController,
@@ -1030,6 +1067,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
               : const SnapPageScrollPhysics(parent: BouncingScrollPhysics()),
           controller: _pageController,
           itemCount: _files.length,
+      ),
       ),
       ),
     );
@@ -1426,6 +1464,10 @@ class _DetailPageState extends ConsumerState<DetailPage>
   void _onThumbCenterChanged(int i) {
     _claimStripIndex(i);
     if (i == _selectedIndexNotifier.value) return;
+    // [FSC] 取证打点（2026-09-15 条轻扫偶发闪图排查）：逐档硬跳的时刻
+    // 序列，与 zoomable 的 pick/updfl/selChanged-attach 时间线在 probe.log
+    // 对齐——闪图复现时定位「闪的瞬间」落在哪条链上。
+    debugPrint('[FSC] cross i=$i t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}');
     _selectedIndexNotifier.value = i;
     widget.onIndexChanged?.call(i);
     if (_pageController.hasClients) {
@@ -2196,7 +2238,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // 气泡与动画同时出现，物理上点不到这么快，纯防御。
     if (_deletingInProgress) return;
     final controller = container.read(galleryControllerProvider.notifier);
-    final err = await controller.restorePhoto(photo.id);
+    // 传照片快照：恢复成功后由 controller 按当前视图插回（审查 P1-1——
+    // observer 回声被静默窗吞，viewer 本地插回覆盖不到相册网格/收藏列表）。
+    final err = await controller.restorePhoto(photo.id, restored: photo);
     if (err != null) {
       // 用户取消系统恢复弹窗是正常动作，静默；真实失败才提示（页面已
       // pop 时静默——恢复失败的照片仍在回收站，入口不丢）。
@@ -2366,7 +2410,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
     if (_panelDragActive) {
       final ctrl = _panelCtrl;
       if (ctrl != null) {
-        ctrl.value = (ctrl.value - dy / slideOutForPanel()).clamp(0.0, 1.0);
+        ctrl.value =
+            (ctrl.value - dy * _kPanelDragGain / slideOutForPanel())
+                .clamp(0.0, 1.0);
       }
       return;
     }
@@ -2382,7 +2428,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
       _panelDragActive = true;
       final file = _fileAt(_selectedIndexNotifier.value);
       if (file != null) _showDetails(file, beginDragging: true);
-    } else if (_panelDragAccum >= _kPanelDragActivateSlop) {
+    } else if (_panelDragAccum >= _kDismissDragThreshold) {
       // 一次性守卫（2026-09-13 审查 P2）：累计制下慢滑（~100px/s）跨越
       // pop 动画全程（~200ms）时 accum 单调增长、每帧连发 maybePop——pop
       // 完成后 lastEntry 已是相册路由，下一帧把相册一并弹掉（双弹）。本

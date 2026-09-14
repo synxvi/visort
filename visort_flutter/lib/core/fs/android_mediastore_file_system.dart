@@ -160,6 +160,11 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
       // 不再被上层误报为全失败
       final moved = await _channel.requestMove(ids, destPath);
       return moved.toSet();
+    } on MsException catch (e) {
+      // consent 超时（2026-09-14 审查 P2）：结果未知 ≠ 失败，放行给
+      // Run 层中止剩余分片（同 deleteBatch 注释）。
+      if (e.code == MsErrorCode.unknown) rethrow;
+      return const {};
     } catch (_) {
       return const {};
     }
@@ -194,6 +199,10 @@ class AndroidMediaStoreFileSystem implements FileSystemRepository {
       if (e.code == MsErrorCode.trashCancelled) {
         throw ConsentCancelledException(ids.toSet());
       }
+      // consent 超时（2026-09-14 审查 P2）：结果未知 ≠ 失败——吞掉会让
+      // Run 继续打后续分片（Kotlin pending 守卫秒拒 = 连锁假失败），且
+      // 用户迟到确认仍会真实变更。放行给 Run 层中止剩余分片。
+      if (e.code == MsErrorCode.unknown) rethrow;
       return const {};
     } catch (_) {
       return const {};

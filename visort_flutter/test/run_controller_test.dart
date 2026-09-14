@@ -14,6 +14,7 @@ import 'package:visort_flutter/core/db/database_service.dart';
 import 'package:visort_flutter/core/db/run_log_store.dart';
 import 'package:visort_flutter/core/fs/file_system_repository.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
+import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/features/run/run_controller.dart';
 import 'package:visort_flutter/features/session/session_models.dart';
 
@@ -61,10 +62,17 @@ class FakeFileSystem implements FileSystemRepository {
   /// deleteBatch 抛「用户取消系统弹窗」（2026-09-13 审查 P2 回归测试用）。
   bool throwConsentCancelOnDelete = false;
 
+  /// deleteBatch 抛「consent 超时」MsException(unknown)（2026-09-14 审查
+  /// P2 回归测试用：结果未知 → Run 层中止记 skipped）。
+  bool throwConsentTimeoutOnDelete = false;
+
   @override
   Future<Set<String>> deleteBatch(List<String> ids, String root) async {
     if (throwConsentCancelOnDelete) {
       throw ConsentCancelledException(ids.toSet());
+    }
+    if (throwConsentTimeoutOnDelete) {
+      throw const MsException(MsErrorCode.unknown, '系统弹窗确认超时');
     }
     final ok = <String>{};
     for (final id in ids) {
@@ -267,5 +275,67 @@ void main() {
     expect(results.deleted, isEmpty);
     // 成功项回写回调（此处空跑无成功项；契约验证回调存在）
     expect(applied, isEmpty);
+  });
+
+  test('applied delete 与 pending delete 混合：不误报 delete_failed（审查 P2）',
+      () async {
+    // 重跑型：b 已在上次 Run 删除成功（appliedIds），a/c 待删——
+    // 旧实现对账遍历全集，b 落 else 分支被追加 delete_failed + skipped
+    // 双计数（appliedIds 防重放在 delete 侧被击穿）。
+    fs.existing
+      ..add(r'D:\src/a.jpg')
+      ..add(r'D:\src/c.jpg'); // b 源已不存在（已删）
+    final decisions = <String, Decision>{
+      'a.jpg': Decision.delete(),
+      'b.jpg': Decision.delete(),
+      'c.jpg': Decision.delete(),
+    };
+    final events = await runner
+        .run(_buildSession(decisions).copyWith(appliedIds: {'b.jpg'}))
+        .toList();
+    final results = events.last.results!;
+    expect(results.deleted, ['a.jpg', 'c.jpg']);
+    expect(results.skipped, ['b.jpg']);
+    expect(results.errors, isEmpty,
+        reason: 'applied 项只计 skipped，不得追加 delete_failed');
+  });
+
+  test('source_missing 与 pending delete 混合：不双列错误行（审查 P2）',
+      () async {
+    // b 不存在（source_missing 单列），a/c 正常删——旧实现 b 会同时
+    // 出现 source_missing 与 delete_failed 两行。
+    fs.existing
+      ..add(r'D:\src/a.jpg')
+      ..add(r'D:\src/c.jpg');
+    final decisions = <String, Decision>{
+      'a.jpg': Decision.delete(),
+      'b.jpg': Decision.delete(),
+      'c.jpg': Decision.delete(),
+    };
+    final events = await runner.run(_buildSession(decisions)).toList();
+    final results = events.last.results!;
+    expect(results.deleted, ['a.jpg', 'c.jpg']);
+    expect(results.errors.length, 1, reason: 'source_missing 恰一行');
+    expect(results.errors.single.file, 'b.jpg');
+    expect(results.errors.single.reason, 'source_missing');
+  });
+
+  test('consent 超时（MsException unknown）→ 中止后续分片记 skipped（审查 P2）',
+      () async {
+    // 超时 = 结果未知：中止而非连锁假失败；未知分片可重跑（skipped）。
+    fs.existing
+      ..add(r'D:\src/a.jpg')
+      ..add(r'D:\src/b.jpg');
+    fs.throwConsentTimeoutOnDelete = true;
+    final decisions = <String, Decision>{
+      'a.jpg': Decision.delete(),
+      'b.jpg': Decision.delete(),
+    };
+    final events = await runner.run(_buildSession(decisions)).toList();
+    final results = events.last.results!;
+    expect(results.deleted, isEmpty);
+    expect(results.errors, isEmpty,
+        reason: '结果未知不得误报 delete_failed');
+    expect(results.skipped, ['a.jpg', 'b.jpg']);
   });
 }

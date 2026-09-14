@@ -109,6 +109,7 @@ const Map<String, String> stringsEn = {
   'selected_count': '{0} album(s) selected',
   'no_selection': 'No album selected',
   'no_albums': 'No albums found',
+  'picker_current_album': 'Current',
   'permission_denied': 'Storage permission denied',
   'permission_needed':
       'Visort needs to read your photo albums to sort images. Please grant the permission.',

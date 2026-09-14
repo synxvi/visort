@@ -2203,8 +2203,14 @@ class MediaStoreRepository(private val context: Context) {
                 // 移成病态——恢复通道从此失效（真机实证：恢复弹窗确认后
                 // is_trashed 仍=1，照片静默消失）。selection 过滤后 trashed 行
                 // 返回 0 rows，自然不计入 moved（上层如实记 move_failed）。
+                // 排除已在目标相册的行（2026-09-14 审查 P2）：SQLite 对同值
+                // update 仍计 rows=1——误选当前相册时照片原地未动却计入
+                // moved，上层按"已移走"从网格移除（重进才恢复）。
                 val rows = contentResolver.update(
-                    itemUri, cv, "${MediaStore.Images.Media.IS_TRASHED} = 0", null
+                    itemUri, cv,
+                    "${MediaStore.Images.Media.IS_TRASHED} = 0 AND " +
+                        "${MediaStore.Images.Media.RELATIVE_PATH} != ?",
+                    arrayOf(normalizedPath)
                 )
                 if (rows > 0) moved.add(id)
                 Log.i(TAG, "doMoveToRelativePath item $id: $rows 行 → $normalizedPath")

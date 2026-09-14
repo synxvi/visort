@@ -271,6 +271,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
         // 其后必须复查：关开关已 clear() 时继续执行会把该批写回已清空的
         // 表并覆写 state/进度 SP（清库复活，子代理审查 P1）。
         if (_isStale(mySeq)) return;
+        batchOut = _dbSideForgottenFilter(batchOut);
         for (final m in batchOut) {
           metas[m.id] = m;
         }
@@ -422,6 +423,7 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       var batchOut = r.values.toList();
       batchOut = await _resolvePlaces(batchOut);
       if (_isStale(mySeq)) return;
+      batchOut = _dbSideForgottenFilter(batchOut);
       await _store.putAll(batchOut, mtimes: mtimeById);
       if (_isStale(mySeq)) {
         await _store
@@ -478,19 +480,20 @@ class SearchIndexService extends Notifier<SearchIndexState> {
       final chunk = pending.skip(i).take(_kBatchSize).toList();
       final resolved = await _resolvePlaces(chunk);
       if (_isStale(mySeq)) return;
+      final resolvedOut = _dbSideForgottenFilter(resolved);
       // 带 _mtimes：REPLACE 会整行覆盖，不带会把已记录的提取时间戳
       // 洗成 null（下次对账误判为待回填）。
-      await _store.putAll(resolved, mtimes: _mtimes);
+      await _store.putAll(resolvedOut, mtimes: _mtimes);
       if (_isStale(mySeq)) {
         await _store
-            .deleteByIds({for (final m in resolved) m.id}); // 清库补偿删除
+            .deleteByIds({for (final m in resolvedOut) m.id}); // 清库补偿删除
         return;
       }
       for (final m in resolved) {
         if (_forgotten.remove(m.id)) continue; // 复活守卫（F11）
         _metas[m.id] = m;
       }
-      wrote = wrote || resolved.isNotEmpty;
+      wrote = wrote || resolvedOut.isNotEmpty;
     }
     _pendingLastAt = DateTime.now();
     if (wrote) onDataChanged?.call();
@@ -556,6 +559,16 @@ class SearchIndexService extends Notifier<SearchIndexState> {
   /// 取消当前索引（开关关闭时先 cancel 再 clear，避免清完又被写回）。
   void cancel() => _cancel = true;
 
+  /// DB 侧复活守卫（2026-09-14 审查 P2）：跑批长 await（geocode 首批数
+  /// 十秒）窗口内 forgetIds 删掉的行，会被窗口后的 putAll write-after-
+  /// delete 写回——F11 只修了内存合并半边，且该 id 不进 `_metas`，进程内
+  /// 反向收敛看不见它（残留至重启）。三处 putAll 落库前统一滤掉已
+  /// forget 的 id；补偿删除集合随之只含实际落库行。
+  List<MsSearchMeta> _dbSideForgottenFilter(List<MsSearchMeta> batch) =>
+      batch.isEmpty
+          ? batch
+          : batch.where((m) => !_forgotten.contains(m.id)).toList();
+
   /// 照片被删除后的索引级联清理（内存 `_metas` + DB 行 + 张数 state）。
   /// 坐标/地名属位置数据，照片删除后不应留库（安全审查：此前唯一清除
   /// 路径是关开关）。跑批中调用：各循环检查点在 async gap 退出，但已
@@ -578,7 +591,10 @@ class SearchIndexService extends Notifier<SearchIndexState> {
     final hit = _metas.keys.where(ids.contains).toSet();
     if (hit.isEmpty) {
       // 不在存量内存，但可能在跑批中的 local metas——同样登记全集。
+      // DB 行清理与非空分支对齐（2026-09-14 审查 P2）：load 缺口/跑批
+      // 未合并的行可能已落库，删不存在的行是幂等 no-op。
       _forgotten.addAll(ids);
+      await _store.deleteByIds(ids);
       return;
     }
     // 登记全集（非仅内存交集）：跑批中的 local metas 未合并进 _metas，

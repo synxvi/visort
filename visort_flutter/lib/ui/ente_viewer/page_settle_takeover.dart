@@ -226,6 +226,16 @@ class _PageSettleTakeOverState extends State<PageSettleTakeOver>
         _stopSpring();
         return;
       }
+      // 【pop 冻结自停】（2026-09-14 审查 P2）：无指针 pop（返回键/手势导
+      // 航）走 detail 的 beginActivity(IdleScrollActivity)——不落进下方
+      // Ballistic/Driven 对撞表，弹簧继续 setPixels 会撞 SDK
+      // assert(activity!.isScrolling)（debug 红屏）并在 pop 淡出中续写像
+      // 素（release 下 sel/页错位、Hero flight 降级）。enabled 含 !_popping
+      // ——冻结即自停，pop 场景像素冻结优先。
+      if (!widget.enabled) {
+        _stopSpring();
+        return;
+      }
       // 【对撞防御】activity 已被其它动画/手势接管（条驱动 animateToPage
       // 的 Driven、用户 drag）→ spring 让位自停，杜绝互写。
       // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member

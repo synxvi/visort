@@ -855,4 +855,78 @@ void main() {
       );
     }
   });
+
+  testWidgets('轻扫跨档松手：被扫离项不残留中途宽度（审查 P1 focus 冻结）',
+      (tester) async {
+    final center = ValueNotifier<int>(10);
+    await tester.pumpWidget(
+      _wrap(
+        Filmstrip(
+          itemCount: 30,
+          initialIndex: 10,
+          center: center,
+          thumbnail: (i) => MemoryImage(_png),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 稳态宽度白名单（普通 23 / 聚焦 31），不依赖具体数值。
+    final steady = _imageRects(tester).map((r) => r.width).toList();
+
+    // 标准轻扫：down→跨档位移→up 带速度一气呵成——拖动时长 <180ms
+    // 缩回补间未完成即松手，flinging 分支冻结补间（原 bug 场景）。
+    await tester.fling(find.byType(Filmstrip), const Offset(-120, 0), 800);
+    await tester.pumpAndSettle();
+
+    final bad = _imageRects(tester)
+        .map((r) => r.width)
+        .where((w) => !steady.any((s) => (s - w).abs() <= 0.6))
+        .toList();
+    expect(
+      bad,
+      isEmpty,
+      reason: '停稳后不允许存在中途宽度项（focus 冻结残留会半宽半亮'
+          '并随轻扫累积）',
+    );
+  });
+
+  testWidgets('锁步中条上轻扫：插值对另一项不残留（审查 P1 同族缺口）',
+      (tester) async {
+    final center = ValueNotifier<int>(2);
+    final pagePos = ValueNotifier<double>(2.0);
+    final driven = ValueNotifier<bool>(false);
+    await tester.pumpWidget(
+      _wrap(
+        Filmstrip(
+          itemCount: 10,
+          initialIndex: 2,
+          center: center,
+          thumbnail: (i) => MemoryImage(_png),
+          pagePos: pagePos,
+          pagerDriven: driven,
+          // 宿主联动（真实链路：条跨档上报 → 主图 jumpToPage 跟手）——
+          // 否则停稳后 pagePos 仍停在旧半页（fraction 0.5），锁步重新
+          // 接管重写插值对，那是设计行为而非冻结残留，测试无法隔离。
+          onCenterChanged: (i) => pagePos.value = i.toDouble(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 主图拖到 50%：双项半插值（27.5 宽）——此时在条上发起轻扫。
+    pagePos.value = 2.5;
+    await tester.pump();
+    await tester.fling(find.byType(Filmstrip), const Offset(-90, 0), 800);
+    await tester.pumpAndSettle();
+
+    final bad = _imageRects(tester)
+        .map((r) => r.width)
+        .where((w) => (w - 23).abs() > 0.6 && (w - 32).abs() > 0.6)
+        .toList();
+    expect(
+      bad,
+      isEmpty,
+      reason: '拖动开始时锁步插值对的另一项必须一并清掉（原实现冻结在'
+          '半插值宽度）',
+    );
+  });
 }

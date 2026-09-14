@@ -87,10 +87,19 @@ class _AlbumPickerScreenState extends ConsumerState<AlbumPickerScreen> {
           : ListView.builder(
               padding: const EdgeInsets.symmetric(vertical: 4),
               itemCount: buckets.length,
-              itemBuilder: (_, i) => _PickerRow(
-                bucket: buckets[i],
-                onTap: () => Navigator.of(context).pop(buckets[i]),
-              ),
+              itemBuilder: (_, i) {
+                // 当前所在相册标记+禁选（2026-09-14 审查 P2）：误选当前
+                // 相册的「移动」是 no-op，旧实现无区分——用户无法预判。
+                final isCurrent = buckets[i].id == gallery.bucketId;
+                return _PickerRow(
+                  bucket: buckets[i],
+                  isCurrent: isCurrent,
+                  currentLabel: t(ref, 'picker_current_album'),
+                  onTap: isCurrent
+                      ? null
+                      : () => Navigator.of(context).pop(buckets[i]),
+                );
+              },
             ),
     );
   }
@@ -98,10 +107,17 @@ class _AlbumPickerScreenState extends ConsumerState<AlbumPickerScreen> {
 
 /// 单行相册：封面 + 名称 + 数量（首页列表 tile 同款排版）。
 class _PickerRow extends StatelessWidget {
-  const _PickerRow({required this.bucket, required this.onTap});
+  const _PickerRow({
+    required this.bucket,
+    required this.onTap,
+    this.isCurrent = false,
+    this.currentLabel,
+  });
 
   final MsBucket bucket;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
+  final bool isCurrent;
+  final String? currentLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -146,6 +162,16 @@ class _PickerRow extends StatelessWidget {
                   ],
                 ),
               ),
+              if (isCurrent && currentLabel != null)
+                Text(
+                  currentLabel!,
+                  style: const TextStyle(
+                    fontFamily: 'Space Mono',
+                    fontFamilyFallback: AppFonts.cjkFallback,
+                    fontSize: 11,
+                    color: AppColors.muted,
+                  ),
+                ),
             ],
           ),
         ),

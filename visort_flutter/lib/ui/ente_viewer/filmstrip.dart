@@ -426,8 +426,16 @@ class _FilmstripState extends State<Filmstrip>
     if (_isFrozen) return;
     _cancelAnims();
     _phase = _Phase.dragging;
-    // 拖动开始：聚焦项缩回（系统在首次跨档时弹簧缩回；提前到拖动开始
-    // 观感更连续且语义等价——拖动中无聚焦项）。
+    // 非 sel focus 残留先一次性清（2026-09-14 审查 P1）：锁步双项插值的
+    // 另一项不归缩回补间管——原实现留着，flinging 分支不推补间 +
+    // _cancelAnims 清 idx 不写回 _focus，旧项永久冻结在中途值（半宽半
+    // 亮），每次轻扫累积一项。_lockstepDirty 同步清：拖动接管后锁步
+    // 归一化分支（_onPagePos else）不再满足 phase 条件，residue 由这里
+    // 处置。拖动语义=无聚焦项，与系统 ds70 一致。
+    _focus.removeWhere((k, _) => k != _sel);
+    _lockstepDirty = false;
+    // 聚焦项缩回（系统在首次跨档时弹簧缩回；提前到拖动开始观感更连续
+    // 且语义等价——拖动中无聚焦项）。
     final f = _fOf(_sel);
     if (f > 0.01) {
       _twFocusIdx = _sel;
@@ -436,8 +444,8 @@ class _FilmstripState extends State<Filmstrip>
       _twDur = _kShrinkDuration;
       _twStart0 = _now;
       _startClock();
-      setState(() {});
     }
+    setState(() {});
   }
 
   void _onDragUpdate(double dx) {
@@ -490,6 +498,10 @@ class _FilmstripState extends State<Filmstrip>
     _reportSettle = true;
     final u = _underCenter();
     _sel = u;
+    // 冻结残留兜底（2026-09-14 审查 P1）：flinging 分支不推进缩回补间，
+    // 跨档后 _focus 里非中心项可能冻结在中途值（_cancelAnims 只清
+    // _twFocusIdx 不写回）——停稳语义=只有中心项聚焦，其余一次性清。
+    _focus.removeWhere((k, _) => k != u);
     _phase = _Phase.settling;
     _twFromDx = _selDx;
     _twFocusIdx = _sel;
@@ -659,8 +671,6 @@ class _FilmstripState extends State<Filmstrip>
     final floor = p.floor().clamp(0, widget.itemCount - 1);
     var frac = p - p.floor();
     if (floor == widget.itemCount - 1 && frac > 0) frac = 0; // 末项右侧无内容
-    if (floor != _sel) {
-    }
     _sel = floor;
     _selDx = -_step(1 - frac, frac) * frac;
     _focus

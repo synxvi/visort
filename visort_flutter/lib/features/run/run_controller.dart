@@ -26,6 +26,7 @@ import 'package:visort_flutter/core/db/run_log_store.dart';
 import 'package:visort_flutter/core/fs/file_system_repository.dart';
 import 'package:visort_flutter/features/session/session_controller.dart';
 import 'package:visort_flutter/core/fs/fs_provider.dart';
+import 'package:visort_flutter/core/fs/mediastore_channel.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
 import 'package:visort_flutter/features/session/session_models.dart';
 
@@ -208,6 +209,7 @@ class RunController {
     }
 
     // 批量移动（MediaStore createWriteRequest 按目标分组；桌面端逐个移）
+    final cancelledMoveIds = <String>{};
     for (final entry in pendingMoveByDest.entries) {
       final destPath = entry.key;
       final ids = entry.value;
@@ -215,7 +217,19 @@ class RunController {
       for (var i = 0; i < ids.length; i += kConsentBatchSize) {
         final chunk =
             ids.sublist(i, math.min(i + kConsentBatchSize, ids.length));
-        movedIds.addAll(await _fs.moveBatch(chunk, destPath, session.sourceDir));
+        try {
+          movedIds.addAll(await _fs.moveBatch(chunk, destPath, session.sourceDir));
+        } on MsException catch (e) {
+          // consent 超时（结果未知，2026-09-14 审查 P2）：同 delete 侧——
+          // 当前及剩余分片记 skipped 中止，不连锁假失败、不被迟到确
+          // 认打穿报告（move 无 trash 可恢复，如实更重要）。
+          if (e.code != MsErrorCode.unknown) rethrow;
+          for (var j = i; j < ids.length; j += kConsentBatchSize) {
+            cancelledMoveIds.addAll(
+                ids.sublist(j, math.min(j + kConsentBatchSize, ids.length)));
+          }
+          break;
+        }
       }
       // 找回 fileId 记入结果（ids 转 Set：组内 contains 从 O(n) 降 O(1)，
       // 审查 F17）
@@ -227,6 +241,8 @@ class RunController {
           if (idsSet.contains(imgRef.relativePath)) {
             if (movedIds.contains(imgRef.relativePath)) {
               moved.add((file: fileId, to: entry2.value.destLabel ?? ''));
+            } else if (cancelledMoveIds.contains(imgRef.relativePath)) {
+              skipped.add(fileId); // 结果未知 → 可重跑，不算失败
             } else {
               errors.add((file: fileId, reason: 'move_failed'));
             }
@@ -248,13 +264,35 @@ class RunController {
           deletedIds.addAll(await _fs.deleteBatch(chunk, session.sourceDir));
         } on ConsentCancelledException catch (e) {
           cancelledDeleteIds.addAll(e.ids);
+        } on MsException catch (e) {
+          // consent 超时（结果未知，2026-09-14 审查 P2）：弹窗无系统级
+          // 超时，120s 是自造竞态——超时后 Kotlin pendingTrashResult 守卫
+          // 会秒拒后续分片（连锁假失败），且用户迟到确认仍会真实变更。
+          // 结果未知即中止：当前及剩余分片记 skipped（可重跑，exists 预检
+          // 会记 source_missing，不误报 failed），已确认分片照常对账。
+          if (e.code == MsErrorCode.unknown) {
+            for (var j = i;
+                j < pendingDeleteIds.length;
+                j += kConsentBatchSize) {
+              cancelledDeleteIds.addAll(pendingDeleteIds.sublist(
+                  j, math.min(j + kConsentBatchSize, pendingDeleteIds.length)));
+            }
+            break;
+          }
+          rethrow;
         }
       }
+      // 只对账本批提交集（2026-09-14 审查 P2，对齐 move 对账写法）：
+      // appliedIds-skip 与 source_missing 两类未提交项不在 pendingDelete
+      // 里，遍历全集会落 else 分支误报 delete_failed（同项双计数/双错误
+      // 行——appliedIds 防重放设计在 delete 侧被击穿）。
+      final submitted = pendingDeleteIds.toSet();
       for (final entry in entries) {
         if (entry.value.action == DecisionAction.delete) {
           final fileId = entry.key;
           // 用 ImageRef.relativePath 匹配（与 pendingDeleteIds 同语义）
           final imgRef = refOf(fileId);
+          if (!submitted.contains(imgRef.relativePath)) continue;
           if (deletedIds.contains(imgRef.relativePath)) {
             deleted.add(fileId);
           } else if (cancelledDeleteIds.contains(imgRef.relativePath)) {

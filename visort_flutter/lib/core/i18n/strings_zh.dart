@@ -106,6 +106,7 @@ const Map<String, String> stringsZh = {
   'selected_count': '已选 {0} 个相册',
   'no_selection': '未选择相册',
   'no_albums': '未找到相册',
+  'picker_current_album': '当前所在',
   'permission_denied': '存储权限被拒绝',
   'permission_needed': 'Visort 需要读取相册权限才能整理图片，请授予权限。',
   'gallery_perm_hint': '授权访问图片后，您的相册将显示在这里',

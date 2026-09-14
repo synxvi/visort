@@ -600,7 +600,14 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 拖回时 _loadedFinalImage 标志仍在但 requestUpTo 全哑火）→ 清字段
     // 重建渐进链：_attachProgressive 会 resolve 出新 completer（cache
     // 条目已逐出）+ 发起 4096 + 补查 flush，升档恢复。
-    if (_loadedFinalImage) {
+    // ⚠️ 仅当前页执行（2026-09-15 条轻扫闪图取证修复）：本回调是全页
+    // 广播（每页都挂 sel 监听），非当前页的活链恢复放行 = 轻扫跨档期间
+    // 每个已浏览页逐档反复 attach+换 provider（真机 probe.log 实证：
+    // cross i=47..51 期间 idx=41 连续 attach 4 次、idx=27 连续 5 次），
+    // 解码任务风暴挤占管线 + ImageCache 抖动 → 当前页显示被挤异常
+    // （「当前大图穿插掠过图闪烁」）。非当前页翻回时本回调再次触发，
+    // 届时恢复，语义无损。
+    if (_loadedFinalImage && _isCurrentPage) {
       final completer = _progressiveStream?.completer;
       final dead = _progressiveStream == null ||
           completer is! ProgressiveImageCompleter ||
@@ -609,6 +616,9 @@ class _ZoomableImageState extends State<ZoomableImage> {
         _progressiveStream = null;
         final progressive = _attachProgressive();
         if (progressive != null) {
+          // [FSC] 取证打点（2026-09-15 条轻扫偶发闪图排查）：换链时刻与
+          // [FSC] cross / pick / updfl 时间线对齐用（probe.log 落盘）。
+          debugPrint('[FSC] selChanged-attach id=${_photo.id} idx=${widget.pageIndex}');
           setState(() => _imageProvider = progressive);
         }
       } else {
@@ -1486,6 +1496,13 @@ class _ZoomableImageState extends State<ZoomableImage> {
       final progressive = _attachProgressive();
       if (progressive != null) {
         imageProvider = progressive;
+      } else {
+        // 【直挂补发】（2026-09-14 审查 P2）：已挂渐进链（邻页直挂建流）
+        // 时返回 null——建流时 _startHdNow 因邻页期早退、4096 未发起，
+        // 预取回调又晚于翻到完成的话（快速连翻/冷 blob 预取 >300ms），
+        // 全链无 requestUpTo = 该页停 1152 直到双击。补发：requestUpTo
+        // 幂等；gif/无流场景 _requestUltraUpgrade 自带 completer 门。
+        _requestUltraUpgrade(from: 'updflAttachExisting');
       }
     }
     // 仅【真放大态】（用户主动 zoomedIn）才做 ente 式尺寸修正保持视角；

@@ -784,7 +784,7 @@ class GalleryController extends Notifier<GalleryState> {
 
   /// 从回收站恢复单张。成功后从回收站列表移除 + 清缓存 + 重查相册列表
   /// （count 回升，恢复的图可能成为新封面）。
-  Future<String?> restorePhoto(String id) async {
+  Future<String?> restorePhoto(String id, {MsImageInfo? restored}) async {
     try {
       await _channel.requestRestore([id]);
       // RESULT_OK 后 exists 复查（对齐批量 restorePhotos 的防御）：trashed
@@ -796,15 +796,61 @@ class GalleryController extends Notifier<GalleryState> {
       if (st != MsExistsStatus.found) return 'restore_failed';
       _markSelfMutation();
       evictImageCache(id);
+      // 撤回链（viewer 删除→撤回）唯一责任方=本地乐观插回（2026-09-14
+      // 审查 P1-1「双副本刷新真空」）：restore 的 observer 回声是 update
+      // 事件，必落在 _markSelfMutation 静默窗内被吞——本地不插回则网格
+      // /收藏列表缺项直到重进。匹配规则：bucket 视图须同桶；收藏视图
+      // 恢复不改 IS_FAVORITE、直接插回。回收站视图调用方不传 [restored]，
+      // 恢复=从回收站列表移除，行为不变。
+      final reinsert = restored != null &&
+          ((state.view == GalleryView.bucket &&
+                  state.bucketId != null &&
+                  restored.bucketId == state.bucketId) ||
+              state.view == GalleryView.favorites);
+      if (reinsert) {
+        final photos = [...state.photos];
+        photos.insert(_reinsertIndex(photos, restored), restored);
+        state = state.copyWith(photos: photos);
+      } else {
+        state = state.copyWith(
+          photos: state.photos.where((p) => p.id != id).toList(),
+        );
+      }
       _applyBucketDelta(id, countDelta: 1);
-      state = state.copyWith(
-        photos: state.photos.where((p) => p.id != id).toList(),
-      );
       await loadBuckets();
       return null;
     } catch (e) {
       return _cancelKeyOrRaw(e);
     }
+  }
+
+  /// 撤回插回的插入点：photos 保持当前视图生效排序，二分找 [item] 的
+  /// 插入位（与 SQL ORDER BY 同维度；name 按小写比较对齐 Kotlin 侧
+  /// NOCASE 语义）。dateFavorited/dateTrashed 在可插回视图（bucket/
+  /// favorites）不生效或无本地时间可用 → 回退 dateCreated（防御分支）。
+  int _reinsertIndex(List<MsImageInfo> photos, MsImageInfo item) {
+    int cmp(MsImageInfo a, MsImageInfo b) {
+      final c = switch (state.effectivePhotoSortBy) {
+        SortBy.name =>
+          a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+        SortBy.dateModified =>
+          a.dateModifiedMs.compareTo(b.dateModifiedMs),
+        // dateCreated 维度 = DATE_ADDED（MsImageInfo.dateAddedMs）。
+        _ => a.dateAddedMs.compareTo(b.dateAddedMs),
+      };
+      return state.effectivePhotoSortAsc ? c : -c;
+    }
+
+    var lo = 0, hi = photos.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (cmp(photos[mid], item) <= 0) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
   }
 
   /// 收藏/取消收藏单张（乐观更新本地 isFavorite，失败回滚）。返回错误 key 或 null。
@@ -1262,8 +1308,13 @@ class GalleryController extends Notifier<GalleryState> {
       // 先同步桶数（需 photos 定位所属相册），再移除本地列表——全部用
       // moved 子集，未移动的照片留在网格中（用户可见、可重试）。
       _applyBucketDeltaBatch(moved, countDelta: -1);
+      // 收藏视图不移除（2026-09-14 审查 P2）：移动不改 IS_FAVORITE，
+      // 照片移动后仍在收藏列表——无条件移除会让收藏页错误收缩。
+      final keepInFavorites = state.view == GalleryView.favorites;
       state = state.copyWith(
-        photos: state.photos.where((p) => !movedSet.contains(p.id)).toList(),
+        photos: keepInFavorites
+            ? state.photos
+            : state.photos.where((p) => !movedSet.contains(p.id)).toList(),
       );
       await loadBuckets();
       return moved.length == ids.length ? null : 'move_partial';
@@ -1440,7 +1491,18 @@ class GalleryController extends Notifier<GalleryState> {
         // 照片后 provider key（id,size,squareCrop）不变，ImageCache 命中
         // 旧图；evict 后重扫的新 provider 才重新解码（Kotlin 磁盘缓存
         // 已自查 DATE_MODIFIED 同步失效）。insert 无旧缓存，evict 空转无害。
-        if (event.id != null) evictImageCache(event.id!);
+        if (event.id != null) {
+          evictImageCache(event.id!);
+        } else {
+          // 折叠 refresh 无 id（2026-09-14 审查 P2）：>20 张批量编辑/
+          // classify 失败时 Kotlin 折叠为 {type: refresh}——只重载不清
+          // ImageCache 的话 cell 命中内存旧条目、绕过盘缓存 mtime 失效，
+          // 网格持续显示编辑前旧图。对当前视图全量 evict（可见区重解码，
+          // 不可见 cell 懒加载无成本）。
+          for (final p in state.photos) {
+            evictImageCache(p.id);
+          }
+        }
         // 新增/修改/兜底：防抖合并后按当前视图(单一枚举)重载对应第一页/相册数
         _observerDebounce?.cancel();
         _observerDebounce = Timer(const Duration(milliseconds: 400), () {

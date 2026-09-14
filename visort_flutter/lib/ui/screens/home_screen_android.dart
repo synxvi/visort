@@ -1240,11 +1240,14 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   /// 切换相册列表排序并持久化。
   /// 注意：相册列表顺序由 Dart 内存排（_sortedBuckets），不影响封面。
   /// 封面跟随「相册内排序」(photoSortBy)，在 _loadBuckets 时决定。
+  /// 单真源走 controller（2026-09-14 审查 P1-2）：GalleryState.albumSortBy
+  /// 与 AppConfig 是双副本，直写 config 只更新一偶——相册页
+  /// sortedBuckets 按内存 state 排，两页行为分裂直到冷启动。controller
+  /// 的 setAlbumSort 同步双写（state + _persistSortPrefs）。
   Future<void> _setAlbumSort(SortBy sortBy, bool asc) async {
-    final config = ref.read(configProvider);
-    final updated = config.copyWith(albumSortBy: sortBy, albumSortAsc: asc);
-    ref.read(configProvider.notifier).state = updated;
-    await ref.read(profilesServiceProvider).save(updated);
+    await ref
+        .read(galleryControllerProvider.notifier)
+        .setAlbumSort(sortBy, asc);
     setState(() {});
   }
 

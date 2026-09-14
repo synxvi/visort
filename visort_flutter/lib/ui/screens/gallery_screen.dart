@@ -482,7 +482,8 @@ class _AlbumTile extends ConsumerStatefulWidget {
   final String? flightTag;
 
   /// 点击时通知父级置位飞行目标（父级 setState 后本 tile rebuild）。
-  final ValueChanged<String>? onFlightStart;
+  /// String?：返回清除须传 null（'' 会屏蔽全部 tile 的 HeroMode，见 _open）。
+  final ValueChanged<String?>? onFlightStart;
 
   @override
   ConsumerState<_AlbumTile> createState() => _AlbumTileState();
@@ -542,7 +543,13 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
         'bucketCount': widget.bucket.count,
       };
       await Navigator.pushNamed(context, AlbumRoutes.album, arguments: args);
-      if (mounted) widget.onFlightStart?.call(''); // 清除
+      // 返回后【不清 flightTag】（2026-09-15 用户真机实证）：pop future 在
+      // 返回动画完成瞬间 resolve——此刻正是 Hero flight 降落帧，flight
+      // overlay（flightShuttleBuilder 只含封面图、无角标）尚未移除，此处
+      // setState 会把「overlay 移除 + tile 角标恢复」拖晚一拍 = 目标 tile
+      // 左下角数字角标闪一下（模拟器逐帧实证：帧 N 角标缺席）。旧值保留
+      // 无副作用：flightTag 只服务飞行配对，下次点击 _open 会同步置位
+      // 新 tag 重置全部 tile 的 heroEnabled。
     } finally {
       _navInFlight = false;
     }

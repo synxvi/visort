@@ -594,6 +594,11 @@ class _CacheSectionState extends ConsumerState<_CacheSection> {
       confirmText: t(ref, 'confirm'),
     ).confirmed;
     if (confirmed != true || !mounted) return;
+    // 先取消预缓存任务再清（2026-09-14 审查 P2，对齐 _onClearAll 形态）：
+    // 关开关的 cancel 走 listen 链是 unawaited 并发，Kotlin ioExecutor 12
+    // 线程可乱序——不串行化则 Worker 在途 1~2 张照常写盘，「清完又被写
+    // 回」，与弹窗「全量缓存将自动清除」承诺不符。listen 链保留作幂等兜底。
+    await _channel.cancelPrecacheWork();
     await _updateConfig(precacheEnabled: false);
     await _channel.clearImageCaches(clearThumb: false);
     await _refreshUsage();
