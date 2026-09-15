@@ -2,7 +2,6 @@
 // cache_aware_listener_tracker.mixin.dart（2026-09-08，代码级对齐基线）。
 // 原始语义见英文注释；doc 三坑描述保留原文结构，中文批注标 visort 场景。
 
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/painting.dart';
 
 /// Tracks listeners on an [ImageStreamCompleter] to safely cancel in-flight
@@ -65,7 +64,6 @@ mixin CacheAwareListenerTrackerMixin on ImageStreamCompleter {
     }
 
     _listenerCount++;
-    debugPrint('[TRK] add count=$_listenerCount first=${_cacheListener == listener}');
     super.addListener(listener);
   }
 
@@ -81,14 +79,8 @@ mixin CacheAwareListenerTrackerMixin on ImageStreamCompleter {
 
     if (_hadInitialImage && !_hasIgnoredFirstSyncRemoval && isCacheListener) {
       _hasIgnoredFirstSyncRemoval = true;
-      debugPrint('[TRK] rm bypass-sync count=$_listenerCount');
       return;
     }
-
-    debugPrint(
-      '[TRK] rm count=$_listenerCount isCache=$isCacheListener '
-      'had=$_hadInitialImage ignored=$_hasIgnoredFirstSyncRemoval',
-    );
 
     final bool onlyCacheListenerLeft =
         _listenerCount == 1 && _cacheListener != null;
@@ -99,10 +91,6 @@ mixin CacheAwareListenerTrackerMixin on ImageStreamCompleter {
       final onLastListenerRemoved = _onLastListenerRemoved;
       if (onLastListenerRemoved != null) {
         _onLastListenerRemoved = null;
-        debugPrint(
-          '[TRK] fire onLastListenerRemoved only=$onlyCacheListenerLeft '
-          'abandoned=$completelyAbandoned',
-        );
         onLastListenerRemoved();
       }
     }

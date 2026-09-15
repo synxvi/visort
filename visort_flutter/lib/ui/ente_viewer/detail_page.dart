@@ -286,7 +286,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   void initState() {
     super.initState();
-    debugPrint('[DT] dp-init');
     _files = List.of(widget.files);
     _thumbFiles = List.of(widget.files);
     _thumbDeleteAnim = AnimationController(
@@ -385,9 +384,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
     final scrolling = _pageController.position.isScrollingNotifier.value;
     if (_pageScrolling.value == scrolling) return;
     _pageScrolling.value = scrolling;
-    // [PS] 停稳边沿打点（4096 flush/trim 全靠此信号驱动）。
-    debugPrint(
-        '[PS] edge scrolling=$scrolling page=${_pageController.position.pixels.toStringAsFixed(1)}');
     // 【停稳统一 trim】拖动中被 gate 的 trim 在此执行（见
     // _trimDistantViewerCacheGate）。
     if (!scrolling && _trimPending) {
@@ -458,7 +454,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
       // 新通知，2026-09-11 审查 P1）。此刻 reverse 飞行已收尾、网格已
       // 稳定，系统栏 insets 动画（~250ms）不再有 Hero 可闪残影。
       if (enableFullScreenNotifier.value) {
-        debugPrint('[IMM] fs=false @dismissed');
         enableFullScreenNotifier.value = false;
         restoreEdgeToEdgeBars();
       }
@@ -649,7 +644,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   @override
   void dispose() {
-    debugPrint('[DT] dp-dispose');
     _heavyStripGateTimer?.cancel();
     _heavyStripGateTimer = null;
     _chromeInsertTimer?.cancel();
@@ -668,7 +662,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
     // 不到 dismissed 的路径）：dispose 时飞行必然已结束，立即恢复无
     // 残影竞态。恢复顺序须在 notifier.dispose() 之前。
     if (enableFullScreenNotifier.value) {
-      debugPrint('[IMM] fs=false @dispose');
       enableFullScreenNotifier.value = false;
       restoreEdgeToEdgeBars();
     }
@@ -712,19 +705,16 @@ class _DetailPageState extends ConsumerState<DetailPage>
 
   /// 沉浸模式联动（isZoomedNotifier → enableFullScreenNotifier）。
   void _onZoomedForImmersive() {
-    debugPrint('[IMM] zoomed=${isZoomedNotifier.value} fs=${enableFullScreenNotifier.value} before=$_fullscreenBeforeZoom');
     if (!mounted) return;
     if (isZoomedNotifier.value) {
       _fullscreenBeforeZoom ??= enableFullScreenNotifier.value;
       if (!enableFullScreenNotifier.value) {
-        debugPrint('[IMM] fs=true @zoomed');
         enableFullScreenNotifier.value = true;
       }
     } else {
       final restore = _fullscreenBeforeZoom ?? false;
       _fullscreenBeforeZoom = null;
       if (enableFullScreenNotifier.value != restore) {
-        debugPrint('[IMM] fs=$restore @restore');
         enableFullScreenNotifier.value = restore;
       }
     }
@@ -921,7 +911,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
       // （_fullscreenBeforeZoom 复位一并归位）。与双击共存有 300ms
       // 单击延迟（等双击窗口），标准行为；普通态 tap 无操作。
       onTap: () {
-        debugPrint('[IMM] tap zoomed=${isZoomedNotifier.value}');
         if (isZoomedNotifier.value) {
           isZoomedNotifier.value = false;
         }
@@ -1464,10 +1453,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
   void _onThumbCenterChanged(int i) {
     _claimStripIndex(i);
     if (i == _selectedIndexNotifier.value) return;
-    // [FSC] 取证打点（2026-09-15 条轻扫偶发闪图排查）：逐档硬跳的时刻
-    // 序列，与 zoomable 的 pick/updfl/selChanged-attach 时间线在 probe.log
-    // 对齐——闪图复现时定位「闪的瞬间」落在哪条链上。
-    debugPrint('[FSC] cross i=$i t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}');
     _selectedIndexNotifier.value = i;
     widget.onIndexChanged?.call(i);
     if (_pageController.hasClients) {
@@ -2298,7 +2283,6 @@ class _DetailPageState extends ConsumerState<DetailPage>
     setState(() => _detailsOpen = true);
     // 面板打开期间底栏/缩略图条需可见、顶栏随占比淡出:强制退出全屏(edge-to-edge)。
     if (enableFullScreenNotifier.value) {
-      debugPrint('[IMM] fs=false @panel');
       enableFullScreenNotifier.value = false;
       restoreEdgeToEdgeBars();
     }

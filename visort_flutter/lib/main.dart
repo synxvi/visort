@@ -15,7 +15,6 @@ import 'package:visort_flutter/core/fs/idle_precache.dart';
 import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:flutter/gestures.dart' show debugPrintGestureArenaDiagnostics, debugPrintRecognizerCallbacksTrace;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,37 +41,6 @@ Future<void> main() async {
   //   adb shell su -c 'cat /data/user/0/com.synxvi.visort/cache/probe.log'
   ProbeLog.init();
 
-  // ──────────── [FPS] 长帧打点（排查期临时，与 kCachePerfLog 同批撤） ────────────
-  // 翻页解码期间条冻结嫌疑 = UI/raster 长帧或全管线停摆：这里打 >48ms 帧的
-  // build/raster 分解与帧间隔，logcat 与 [CACHE]/[SP] 对时间轴。
-  WidgetsBinding.instance.addTimingsCallback((timings) {
-    for (final t in timings) {
-      final total = t.totalSpan.inMilliseconds;
-      if (total > 48) {
-        debugPrint(
-          '[FPS] long #${t.frameNumber} '
-          'build=${t.buildDuration.inMilliseconds}ms '
-          'raster=${t.rasterDuration.inMilliseconds}ms',
-        );
-      }
-    }
-  });
-
-  // ──────────── [TICK] UI isolate 事件循环心跳（排查期临时） ────────────
-  // 停摆鉴别器：两轮 release 实测存在 1.0s 级「零日志零帧提交」窗口。
-  // Timer 回调与日志同在 UI isolate 事件循环——TICK 断档 = 事件循环被
-  // 同步任务/GC pause 占死（vs isolate 空转无帧，两种病根不同治法）。
-  // 停摆窗口对齐 [B] 函数边界打点：断点后无 out 的函数 = 同步占死元凶；
-  // 全部边界完整 = 不在任何 Dart 函数内 = GC 实锤。
-  int _lastTick = 0;
-  Timer.periodic(const Duration(milliseconds: 150), (t) {
-    final now = DateTime.now().microsecondsSinceEpoch ~/ 1000;
-    final gap = _lastTick == 0 ? 0 : now - _lastTick;
-    _lastTick = now;
-    // 正常 150ms；>400ms 的恢复行单独标注（GC/同步停摆后的第一跳）。
-    debugPrint('[TICK] t=$now${gap > 400 ? ' GAP=${gap}ms' : ''}');
-  });
-
   // ──────────── 全局错误兜底（必须先于一切 await 安装） ────────────
   // 原先装在 config/SQLite/字体等多个 await 之后——窗口期内的异步异常
   // 会绕过兜底（审查 P1）。统一落 debugPrint（release 为空操作但 zone
@@ -96,15 +64,6 @@ Future<void> main() async {
             child: Text('⚠', style: TextStyle(fontSize: 40)),
           ),
         );
-  }
-
-  // [SDH 取证] 手势诊断（临时，排查手柄第一次拖不动）：arena 裁决序列 +
-  // recognizer 回调 trace。kDebugMode 守卫——每个 pointer 事件每 recognizer
-  // 一行字符串插值 + logcat 写入落在交互热路径上，release 构建必须为关
-  // （审查 M2；取证时临时打开）。
-  if (kDebugMode && Platform.isAndroid) {
-    debugPrintGestureArenaDiagnostics = true;
-    debugPrintRecognizerCallbacksTrace = true;
   }
 
   // ──────────── 平台分叉初始化 ────────────

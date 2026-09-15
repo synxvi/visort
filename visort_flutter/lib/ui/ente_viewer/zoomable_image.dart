@@ -19,7 +19,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/src/core/photo_view_core.dart'
     show PhotoViewCoreState;
@@ -164,8 +164,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
   static const Duration _kZoomIdleForFlush = Duration(milliseconds: 250);
 
   void _onHdRouteStatus(AnimationStatus status) {
-    // [HDDBG] 排查打点：4096 提前发起定位（completed 时刻基准）。
-    debugPrint('[HDDBG] route-status id=${_photo.id} $status');
     if (status == AnimationStatus.completed) {
       _routeSettled = true;
       // 【4096 立即发起】飞行一结束就开解原图帧（不延迟——延迟会让
@@ -185,10 +183,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// 进入时不是原图）。翻页 attach（路由早已 settled）场景由
   /// _attachProgressive 尾部直接发起。
   void _startHdNow() {
-    // [HDDBG] 排查打点：_startHdNow 只被 _attachProgressive 尾部调用
-    //（_routeSettled 已 true 的场景）——出现时刻早于 route-status completed
-    // 即坐实「attach 时 _routeSettled 被提前置 true」。
-    debugPrint('[HDDBG] start-now id=${_photo.id} settled=$_routeSettled');
     if (!mounted || !_isCurrentPage) return;
     _requestUltraUpgrade(from: 'startNow');
   }
@@ -203,11 +197,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// hasFrame 守卫：无帧时不 flush（提前开闸会让帧到时绕过静止闸直推），
   /// 等 onFrameReady 再驱动。
   void _tryFlushHd() {
-    if (!mounted || !_routeSettled) {
-      debugPrint(
-          '[FL] block route=$_routeSettled mounted=$mounted id=${_photo.id}');
-      return;
-    }
+    if (!mounted || !_routeSettled) return;
     // 【翻页中扣帧】PageView 滚动中（含 ballistic）不推帧：4096 大纹理
     // 上传（~50MB GPU）与动画帧抢主线程/GPU =「翻页动画卡一下」（用户
     // 实证）。帧保持 held，滚动结束事件（下方 pageScrollingNotifier
@@ -218,7 +208,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
       // 意外丢失时 4096 永久滞留 held（「翻页后糊」的最后一道保险）。
       _hdFlushTimer?.cancel();
       _hdFlushTimer = Timer(const Duration(milliseconds: 500), _tryFlushHd);
-      debugPrint('[FL] block scrolling id=${_photo.id}');
       return;
     }
     final idleMs =
@@ -226,13 +215,10 @@ class _ZoomableImageState extends State<ZoomableImage> {
     if (idleMs < _kZoomIdleForFlush.inMilliseconds) {
       _hdFlushTimer?.cancel();
       _hdFlushTimer = Timer(_kZoomIdleForFlush, _tryFlushHd);
-      debugPrint('[FL] defer idle=$idleMs id=${_photo.id}');
       return;
     }
     final completer = _progressiveStream?.completer;
     if (completer is! ProgressiveImageCompleter || !completer.hasFrame) {
-      debugPrint(
-          '[FL] block frame hasFrame=${completer is ProgressiveImageCompleter ? completer.hasFrame : 'n/a'} id=${_photo.id}');
       return;
     }
     // 【双击动画互斥】帧替换（childSize 变 → [PVC] compensate 写 scale）
@@ -243,10 +229,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
     if (core != null && core.isProgrammaticZoomingActive) {
       _hdFlushTimer?.cancel();
       _hdFlushTimer = Timer(_kZoomIdleForFlush, _tryFlushHd);
-      debugPrint('[FL] defer dbltap id=${_photo.id}');
       return;
     }
-    debugPrint('[FL] ok id=${_photo.id}');
     final provider = _progressiveProvider;
     if (provider != null && !identical(_imageProvider, provider)) {
       setState(() => _imageProvider = provider);
@@ -279,13 +263,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
     final route = ModalRoute.of(context);
     final animation = route?.animation;
     _routeAnimation = animation;
-    // [HDDBG] 排查打点：挂载时路由动画真实状态（animNull / isCompleted /
-    // status 三值定位 _routeSettled 提前置 true 的分支）。
-    debugPrint(
-      '[HDDBG] ensure id=${_photo.id} routeNull=${route == null} '
-      'animNull=${animation == null} completed=${animation?.isCompleted} '
-      'status=${animation?.status}',
-    );
     // 【Hero offstage 假 completed 防御】push 带 Hero 配对的路由时，
     // HeroController 为测量飞行终点会把 to 路由 offstage 一帧
     // （heroes.dart toRoute.offstage = value==0.0）——offstage 的 animation
@@ -298,7 +275,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 后真 completed 事件才会触发（kAlwaysComplete 的 completed 是稳态、
     // 后挂的 listener 不补发，无误触发）。
     if (route != null && route.offstage) {
-      debugPrint('[HDDBG] ensure id=${_photo.id} offstage-defer');
       animation?.addStatusListener(_onHdRouteStatus);
     } else if (animation == null || animation.isCompleted) {
       _routeSettled = true;
@@ -341,8 +317,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
   }
 
   /// 放大态信号 → 4096 升档请求（p150）。幂等安全，可从多处调用。
-  /// [from]（[HDDBG] 排查）：调用来源标记（zoom=双击放大态 / route=路由
-  /// settled / startNow=attach 尾部直发）。
+  /// [from]：调用来源标记（zoom=双击放大态 / route=路由 settled /
+  /// startNow=attach 尾部直发），供 [CACHE] 事件区分。
   void _requestUltraUpgrade({String from = 'zoom'}) {
     final completer = _progressiveStream?.completer;
     if (completer is! ProgressiveImageCompleter) return;
@@ -355,7 +331,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 听的旧 completer（completer 分裂，放大恒停 1152）。
     widget.onHdLoaded?.call(_photo.id);
     cachePerfEvent('hd-req id=${_photo.id} tw=${kViewerUltraThumbSize} from=$from');
-    debugPrint('[HDDBG] req id=${_photo.id} from=$from settled=$_routeSettled');
     completer.requestUpTo(kViewerUltraThumbSize,
         priority: RequestPriority.viewerHd);
   }
@@ -377,19 +352,11 @@ class _ZoomableImageState extends State<ZoomableImage> {
   @override
   void initState() {
     super.initState();
-    // [DT] 排查打点：State 创建/销毁对（双击 insets 重建连环重放定位）。
-    // 带栈：init 栈指认「谁在重建这棵子树」（真机实证双击后 21ms 内整组
-    // 页 element 连环拆建 4 轮 = 意图重放逐轮重启放大动画）。
-    debugPrint(
-      '[DT] zi-init id=${widget.photo.id} idx=${widget.pageIndex}\n'
-      '${StackTrace.current}',
-    );
     _scaleStateChangedCallback = (value) {
       if (widget.shouldDisableScroll != null) {
         widget.shouldDisableScroll!(value != PhotoViewScaleState.initial);
       }
       _isZooming = value != PhotoViewScaleState.initial;
-      debugPrint('[IMM] cb state=$value -> notifier=$_isZooming cur=$_isCurrentPage');
       final state = InheritedDetailPageState.maybeOf(context);
       // ⚠️ 共享 notifier 只准【当前页】写：notifier 表达「当前页放大态」，
       // 驱动沉浸联动。翻页期的回弹边沿会触发翻走页复位（setInvisibly
@@ -503,7 +470,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 并禁用上下滑手势。与 initState postFrame 的初始上报对齐，同步复位。
     if (_isZooming) {
       _isZooming = false;
-      debugPrint('[IMM] cb=false @replace-photo');
       widget.shouldDisableScroll?.call(false);
       final state = _inherited;
       state?.isZoomedNotifier.value = false;
@@ -616,9 +582,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
         _progressiveStream = null;
         final progressive = _attachProgressive();
         if (progressive != null) {
-          // [FSC] 取证打点（2026-09-15 条轻扫偶发闪图排查）：换链时刻与
-          // [FSC] cross / pick / updfl 时间线对齐用（probe.log 落盘）。
-          debugPrint('[FSC] selChanged-attach id=${_photo.id} idx=${widget.pageIndex}');
           setState(() => _imageProvider = progressive);
         }
       } else {
@@ -660,8 +623,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
     if (!mounted) return;
     if (_inherited?.pageScrollingNotifier.value ?? true) return; // 滚动中
     if (_isCurrentPage) return;
-    debugPrint(
-        '[ZR] reset id=${_photo.id} idx=${widget.pageIndex} zoom=$_isZooming');
     final zoomed =
         _isZooming ||
         _scaleStateController.scaleState != PhotoViewScaleState.initial;
@@ -697,8 +658,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// _loading=false → Hero 在树。pending 一律不选，回落 cell（正在网格
   /// 显示中 = live 条目，必已完成）。
   void _pickCachedProvider({bool allowCellThumb = true}) {
-    final _tIn = DateTime.now().microsecondsSinceEpoch ~/ 1000;
-    debugPrint('[B] pick-in t=$_tIn');
     final full = buildImageProvider(
       _ref,
       targetWidth: computeViewerTargetWidth(
@@ -784,7 +743,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 会阻塞对应分支的 precache，又没有实际加载在跑 → 缩略图永不清晰）。
     _loadingFinalImage = false;
     cachePerfEvent('pick id=${_photo.id} L=$picked${allowCellThumb ? '' : ' noCell'}');
-    debugPrint('[B] pick-out t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}');
   }
 
   /// 探测 provider 在 ImageCache 中是否已有【已完成】的解码条目。
@@ -902,7 +860,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
 
   @override
   void dispose() {
-    debugPrint('[DT] zi-dispose id=${widget.photo.id} idx=${widget.pageIndex}');
     _inherited?.selectedIndexNotifier.removeListener(_onSelectedChanged);
     _inherited?.pageScrollingNotifier.removeListener(_onPageScrollingChanged);
     _inherited?.pageScrollingNotifier.removeListener(_onPageScrollingForReset);
@@ -944,13 +901,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
 
   @override
   Widget build(BuildContext context) {
-    // [B] 排查打点：本页 build 潮时刻 + 当时选中页（selectedIndex 已更新
-    // 而本页 build 晚到 = 显示升级的真正起点延迟）。
-    debugPrint(
-      '[B] zbuild idx=${widget.pageIndex} sel=${_inherited?.selectedIndexNotifier.value} '
-      'prov=${_imageProvider.runtimeType} '
-      't=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
-    );
     _loadLocalImage(context);
     // 飞行层图源注册（见 kLiveViewerProviders doc）：正在显示的 provider，
     // Hero shuttle 第一优先级取用（同步出图，不受 evict/LRU 影响）。
@@ -1147,14 +1097,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
       _updateViewWithFinalImage(cachedFull);
       return;
     }
-    // [PROBE] 排查打点：缓存命中失败的条目三态（live=在屏 / keep=缓存持有
-    // / pend=解码在途）——full 明明解码完成（[SP] 行）却未同步命中时，
-    // 此行指认条目真实状态。
-    final st = PaintingBinding.instance.imageCache.statusForKey(cachedFull);
-    debugPrint(
-      '[PROBE] id=${_photo.id} miss live=${st.live} keep=${st.keepAlive} '
-      'pend=${st.pending} t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
-    );
     // 探测在即：把队列中本图 full 任务（无论谁先入队——150ms 窗的
     // _fireHeavyLoads / onPageChanged 的 p250 邻居预取）升到当前页级 p50。
     // precacheImage 同 key 只合并 listener，改不了先入队任务的优先级
@@ -1165,16 +1107,9 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // ImageConfiguration 在 async gap 前捕获：exists 回调里预热不再触碰
     // BuildContext（precacheImage 的 context 也只在同步首行构 config 用）。
     final config = createLocalImageConfiguration(context);
-    // [PROBE] 排查打点：exists channel 往返时长（同步化修复后应 ~几 ms；
-    // 数百 ms = Kotlin 侧仍被阻塞）。
-    final existsT0 = DateTime.now().microsecondsSinceEpoch ~/ 1000;
     MediaStoreChannel()
         .fullCacheExists(_photo.id, targetWidth: tw)
         .then((hit) {
-      debugPrint(
-        '[PROBE] exists-back id=${_photo.id} dt=${(DateTime.now().microsecondsSinceEpoch ~/ 1000) - existsT0}ms '
-        'hit=$hit t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
-      );
       if (!mounted || gen != _loadGeneration) return;
       if (!hit || _loadedFinalImage || _loadingFinalImage) return;
       _loadingFinalImage = true;
@@ -1185,8 +1120,7 @@ class _ZoomableImageState extends State<ZoomableImage> {
         targetWidth: tw,
         priority: RequestPriority.viewerImage,
       );
-      _precacheWithConfig(full, config, probeTag: 'pass id=${_photo.id}')
-          .then((_) {
+      _precacheWithConfig(full, config).then((_) {
         if (gen != _loadGeneration) return;
         _passThroughInFlight = false;
         if (!mounted) return;
@@ -1214,26 +1148,15 @@ class _ZoomableImageState extends State<ZoomableImage> {
   /// precacheImage 的 context-free 变体（语义对齐 SDK：resolve + 首帧/
   /// 错误均 complete + 帧末摘 listener），供 async gap 后预热——gap 前把
   /// ImageConfiguration 捕获好，回调里不再触碰 BuildContext。
-  /// [probeTag]：[PROBE] 打点标识（onImage 到达时刻/是否同步）。
   Future<void> _precacheWithConfig(
     ImageProvider provider,
-    ImageConfiguration config, {
-    String? probeTag,
-  }) {
+    ImageConfiguration config,
+  ) {
     final completer = Completer<void>();
-    final t0 = probeTag == null
-        ? 0
-        : DateTime.now().microsecondsSinceEpoch ~/ 1000;
     final stream = provider.resolve(config);
     late final ImageStreamListener listener;
     listener = ImageStreamListener(
       (ImageInfo? image, bool sync) {
-        if (probeTag != null) {
-          debugPrint(
-            '[PROBE] onImage $probeTag sync=$sync dt=${t0 == 0 ? -1 : (DateTime.now().microsecondsSinceEpoch ~/ 1000) - t0}ms '
-            't=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
-          );
-        }
         if (!completer.isCompleted) completer.complete();
         // 帧末再摘 listener（给 ImageCache live 追踪留一帧窗口，同 SDK）。
         SchedulerBinding.instance.addPostFrameCallback((_) {
@@ -1331,7 +1254,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
 
   /// 延迟窗结束真正发起 512 + 原图 precache（页仍在树上 = 观众还在）。
   void _fireHeavyLoads(BuildContext context) {
-    debugPrint('[B] heavy-in t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}');
     // 【邻页 1152 预解码·2026-09-10】dist==1 预建页也预解码 1152 显示档：
     // 此前 heavy 链仅当前页，慢拖露出邻页只有 cell/低档，翻到才发起
     // 1152 =「露出低清、挪动中突然变清晰」的拖动抖动感（用户实证）。
@@ -1399,11 +1321,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
     } else if (!_loadingFinalImage && !_loadedFinalImage) {
       _loadingFinalImage = true;
       final gen = _loadGeneration;
-      // [PROBE] 排查打点：full 重加载起跳（150ms 延迟窗后）——与 page 行
-      // 的间隔 = 当前页 build 潮实际到达本方法的延迟。
-      debugPrint(
-        '[PROBE] fire-full id=${_photo.id} t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
-      );
       final full = buildImageProvider(
         _ref,
         targetWidth: fullTw,
@@ -1429,7 +1346,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
             }
           });
     }
-    debugPrint('[B] heavy-out t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}');
   }
 
   /// 渐进 provider 接线（full 1152 就绪的所有路径统一走此）：resolve 持流
@@ -1481,7 +1397,6 @@ class _ZoomableImageState extends State<ZoomableImage> {
   }
 
   Future<void> _updateViewWithFinalImage(ImageProvider imageProvider) async {
-    debugPrint('[B] updfl-in t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}');
     // 【升档接线】非 GIF 换上渐进 provider（_attachProgressive 统一入口）。
     // ⚠️ 仅当前页 attach：本方法可被「翻走后才完成的 precache 回调」触发
     //（发起时是当前页、完成时已是预建页）——无守卫会让快甩途中的每个

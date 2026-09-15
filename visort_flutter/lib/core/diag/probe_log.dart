@@ -30,7 +30,8 @@ class ProbeLog with WidgetsBindingObserver {
   static const int _rotateBytes = 1 << 20;
 
   /// 高频噪音前缀：不进环/不落盘（每秒多行，冲刷排查窗口）。
-  static const List<String> _dropPrefixes = ['[HERO-CTL] timings-batch'];
+  /// 排查期临时高频打点在此登记，结案随打点一起撤（如 [HERO-CTL]）。
+  static const List<String> _dropPrefixes = [];
 
   static final List<String> _ring = <String>[];
   static final Stopwatch _clock = Stopwatch();

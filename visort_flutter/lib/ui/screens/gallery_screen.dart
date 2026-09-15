@@ -501,11 +501,6 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
   static bool _navInFlight = false;
 
   Future<void> _open() async {
-    // [GAL] 入口打点（排查"返回后点击无反应"，2026-09）：区分三类——
-    // locked（锁被占，上一轮导航未结束）/ 全程无 enter 日志（onTap 被
-    // 浮层屏障吞）/ enter 后 abort（state 竞态）。
-    debugPrint('[GAL] open tap bucket=${widget.bucket.id} '
-        'locked=$_navInFlight view=${ref.read(galleryControllerProvider).view}');
     if (_navInFlight) return;
     _navInFlight = true;
     try {
@@ -521,14 +516,11 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
       // 其他入口（Shell 切页/收藏/回收站）切走——非本桶直接放弃导航，
       // 且不拿他桶首张做 Hero（跨桶 tag 与真实终点对不上）。
       if (s.bucketId != widget.bucket.id) {
-        debugPrint('[GAL] gallery nav-abort(own) bucket=${widget.bucket.id} '
-            'state=${s.bucketId}');
         return;
       }
       // 已有相册路由在栈（防一切来源的并发导航）：push 是 UI 线程同步
       // 原子操作，两并发流只可能一个在 push 前观测到 canPop==false。
       if (Navigator.of(context).canPop()) {
-        debugPrint('[GAL] gallery nav-abort(canPop) bucket=${widget.bucket.id}');
         return;
       }
       final photos = s.photos;

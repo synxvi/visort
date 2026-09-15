@@ -307,8 +307,6 @@ class _AndroidBytesImageProvider
     if (isRawPath) {
       return _RawImageStreamCompleter(
         _loadRawImage(key, decode),
-        // [RAW] 排查打点标识（id）。
-        debugLabel: 'id: ${key.ref.relativePath}',
         informationCollector: () sync* {
           yield ErrorDescription('id: ${key.ref.relativePath}');
         },
@@ -338,9 +336,6 @@ class _AndroidBytesImageProvider
   ) async {
     final tw = key.targetWidth!;
     try {
-      // [RAW] 排查打点：channel 回传时刻（与 [SP] 的任务完成时刻对齐——
-      // 二者应同刻；[RAW] px 晚于 [SP] done = Dart→native 发起或回传被延迟）。
-      final rawT0 = DateTime.now().microsecondsSinceEpoch ~/ 1000;
       final r = await ServicePolicy.instance.run(
         key.priority,
         // ⚠️ timeout 必须在 job 内（channel 调用上）——与 4096 档
@@ -356,9 +351,6 @@ class _AndroidBytesImageProvider
             )
             .timeout(const Duration(seconds: 5)),
         tag: 'full${tw}:${key.ref.id}',
-      );
-      debugPrint(
-        '[RAW] px id=${key.ref.id} dt=${(DateTime.now().microsecondsSinceEpoch ~/ 1000) - rawT0}ms t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
       );
       // 同步直建（decodeImageFromPixelsSync）：不走 instantiateCodec/
       // getNextFrame 的引擎 io worker 队列（decodeImageFromPixels 异步版
@@ -504,7 +496,6 @@ class _RawImageStreamCompleter extends ImageStreamCompleter {
   /// 迟到图（completer 已 dispose 时 future 才完成）自行释放防泄漏。
   _RawImageStreamCompleter(
     Future<ui.Image> image, {
-    String? debugLabel,
     InformationCollector? informationCollector,
   }) : _informationCollector = informationCollector {
     image.then(
@@ -513,11 +504,6 @@ class _RawImageStreamCompleter extends ImageStreamCompleter {
           img.dispose(); // completer 已回收：无人接盘，自释放防泄漏
           return;
         }
-        // [RAW] 排查打点：setImage 实际生效时刻（与 [RAW] px 间隔 = future
-        // 续体延迟；与 [PROBE] 行对齐看翻页 740ms 窗口内它落在哪）。
-        debugPrint(
-          '[RAW] set id=$debugLabel t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
-        );
         setImage(ImageInfo(image: img));
       },
       onError: (Object exception, StackTrace stackTrace) {
@@ -540,9 +526,6 @@ class _RawImageStreamCompleter extends ImageStreamCompleter {
   @override
   void onDisposed() {
     _dead = true;
-    debugPrint(
-      '[RAW] disposed t=${DateTime.now().microsecondsSinceEpoch ~/ 1000}',
-    );
     super.onDisposed();
   }
 }
@@ -623,7 +606,6 @@ class _AndroidProgressiveImageProvider
     _AndroidProgressiveImageProvider key,
     ImageDecoderCallback decode,
   ) {
-    debugPrint('[PVP] new completer id=${key.ref.id}');
     return _ProgressiveViewerImageCompleter(key: key, decode: decode);
   }
 
@@ -662,8 +644,6 @@ class _ProgressiveViewerImageCompleter extends ImageStreamCompleter
       _hasImage = true;
       setImage(initial);
     }
-    debugPrint(
-        '[PVP] new completer id=${key.ref.id} initial=${initial != null}');
     // 【飞行窗让空·2026-09-10】构造只 hold 不发起 4096——由 widget 在
     // 路由 settled 后延迟 600ms 发起（见 zoomable_image._scheduleHdStart）。
     // 原图直出帧成本已变重（≤25MP 直回 bytes ~7MB IO + 引擎全解 48MB
@@ -722,7 +702,6 @@ class _ProgressiveViewerImageCompleter extends ImageStreamCompleter
   ///（每页一个），全 p150 会挤占邻取 1152 预取 → 掠过页 miss → 快甩/
   /// 翻页模糊。离屏即压到全队列最低（解完照推、翻回命中 blob 不变）。
   void _handleAbandoned() {
-    debugPrint('[PVP] abandoned (deprioritize) id=${_key.ref.id}');
     ServicePolicy.instance.deprioritizeQueued(
       (t) => t.tag == 'full4096:${_key.ref.id}',
     );
@@ -759,14 +738,10 @@ class _ProgressiveViewerImageCompleter extends ImageStreamCompleter
 
   @override
   void requestUpTo(int targetWidth, {int? priority}) {
-    if (_dead) {
-      debugPrint('[HD] req-skip dead tw=$targetWidth id=${_key.ref.id}');
-      return;
-    }
+    if (_dead) return;
     final idx = _levels.indexOf(targetWidth);
     if (idx < 0 || idx <= _targetIndex) return; // 未定义/已覆盖：幂等
     if (priority != null) _priority = priority;
-    debugPrint('[HD] req tw=$targetWidth p=$_priority id=${_key.ref.id}');
     _targetIndex = idx;
     scheduleMicrotask(_pump);
   }
@@ -795,7 +770,6 @@ class _ProgressiveViewerImageCompleter extends ImageStreamCompleter
     future.then((img) {
       _loadingIndex = -1;
       if (_dead) {
-        debugPrint('[HD] push-skip dead tw=$tw id=${_key.ref.id}');
         img.dispose();
         return;
       }
@@ -805,17 +779,14 @@ class _ProgressiveViewerImageCompleter extends ImageStreamCompleter
         _heldImage?.dispose();
         _heldImage = img;
         _hasImage = true;
-        debugPrint('[HD] hold tw=$tw id=${_key.ref.id}');
         _onFrameReady?.call();
       } else {
-        debugPrint('[HD] push tw=$tw id=${_key.ref.id}');
         _hasImage = true;
         setImage(ImageInfo(image: img));
       }
       if (_targetIndex > _loadedIndex) scheduleMicrotask(_pump);
     }).catchError((Object e, StackTrace? st) {
       _loadingIndex = -1;
-      debugPrint('[HD] level fail tw=$tw id=${_key.ref.id} err=$e');
       if (_dead) return;
       _loadedIndex = next;
       if (_targetIndex > _loadedIndex) scheduleMicrotask(_pump);
@@ -846,7 +817,6 @@ class _ProgressiveViewerImageCompleter extends ImageStreamCompleter
       img?.dispose();
       return;
     }
-    debugPrint('[HD] flush id=${_key.ref.id}');
     setImage(ImageInfo(image: img));
   }
 
@@ -878,7 +848,6 @@ class _ProgressiveViewerImageCompleter extends ImageStreamCompleter
 
   @override
   void onDisposed() {
-    debugPrint('[PVP] disposed id=${_key.ref.id}');
     _dead = true;
     _heldImage?.dispose();
     _heldImage = null;

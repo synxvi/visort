@@ -2090,9 +2090,6 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
   static bool _navInFlight = false;
 
   Future<void> _openAlbum() async {
-    // [GAL] 入口打点（排查"返回后点击无反应"，2026-09），同 gallery_screen。
-    debugPrint('[GAL] sort-open tap bucket=${widget.bucket.id} '
-        'locked=$_navInFlight');
     if (_navInFlight) return;
     if (_interceptIfEditing()) return;
     // 选择模式（本组已有相册勾选）：点击改为勾选/取消本相册，不进入浏览
@@ -2121,12 +2118,9 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
       // 输家不 push = 不打断赢家的 Hero flight（双路由 push+pop 打断
       // 飞行 = 黑 tile 残影/吞点击，2026-09 真机实证）。
       if (s.bucketId != widget.bucket.id) {
-        debugPrint('[GAL] nav-abort(own) bucket=${widget.bucket.id} '
-            'state=${s.bucketId}');
         return;
       }
       if (Navigator.of(context).canPop()) {
-        debugPrint('[GAL] nav-abort(canPop) bucket=${widget.bucket.id}');
         return;
       }
       final photos = s.photos;

@@ -795,8 +795,6 @@ class _FilmstripState extends State<Filmstrip>
 
   @override
   Widget build(BuildContext context) {
-    debugPrint(
-        '[FS] build n=${widget.itemCount} sel=$_sel dx=${_selDx.toStringAsFixed(1)} frozen=${widget.frozen?.value}');
     return ColoredBox(
       color: Colors.black,
       child: LayoutBuilder(
