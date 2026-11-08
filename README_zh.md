@@ -2,14 +2,14 @@
 
 # VISORT
 
-**键盘 / 快捷键驱动的图片整理工具** — 桌面 + 安卓
+**键盘 / 手势驱动的图片整理 + 相册** — 安卓 + Windows
 
 逐张浏览，一键分类，确认前不碰任何文件。
 
 [**English**](readme.md)
 
-[![Flutter](https://img.shields.io/badge/Flutter-3.44%2B-blue)](https://flutter.dev)
-[![Dart](https://img.shields.io/badge/Dart-3.12%2B-0175C2)](https://dart.dev)
+[![Flutter](https://img.shields.io/badge/Flutter-3.47%2B-blue)](https://flutter.dev)
+[![Dart](https://img.shields.io/badge/Dart-3.10%2B-0175C2)](https://dart.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -22,11 +22,11 @@
 
 VISORT 是一个**整理工具**，不是看图器：
 
-- **一键一决策的流水线** — 全屏看一张图，按一个键（或点一个目标）即刻分类，下一张自动接上。几分钟过完几百张，像流水线一样顺。
-- **暂存 + 复核，绝不误操作** — 所有移动 / 删除先进内存暂存，执行前给完整的统计预览，确认才落地。主流相册的删除是即时的，VISORT 给你反悔的机会。
+- **一键一决策的流水线** — 全屏看一张图，点一个目标即刻分类，下一张自动接上。几分钟过完几百张，像流水线一样顺。
+- **暂存 + 复核，绝不误操作** — 所有移动 / 删除先进内存暂存，执行前给完整的统计预览，确认才落地。删除走系统回收站，可恢复。
 - **完全本地，零云端** — 图片不离开设备，没有 AI 扫描、没有上传、没有账号。你的照片就是你的。
-- **两种整理模式** — 移入已有相册，或按自定义子目录规则分类（键 A →「保留」，键 B →「待删」），适配任何整理习惯。
-- **跨平台** — Windows 桌面键盘驱动 + Android 触屏，同一套整理逻辑。
+- **两种整理模式** — 相册间移动（Pictures → Camera），或按自定义子目录规则分类（键 A →「保留」，键 B →「待删」），适配任何整理习惯。
+- **完整的相册生态** — 浏览、收藏、回收站、搜索、壁纸、多选批量操作，一样不少。
 
 > 核心设计原则：**所有操作先暂存，确认后才执行。** 不会误删、不会误移。
 
@@ -34,7 +34,7 @@ VISORT 是一个**整理工具**，不是看图器：
 
 | 平台 | 状态 | 特色 |
 |---|---|---|
-| **安卓** | 活跃开发中 · 相册体验为核心 | MediaStore 原生相册浏览 + 触屏整理 |
+| **安卓** | 活跃开发 · 相册体验为核心 | MediaStore 原生相册 + 触屏整理流水线 |
 | **Windows 桌面** | 稳定 · 功能完整 | 键盘驱动分类，窗口状态持久化 |
 
 代码库是 [`visort_flutter/`](visort_flutter/) 下的 **Flutter 应用**，移植自早期的 Python / Flask 实现（已移除）。
@@ -43,43 +43,71 @@ VISORT 是一个**整理工具**，不是看图器：
 
 ## 安卓版
 
-原生 MediaStore 集成，直接操作系统相册，零拷贝。下面按完整整理流程展示（模拟器实拍）：
+原生 MediaStore 集成，直接操作系统相册，零拷贝。以下全部为模拟器实拍。
 
-### 相册浏览与整理配置
-
-<p align="center">
-  <img src="screenshots/zh/01_home.png" width="280"/>
-</p>
-
-keyset 游标分页的 MediaStore 图库，ContentObserver 实时刷新。首页同时承载相册列表与整理配置：选源相册（可多选），设定目标——移入已有相册（Between Albums），或按自定义子目录分类（Subdirs，键 A →「保留」、键 B →「待删」）。
-
-### 逐图排序
+### 相册浏览
 
 <p align="center">
-  <img src="screenshots/zh/03_sort.png" width="280"/>
+  <img src="screenshots/zh/01_gallery.png" width="270"/>
+  &nbsp;
+  <img src="screenshots/zh/02_album.png" width="270"/>
 </p>
 
-全屏看一张图，点按底部目标即分类（folder1 / folder2 / 根目录 / 删除 / 跳过），下一张自动接上——无需长按多选，几分钟过完几百张。
+keyset 游标分页的 MediaStore 图库，ContentObserver 实时刷新——相册外的增删改即时反映到列表。顶栏支持按文件名搜索（本地索引）、筛选排序；长按相册可多选批量清空。
 
-### 复核
+### 大图查看
 
 <p align="center">
-  <img src="screenshots/zh/04_review.png" width="280"/>
+  <img src="screenshots/zh/03_viewer.png" width="280"/>
 </p>
 
-执行前给出完整的暂存操作统计（已移 / 已删 / 已跳过）与逐文件明细表，确认无误再继续。此刻所有操作仍在内存，文件未动。
+全屏查看器：双指缩放、左右滑动切换、底部缩略图条（删除自动补位）。一键收藏、删除（走系统回收站）、设为壁纸、查看元信息。
 
-### 执行
+### 整理配置
 
 <p align="center">
-  <img src="screenshots/zh/05_results.png" width="280"/>
+  <img src="screenshots/zh/07_setup.png" width="270"/>
+  &nbsp;
+  <img src="screenshots/zh/07_setup_between.png" width="270"/>
 </p>
 
-确认后一次性应用所有变更。授权媒体管理后批量移动 / 删除免弹窗；删除走系统回收站，可恢复。
+两种模式：**相册间**（源 → 目标，支持多选）或**子目录**（自定义目标父目录 + 子目录规则，键 A / B 一键分流）。授予媒体管理权限后可开启免弹窗批量操作。
 
----
+### 逐张裁决
 
-**其他特性：** 收藏跨相册聚合视图 · 中英文一键切换 · 同名冲突自动加后缀
+<p align="center">
+  <img src="screenshots/zh/08_sort.png" width="280"/>
+</p>
+
+全屏看一张图，点底部目标即分类（目标相册 / 删除 / 跳过 / 撤销），下一张自动接上——无需长按多选，几分钟过完几百张。
+
+### 复核 · 执行
+
+<p align="center">
+  <img src="screenshots/zh/09_review.png" width="270"/>
+  &nbsp;
+  <img src="screenshots/zh/10_results.png" width="270"/>
+</p>
+
+执行前给出完整统计（已移 / 已删 / 已跳过）与逐文件明细表——此刻所有操作仍在内存，文件未动。确认后一次性应用，批量移动 / 删除只需一次系统授权。
+
+### 收藏 · 回收站
+
+<p align="center">
+  <img src="screenshots/zh/04_favorites.png" width="270"/>
+  &nbsp;
+  <img src="screenshots/zh/05_trash.png" width="270"/>
+</p>
+
+收藏跨相册聚合视图；删除的照片进入系统回收站，随时恢复或一键清空。
+
+### 设置
+
+<p align="center">
+  <img src="screenshots/zh/06_settings.png" width="280"/>
+</p>
+
+语言（中 / 英）、默认首页、抽屉动画、图片信息索引、空闲预缓存与缓存配额，全部本地持久化。
 
 ---
 
@@ -96,7 +124,7 @@ keyset 游标分页的 MediaStore 图库，ContentObserver 实时刷新。首页
 
 ## 快速开始
 
-需要 [Flutter ≥ 3.44](https://flutter.dev)（Dart ≥ 3.12）。
+需要 [Flutter ≥ 3.47](https://flutter.dev)（Dart ≥ 3.10）。
 
 ```bash
 git clone https://github.com/synxvi/visort.git
@@ -109,11 +137,12 @@ flutter run -d windows        # Windows 桌面
 构建：
 
 ```bash
-flutter build apk --release       # → build/app/outputs/flutter-apk/
-flutter build windows --release   # → build/windows/x64/runner/Release/
+flutter build apk --release --split-per-abi \
+  --obfuscate --split-debug-info=build/symbols   # → build/app/outputs/flutter-apk/
+flutter build windows --release                 # → build/windows/x64/runner/Release/
 ```
 
-> 安卓 release 构建目前用 debug 签名（尚未配置生产 keystore）。
+> 安卓 release 已配置生产签名；`--split-debug-info` 剥离 Dart 符号（libapp.so 减重 ~1.2MB），符号文件归档保留用于反混淆崩溃堆栈。
 
 ## 支持格式
 
@@ -123,11 +152,11 @@ flutter build windows --release   # → build/windows/x64/runner/Release/
 
 | 层 | 技术 |
 |---|---|
-| 界面 / 逻辑 | Flutter（Dart ≥ 3.12），Riverpod ^2.6.1 |
+| 界面 / 逻辑 | Flutter（Dart ≥ 3.10），Riverpod ^2.6.1 |
 | 安卓原生 | Kotlin + MediaStore（MethodChannel + EventChannel + ContentObserver） |
 | Windows 原生 | CMake 运行器（C++17） |
-| 测试 | `flutter_test`，58 个单测用例 |
-| 状态 | 内存暂存，无数据库 |
+| 持久化 | SQLite（会话 / 快照 / 搜索索引 / 运行日志） |
+| 测试 | `flutter_test`，208 个单测用例 |
 
 ## 文档
 

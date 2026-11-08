@@ -2,14 +2,14 @@
 
 # VISORT
 
-**Keyboard-Driven Image Organizer** — Desktop + Android
+**Keyboard / gesture-driven photo organizer + gallery** — Android + Windows
 
-Browse photos one by one, sort them with a single keypress. Nothing moves until you confirm.
+Browse photos one by one, sort them with a single tap. Nothing moves until you confirm.
 
 [**中文文档**](README_zh.md)
 
-[![Flutter](https://img.shields.io/badge/Flutter-3.44%2B-blue)](https://flutter.dev)
-[![Dart](https://img.shields.io/badge/Dart-3.12%2B-0175C2)](https://dart.dev)
+[![Flutter](https://img.shields.io/badge/Flutter-3.47%2B-blue)](https://flutter.dev)
+[![Dart](https://img.shields.io/badge/Dart-3.10%2B-0175C2)](https://dart.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 </div>
@@ -22,11 +22,11 @@ Mainstream galleries (Google Photos, OEM system galleries) are great at **browsi
 
 VISORT is an **organizing tool**, not a viewer:
 
-- **One-key pipeline** — Full-screen one photo, press one key (or tap a target) to classify it, the next comes up automatically. Blast through hundreds in minutes.
-- **Staged + review, no accidents** — Every move / delete is staged in memory first; you get a full stats preview before anything is applied. Mainstream galleries delete instantly — VISORT lets you change your mind.
+- **One-tap pipeline** — Full-screen one photo, tap a target to classify it, the next comes up automatically. Blast through hundreds in minutes.
+- **Staged + review, no accidents** — Every move / delete is staged in memory first; you get a full stats preview before anything is applied. Deletes go to the system trash, restorable.
 - **Fully local, zero cloud** — Photos never leave the device. No AI scanning, no uploads, no accounts.
-- **Two sort modes** — Move into existing albums, or classify by custom sub-folder rules (key A → "keep", key B → "delete").
-- **Cross-platform** — Windows desktop keyboard-driven + Android touch, same organizing logic.
+- **Two sort modes** — Move between albums (Pictures → Camera), or classify by custom sub-folder rules (key A → "keep", key B → "delete").
+- **A full gallery around it** — Browsing, favorites, trash, search, wallpaper, batch multi-select — all included.
 
 > Core principle: **every operation is staged first, executed only on confirmation.** No accidental deletes, no accidental moves.
 
@@ -34,7 +34,7 @@ VISORT is an **organizing tool**, not a viewer:
 
 | Platform | Status | Highlights |
 |---|---|---|
-| **Android** | Active development · gallery experience is the focus | Native MediaStore album browsing + touch sorting |
+| **Android** | Active development · gallery experience is the focus | Native MediaStore gallery + touch sorting pipeline |
 | **Windows desktop** | Stable · feature-complete | Keyboard-driven sorting, window-state persistence |
 
 The codebase is the **Flutter app** in [`visort_flutter/`](visort_flutter/), a verified port of a prior Python/Flask implementation (since removed).
@@ -43,43 +43,71 @@ The codebase is the **Flutter app** in [`visort_flutter/`](visort_flutter/), a v
 
 ## Android
 
-Native MediaStore integration — operates directly on the system gallery, zero copies. Full organizing flow below (emulator screenshots):
+Native MediaStore integration — operates directly on the system gallery, zero copies. All screenshots below are from the emulator.
 
-### Album browsing & sort setup
+### Album browsing
 
 <p align="center">
-  <img src="screenshots/01_home.png" width="280"/>
+  <img src="screenshots/01_gallery.png" width="270"/>
+  &nbsp;
+  <img src="screenshots/02_album.png" width="270"/>
 </p>
 
-Keyset-paginated MediaStore gallery with live ContentObserver refresh. The home screen carries both the album list and the sort config: pick source albums (multi-select), set targets — move into existing albums (Between Albums), or classify by custom sub-folders (Subdirs, key A → "keep", key B → "delete").
+Keyset-paginated MediaStore gallery with live ContentObserver refresh — changes made outside the app reflect instantly. Top bar offers filename search (local index) and filter / sort options; long-press albums for multi-select batch clear.
+
+### Photo viewer
+
+<p align="center">
+  <img src="screenshots/03_viewer.png" width="280"/>
+</p>
+
+Full-screen viewer: pinch-to-zoom, swipe to navigate, bottom filmstrip (with direction-aware removal animation). One-tap favorite, delete (to system trash), set as wallpaper, view metadata.
+
+### Sort setup
+
+<p align="center">
+  <img src="screenshots/07_setup.png" width="270"/>
+  &nbsp;
+  <img src="screenshots/07_setup_between.png" width="270"/>
+</p>
+
+Two modes: **Between Albums** (source → target, multi-select) or **Subdirs** (custom parent folder + sub-directory rules, key A / B one-tap routing). Grant media-management access once for dialog-free batch operations.
 
 ### Sort
 
 <p align="center">
-  <img src="screenshots/03_sort.png" width="280"/>
+  <img src="screenshots/08_sort.png" width="280"/>
 </p>
 
-Full-screen one photo, tap a bottom target to classify (folder1 / folder2 / root / delete / skip), the next comes up automatically — no long-press multi-select, hundreds in minutes.
+Full-screen one photo, tap a bottom target to classify (target album / delete / skip / undo), the next comes up automatically — no long-press multi-select, hundreds in minutes.
 
-### Review
+### Review · Run
 
 <p align="center">
-  <img src="screenshots/04_review.png" width="280"/>
+  <img src="screenshots/09_review.png" width="270"/>
+  &nbsp;
+  <img src="screenshots/10_results.png" width="270"/>
 </p>
 
-Full staged-operation stats (moved / deleted / skipped) with a per-file detail table before you commit. Everything is still in memory — nothing touched yet.
+Full staged-operation stats (moved / deleted / skipped) with a per-file detail table before you commit — everything is still in memory, nothing touched yet. Confirm once to apply all changes; batch move / delete needs a single system consent.
 
-### Run
+### Favorites · Trash
 
 <p align="center">
-  <img src="screenshots/05_results.png" width="280"/>
+  <img src="screenshots/04_favorites.png" width="270"/>
+  &nbsp;
+  <img src="screenshots/05_trash.png" width="270"/>
 </p>
 
-Confirm to apply all changes at once. With media-management granted, batch move / delete is dialog-free; deletes go to the system trash, restorable.
+Favorites aggregated across albums; deleted photos land in the system trash — restore anytime or empty with one tap.
 
----
+### Settings
 
-**More:** favorites aggregated across albums · bilingual EN / ZH · auto numeric suffix on name collision
+<p align="center">
+  <img src="screenshots/06_settings.png" width="280"/>
+</p>
+
+Language (EN / ZH), default home page, drawer animation, image-info index, idle precache & cache quota — all persisted locally.
 
 ---
 
@@ -96,7 +124,7 @@ Confirm to apply all changes at once. With media-management granted, batch move 
 
 ## Quick start
 
-Requires [Flutter ≥ 3.44](https://flutter.dev) (Dart ≥ 3.12).
+Requires [Flutter ≥ 3.47](https://flutter.dev) (Dart ≥ 3.10).
 
 ```bash
 git clone https://github.com/synxvi/visort.git
@@ -109,11 +137,12 @@ flutter run -d windows        # Windows desktop
 Build:
 
 ```bash
-flutter build apk --release       # → build/app/outputs/flutter-apk/
-flutter build windows --release   # → build/windows/x64/runner/Release/
+flutter build apk --release --split-per-abi \
+  --obfuscate --split-debug-info=build/symbols   # → build/app/outputs/flutter-apk/
+flutter build windows --release                 # → build/windows/x64/runner/Release/
 ```
 
-> Android release builds currently sign with debug keys (no production keystore yet).
+> Android release builds are signed with the production keystore; `--split-debug-info` strips Dart symbols (~1.2MB off libapp.so), with symbol files archived for de-obfuscating crash traces.
 
 ## Supported formats
 
@@ -123,11 +152,11 @@ flutter build windows --release   # → build/windows/x64/runner/Release/
 
 | Layer | Technology |
 |---|---|
-| UI / logic | Flutter (Dart ≥ 3.12), Riverpod ^2.6.1 |
+| UI / logic | Flutter (Dart ≥ 3.10), Riverpod ^2.6.1 |
 | Android native | Kotlin + MediaStore (MethodChannel + EventChannel + ContentObserver) |
 | Windows native | CMake runner (C++17) |
-| Tests | `flutter_test`, 58 unit cases |
-| State | Staged in memory, no DB |
+| Persistence | SQLite (session / snapshot / search index / run log) |
+| Tests | `flutter_test`, 208 unit cases |
 
 ## Documentation
 
