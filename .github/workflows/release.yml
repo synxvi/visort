@@ -132,6 +132,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash visort_flutter/tools/prefetch_sqlite3_assets.sh android
 
+      - name: Prefetch Gradle distribution (bypass GH release CDN 504)
+        # 同一 504 故障面：services.gradle.org 307 重定向到 GitHub release
+        # 资产（gradle/gradle-distributions），Gradle wrapper 下载发行版
+        # 失败。gh api 通道预取 + wrapper 改指本地 file:// 副本——只改
+        # CI checkout 副本，仓库与本地构建不受影响。
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash visort_flutter/tools/prefetch_gradle_dist.sh
+
       - name: Build APK (split per ABI)
         working-directory: visort_flutter
         # 产出 arm64-v8a / armeabi-v7a / universal 三个分包。
