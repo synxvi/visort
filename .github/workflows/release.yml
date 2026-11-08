@@ -156,6 +156,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash visort_flutter/tools/prefetch_gradle_dist.sh
 
+      - name: Use official Maven repos (bypass aliyun mirror 502)
+        # settings.gradle.kts 的国内镜像（aliyun/flutter-io.cn）是本地开发
+        # 加速；CI runner（美国）访问 aliyun 间歇 502，且 Gradle 对 5xx 的
+        # 行为是禁用整个仓库、不回退到列表后面的官方源——镜像行必须整个
+        # 拿掉。只改 CI checkout 副本，走 google()/mavenCentral() 直连。
+        run: sed -i '/maven\.aliyun\.com\|storage\.flutter-io\.cn/d' visort_flutter/android/settings.gradle.kts
+
       - name: Build APK (split per ABI)
         working-directory: visort_flutter
         # 产出 arm64-v8a / armeabi-v7a / universal 三个分包。
