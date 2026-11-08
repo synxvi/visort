@@ -902,6 +902,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                                   : _targetBucketIds.add(id);
                             });
                           },
+                          // Hero 模式互斥（见 _buildBucketList 注释）：仅
+                          // toAlbum 模式（本面板可见）参与飞行，避免与源
+                          // 相册区同相册 tile 的 tag 撞车。
+                          heroesEnabled: _mode == ClassifyMode.toAlbum,
                         ),
                       ),
                     ],
@@ -994,6 +998,10 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
                       : _sourceBucketIds.add(id);
                 });
               },
+              // Hero 模式互斥（见 _buildBucketList 注释）：仅 toNewDir
+              // 模式参与飞行；toAlbum 模式让位给目标相册列表（同相册
+              // tile 两处同时挂 Hero = 同 tag 重复，pop flight 扫描即炸）。
+              heroesEnabled: _mode == ClassifyMode.toNewDir,
             ),
           ),
           // 目标区随模式交叉切换：
@@ -1157,9 +1165,18 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
   }
 
   /// 排序后的 bucket 列表渲染
+  /// 相册列表构建。源相册区与 toAlbum 目标面板共用本方法——同一相册会在
+  /// 两处各渲染一个封面 tile，而封面 Hero 的 tag（photo_首张 id）在两处
+  /// 相同：同时启用 = 同一路由子树内同 tag 重复，任何 Hero flight 对本页
+  /// 的扫描（含 SDK 补丁 pop flight 的同步扫描）都会抛
+  /// 「multiple heroes」异常——抛点在 Navigator 事务锁窗口内时会把导航器
+  /// 永久卡死（红屏 '!_debugLocked'，2026-11 模拟器实证）。
+  /// 因此调用方必须按模式互斥传 [heroesEnabled]：toNewDir 只有源区、
+  /// toAlbum 只有目标面板参与飞行，任何时刻同 tag 至多一个 Hero。
   Widget _buildBucketList({
     required Set<String> selectedIds,
     required void Function(String id) onToggle,
+    required bool heroesEnabled,
   }) {
     final config = ref.watch(configProvider);
     final sorted = _sortedBuckets();
@@ -1177,6 +1194,7 @@ class _HomeScreenAndroidState extends ConsumerState<HomeScreenAndroid>
             selectionMode: selectedIds.isNotEmpty,
             flightTag: _flightTag,
             onFlightStart: (tag) => setState(() => _flightTag = tag),
+            heroesEnabled: heroesEnabled,
           ),
         )
         .toList();
@@ -1863,6 +1881,7 @@ class _HomeBucketTile extends StatefulWidget {
     this.selectionMode = false,
     this.flightTag,
     this.onFlightStart,
+    required this.heroesEnabled,
   });
   final MsBucket bucket;
   final bool selected;
@@ -1877,6 +1896,9 @@ class _HomeBucketTile extends StatefulWidget {
   final String? flightTag;
   /// 点击时通知父级置位飞行目标（父级 setState 后本 tile rebuild）。
   final ValueChanged<String?>? onFlightStart;
+  /// 本列表是否参与 Hero 飞行。源/目标列表同相册同 tag，调用方按模式
+  /// 互斥传入（见 _buildBucketList 注释），防止同路由子树内 tag 重复。
+  final bool heroesEnabled;
   final bool grid;
 
   /// 本组已进入选择模式（至少一个相册被勾选）：此时点击 tile 改为勾选/取消本相册，
@@ -1942,8 +1964,9 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                       key: _coverKey,
                       coverId: widget.bucket.coverId,
                       heroTag: _heroTag,
-                      heroEnabled:
-                          widget.flightTag == null || widget.flightTag == _heroTag,
+                      heroEnabled: widget.heroesEnabled &&
+                          (widget.flightTag == null ||
+                              widget.flightTag == _heroTag),
                       size: 44,
                     ),
                     const SizedBox(width: 12),
@@ -2162,8 +2185,9 @@ class _HomeBucketTileState extends State<_HomeBucketTile>
                       key: _coverKey,
                       coverId: widget.bucket.coverId,
                       heroTag: _heroTag,
-                      heroEnabled:
-                          widget.flightTag == null || widget.flightTag == _heroTag,
+                      heroEnabled: widget.heroesEnabled &&
+                          (widget.flightTag == null ||
+                              widget.flightTag == _heroTag),
                       size: c.maxWidth,
                     ),
                   ),

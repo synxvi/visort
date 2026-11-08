@@ -926,7 +926,13 @@ class HeroController extends NavigatorObserver {
         }
         element.visitChildren(visitor);
       }
-      toCtx.visitChildElements(visitor);
+      // (2026-11) 动画瞬完时本方法在 didPop 同步路径（锁窗口内）直接执行，
+      // endFlight 抛异常同样会卡死导航锁——吞掉上报。
+      try {
+        toCtx.visitChildElements(visitor);
+      } catch (e, s) {
+        _reportFlightError(e, s, 'pop placeholder cleanup');
+      }
       debugPrint('[HERO-CTL] pop-cleanup ${route.settings.name} heroes=$rescued');
     }
 
@@ -990,7 +996,12 @@ class HeroController extends NavigatorObserver {
     );
     // visort patch: flight overlay 已插到最上 → 同步通知 app 重插 chrome
     // entry（同帧回到飞行层之上，无首帧闪烁）。
-    onPopFlightStarted?.call();
+    // (2026-11) app 回调同样在锁窗口内执行，异常不允许向上传播。
+    try {
+      onPopFlightStarted?.call();
+    } catch (e, s) {
+      _reportFlightError(e, s, 'onPopFlightStarted (sync)');
+    }
   }
 
   /// visort patch: deferred pop flight 的帧末启动（带就位重试）。to 侧
@@ -1031,7 +1042,13 @@ class HeroController extends NavigatorObserver {
       if (!isUserGestureTransition) {
         // visort patch: flight overlay 已插到最上 → 同步通知 app 重插 chrome
         // entry（同帧回到飞行层之上，无首帧闪烁）。
-        onPopFlightStarted?.call();
+        // (2026-11) 帧回调路径虽不在锁窗口内，异常同样会打断同帧后续
+        // 回调，统一吞掉上报。
+        try {
+          onPopFlightStarted?.call();
+        } catch (e, s) {
+          _reportFlightError(e, s, 'onPopFlightStarted (deferred)');
+        }
       }
     }, debugLabel: 'HeroController.deferredPopFlight');
   }
@@ -1200,7 +1217,42 @@ class HeroController extends NavigatorObserver {
 
   // Find the matching pairs of heroes in from and to and either start or a new
   // hero flight, or divert an existing one.
+  //
+  // visort patch (2026-11): 飞行启动是纯视觉增强路径，任何失败（典型：app
+  // 路由子树内同 tag 重复 Hero 触发 _allHeroesFor 断言）只允许降级为
+  // 「无飞行的纯淡入淡出」。didPop / didStartUserGesture 的同步启动在
+  // Navigator 事务锁（_debugLocked）窗口内执行，异常若向上传播会跳过
+  // pop/push 中 assert 块里的解锁语句 → 锁永久卡死，此后每帧
+  // NavigatorState.build 抛 '!_debugLocked' 红屏、导航器整体不可用
+  //（2026-11 模拟器实证：快整页同 tag 重复 Hero + popUntil）。这里统一
+  // 拦截并上报，保证 Navigator 状态机完整。
   void _startHeroTransition(
+    PageRoute<dynamic> from,
+    PageRoute<dynamic> to,
+    HeroFlightDirection? flightType,
+    bool isUserGestureTransition,
+  ) {
+    try {
+      _startHeroTransitionBody(from, to, flightType, isUserGestureTransition);
+    } catch (e, s) {
+      _reportFlightError(e, s, 'starting hero transition');
+    }
+  }
+
+  /// visort patch (2026-11): 见 _startHeroTransition 头注释——飞行相关
+  /// 异常的统一上报点（不向上传播）。
+  void _reportFlightError(Object e, StackTrace s, String step) {
+    FlutterError.reportError(
+      FlutterErrorDetails(
+        exception: e,
+        stack: s,
+        library: 'visort heroes patch',
+        context: ErrorDescription(step),
+      ),
+    );
+  }
+
+  void _startHeroTransitionBody(
     PageRoute<dynamic> from,
     PageRoute<dynamic> to,
     HeroFlightDirection? flightType,
