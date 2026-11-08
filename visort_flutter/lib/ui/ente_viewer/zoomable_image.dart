@@ -23,6 +23,7 @@ import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/src/core/photo_view_core.dart'
     show PhotoViewCoreState;
+import 'package:visort_flutter/core/diag/probe_log.dart' show flickerLog;
 import 'package:visort_flutter/core/fs/cache_perf.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/image_ref.dart';
@@ -233,6 +234,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
     }
     final provider = _progressiveProvider;
     if (provider != null && !identical(_imageProvider, provider)) {
+      flickerLog('flush', _photo.id, widget.pageIndex,
+          _inherited?.selectedIndexNotifier.value);
       setState(() => _imageProvider = provider);
     }
     completer.flushHeldFrame();
@@ -445,6 +448,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 复位三级链状态（复用 State 上残留旧图的 provider/加载 flag 会阻塞
     // _loadLocalImage 对缺失级别的重启加载；miss 时旧 provider 还会继续
     // 显示被删那张图）。_pickCachedProvider 按 cache 重新分级。
+    flickerLog('replaceNull', _photo.id, widget.pageIndex,
+        _inherited?.selectedIndexNotifier.value);
     _imageProvider = null;
     _loadedSmallThumbnail = false;
     _loadedLargeThumbnail = false;
@@ -501,6 +506,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
         if (progressive != null &&
             completer is ProgressiveImageCompleter &&
             completer.hasFrame) {
+          flickerLog('recoverAttach', _photo.id, widget.pageIndex,
+              _inherited?.selectedIndexNotifier.value);
           _imageProvider = progressive;
           _loadedFinalImage = true;
           _loadedSmallThumbnail = true;
@@ -582,6 +589,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
         _progressiveStream = null;
         final progressive = _attachProgressive();
         if (progressive != null) {
+          flickerLog('selAttach', _photo.id, widget.pageIndex,
+              _inherited?.selectedIndexNotifier.value);
           setState(() => _imageProvider = progressive);
         }
       } else {
@@ -742,6 +751,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 保持 false：让 _loadLocalImage 正常启动缺失级别的加载（若置 true
     // 会阻塞对应分支的 precache，又没有实际加载在跑 → 缩略图永不清晰）。
     _loadingFinalImage = false;
+    flickerLog('pick:${picked ?? 'none'}', _photo.id, widget.pageIndex,
+        _inherited?.selectedIndexNotifier.value);
     cachePerfEvent('pick id=${_photo.id} L=$picked${allowCellThumb ? '' : ' noCell'}');
   }
 
@@ -1185,7 +1196,12 @@ class _ZoomableImageState extends State<ZoomableImage> {
     // 直接赋字段（本方法在 build 中被调，不能 setState——本帧 build 用
     // 新 provider 渲染，渐进 provider 首帧同步偷 1152 帧视觉无缝）。
     if (_loadedFinalImage && _progressiveStream == null && _isCurrentPage) {
-      _imageProvider = _attachProgressive() ?? _imageProvider;
+      final attached = _attachProgressive();
+      if (attached != null) {
+        flickerLog('buildAttach', _photo.id, widget.pageIndex,
+            _inherited?.selectedIndexNotifier.value);
+        _imageProvider = attached;
+      }
     }
     // 【邻页渐进直挂】此前邻页预建走 _pickCachedProvider 低档（cell/720
     // bytes），翻到才换渐进链——换链窗口 provider 错位 = 滑动条掠过大图
@@ -1207,6 +1223,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
       if (progressive != null &&
           completer is ProgressiveImageCompleter &&
           completer.hasFrame) {
+        flickerLog('neighborMount', _photo.id, widget.pageIndex,
+            _inherited?.selectedIndexNotifier.value);
         _imageProvider = progressive;
       }
     }
@@ -1234,6 +1252,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
           cellStatus.live || cellStatus.keepAlive || cellStatus.pending;
       cachePerfProbe(cacheLevelThumb(_cellThumbSize(), true), cellHit);
       if (cellHit) {
+        flickerLog('probeCell', _photo.id, widget.pageIndex,
+            _inherited?.selectedIndexNotifier.value);
         _imageProvider = cellThumb;
         _loadedSmallThumbnail = true;
         _notifyReadyOnce();
@@ -1287,6 +1307,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
           .then((_) {
             if (!mounted || gen != _loadGeneration) return;
             if (!_loadedFinalImage) {
+              flickerLog('precacheLarge', _photo.id, widget.pageIndex,
+                  _inherited?.selectedIndexNotifier.value);
               setState(() {
                 _imageProvider = large;
                 _loadedLargeThumbnail = true;
@@ -1444,6 +1466,8 @@ class _ZoomableImageState extends State<ZoomableImage> {
       _scaleStateController.setInvisibly(PhotoViewScaleState.initial);
     }
     if (!mounted) return;
+    flickerLog('updfl', _photo.id, widget.pageIndex,
+        _inherited?.selectedIndexNotifier.value);
     setState(() {
       _imageProvider = imageProvider;
       _loadedFinalImage = true;

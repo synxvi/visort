@@ -20,6 +20,19 @@ import 'package:path_provider/path_provider.dart' show getTemporaryDirectory;
 import 'package:flutter/widgets.dart'
     show AppLifecycleState, WidgetsBinding, WidgetsBindingObserver;
 
+/// 闪图排查打点（2026-09-15 二轮）：「当前大图穿插掠过图闪烁」在 attach
+/// 风暴修复后复发 → 换 provider 全链路可见化（zoomable 14 处赋值 + 条
+/// 跨档 + sel 写点）。与 [FLK] 时间线对齐定位。结案置 false——
+/// kCachePerfLog 同款编译期 tree-shake 样板，零运行时成本。
+const bool kFlickerLog = true;
+
+/// [FLK] 单行打点：tag 标链路（cross/selWrite/flush/directMount/selAttach/
+/// pick-档名/updfl/...），id/idx/sel 标身份与当时选区。
+void flickerLog(String tag, String id, int? idx, int? sel) {
+  if (!kFlickerLog) return;
+  debugPrint('[FLK] $tag id=$id idx=$idx sel=$sel');
+}
+
 class ProbeLog with WidgetsBindingObserver {
   ProbeLog._();
 

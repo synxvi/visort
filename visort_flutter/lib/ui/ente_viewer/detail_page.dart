@@ -28,6 +28,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:visort_flutter/core/diag/probe_log.dart' show flickerLog;
 import 'package:visort_flutter/core/fs/cache_perf.dart';
 import 'package:visort_flutter/core/fs/image_loader.dart';
 import 'package:visort_flutter/core/fs/service_policy.dart'
@@ -216,6 +217,32 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// 正在删除的条索引（-1 = 无）。
   int _thumbDeleteIndex = -1;
 
+  /// 本次删除的补位方向（删除置位时从 [_browseDir] 快照，含越界回退）：
+  /// +1 = 下一格顶入（条左侧钉死）、-1 = 上一格顶入（右侧钉死）。
+  /// Filmstrip.deleteDir 入参；与主图 next/收缩对齐共用同一值保证
+  /// 条补位、主图跳转、数据收缩三方一致。
+  int _thumbDeleteDir = 1;
+
+  /// 最近浏览方向（+1 = 顺序往后、-1 = 从后往前，2026-09-15 用户定稿）：
+  /// 删除后前进方向跟随——顺序浏览删除下一张顶入、倒序浏览删除上一张
+  /// 顶入（系统相册同款「删除沿浏览方向前进」）。由 [_noteBrowseDir]
+  /// 记录，来源仅两类真实翻页：onPageChanged 末段（sel≠index 的用户
+  /// 拖动/程序翻页落地，删除流程自身的 animateToPage 也走此路——连续
+  /// 删除方向自然延续）与条跨档入口（_onThumbCenterChanged /
+  /// _onThumbPageChanged）。⚠️ onPageChanged 同值分支与数据收缩校正
+  /// jump 不记（「连续第二次删除反向」根因，见同值分支注释）。
+  int _browseDir = 1;
+
+  /// 方向判定的上一落点（页索引）：[_browseDir] = sign(落地页 − 本值)。
+  int _lastDirPage = 0;
+
+  /// 翻页落地方向记录（真实翻页路径调用；同值/校正跳转不得调用）。
+  void _noteBrowseDir(int landed) {
+    if (landed == _lastDirPage) return;
+    _browseDir = (landed - _lastDirPage).sign;
+    _lastDirPage = landed;
+  }
+
   /// 删除流程进行中（主图动画结束前禁止重复删除/恢复，防数据错乱）。
   bool _deletingInProgress = false;
 
@@ -318,6 +345,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
     });
     _selectedIndexNotifier = ValueNotifier(widget.initialIndex);
     _pageController = PageController(initialPage: widget.initialIndex);
+    _lastDirPage = widget.initialIndex; // 方向判定基准 = 进入时的落点
     _thumbPagePos.value = widget.initialIndex.toDouble();
     // 主图翻页位置 → 条锁步输入（page 连续值；用户拖动/程序动画都流经
     // 此处，条侧由 pagerDriven 门控区分）。
@@ -982,7 +1010,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
             if (_popping) return; // pop 冻结：主图不再换页（源端 Hero 稳定）
             if (_pagerDrivenByThumb) {
               // 缩略图条驱动主图:跨多页时中间页忽略,不回弹缩略图条;
-              // 到达 target 复位 flag。
+              // 到达 target 复位 flag。方向已由条入口（_onThumbCenterChanged
+              // / _onThumbPageChanged）记录——此处不重复记，避免与数据收缩
+              // 校正 jump 混淆。
               if (index == _selectedIndexNotifier.value) {
                 _pagerDrivenByThumb = false;
                 _pagerDrivenN.value = false;
@@ -997,6 +1027,12 @@ class _DetailPageState extends ConsumerState<DetailPage>
             }
             if (_selectedIndexNotifier.value == index) {
               // 文件数可能已变但索引未变（删除补位/缩略图跟手 jumpToPage 触发）。
+              // ⚠️ 此分支【不能】更新浏览方向（2026-09-15 真机：「连续第二次
+              // 删除反向」根因）：删除流程 .then 的数据收缩校正 jumpToPage
+              // （同一张图的索引平移，6→5）也走同值路径——记为翻页会把方向
+              // 误判成反向，下一次删除动画随之反向。条驱动的方向由条入口
+              // 记录（跨档语义天然排除收缩校正）；末段分支（sel≠index 的
+              // 真实翻页）才是本回调内唯一的方向来源。
               // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
               _selectedIndexNotifier.notifyListeners();
               // ⚠️ 跟手路径（filmstrip 快甩 jumpToPage）也须清理远端缓存：
@@ -1021,6 +1057,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
               return;
             }
             _selectedIndexNotifier.value = index;
+            _noteBrowseDir(index); // 用户拖动/程序翻页落地（回声已被上方守卫吞掉）
             // sel 更新即刷 chrome entry：面板内容（_buildPanelOverlay 的
             // _selectedFile）在 entry builder 求值，翻页不经 setState
             //（shouldDisableScroll 同值短路），不补此链 = 面板信息不随
@@ -1425,6 +1462,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
                                 onItemBuild: _prefetchStripItem,
                                 deleteAnim: _thumbDeleteFx,
                                 deleteIndex: _thumbDeleteIndex,
+                                deleteDir: _thumbDeleteDir,
                                 pagePos: _thumbPagePos,
                                 pagerDriven: _pagerDrivenN,
                                 flingLimit: _flingLimit,
@@ -1453,6 +1491,8 @@ class _DetailPageState extends ConsumerState<DetailPage>
   void _onThumbCenterChanged(int i) {
     _claimStripIndex(i);
     if (i == _selectedIndexNotifier.value) return;
+    flickerLog('cross', 'i=$i', null, _selectedIndexNotifier.value);
+    _noteBrowseDir(i); // 条跨档方向（删除补位动画方向源；onPageChanged 同值分支不记，见其注释）
     _selectedIndexNotifier.value = i;
     widget.onIndexChanged?.call(i);
     if (_pageController.hasClients) {
@@ -1574,6 +1614,8 @@ class _DetailPageState extends ConsumerState<DetailPage>
     debugPrint('[TSB] i=$i sel=${_selectedIndexNotifier.value}');
     _claimStripIndex(i);
     if (i == _selectedIndexNotifier.value) return;
+    flickerLog('selWrite', 'i=$i', null, _selectedIndexNotifier.value);
+    _noteBrowseDir(i); // 条停稳/点按方向（同 _onThumbCenterChanged 注释）
     _selectedIndexNotifier.value = i;
     _scheduleChromeRefresh(); // 面板信息随 sel 实时变化（见 onPageChanged 注释）
     widget.onIndexChanged?.call(i);
@@ -2040,15 +2082,20 @@ class _DetailPageState extends ConsumerState<DetailPage>
   /// [undoPhoto] 非空（普通视图删除移入回收站）时结果气泡带「撤回」按钮
   /// （见 [_showDeleteToast]）；null 走全局 toast（恢复/移动/彻底删除）。
   ///
+  /// 前进方向跟随浏览方向（2026-09-15 用户定稿，系统相册同款「删除沿
+  /// 浏览方向前进」）：顺序浏览删除 → 下一张顶入（条左侧灰显项钉死）；
+  /// 从后往前浏览删除 → 上一张顶入（条右侧钉死）。越界（删末张/首张）
+  /// 回退反向。dir 同帧快照到 [_thumbDeleteDir] 供条/主图/收缩对齐
+  /// 三方一致。
+  ///
   /// 条动画 = 系统相册 PhotoPagerIndicator 同构（RecyclerView ItemAnimator
   /// 位置动画）。聚焦位固定在条正中（锚点布局的视口中心）：
-  ///  1. center 翻到下一项延迟到补位后段（150ms）——B 进聚焦位途中才放大
-  ///     （120ms），两条动画同时收尾，不出现「聚焦位外先放大再推入」；
-  ///  2. 被删项保持放大态在聚焦位原地淡出（位置置空），后续项
-  ///     Transform.translate 平滑左移一格补位（位置动画，非 AnimatedList
-  ///     布局重排——重排会在移除项占槽期间把高亮项排到右边一格 =
-  ///     "跳到第二个又弹回来"）；
-  ///  3. 条动画完成（250ms）：数据左移 + center 对齐（同一项，无跳变）；
+  ///  1. 补位方向侧的邻项（dir=+1 为下一项）滑入聚焦位并放大，补位侧
+  ///     后续项各平移一格补位（动画较慢推进——普通格步距小）；
+  ///  2. 被删项保持放大态在聚焦位【原地】缩小淡出；非补位侧（已浏览
+  ///     的灰显项）全程钉死不动（filmstrip 钉死快照，见文件头 4b）；
+  ///  3. 条动画完成（250ms）：数据左移 + center 对齐（同一项，无跳变，
+  ///     收缩后几何 == 钉死快照位置）；
   ///  4. 主图在旧数据上 animateToPage(next) 滑动（300ms），完成后删数据
   ///     + pixels 校正（同帧）。
   void _removeCurrentAndAdvance(String message, {MsImageInfo? undoPhoto}) {
@@ -2067,7 +2114,13 @@ class _DetailPageState extends ConsumerState<DetailPage>
       return;
     }
     final index = _selectedIndexNotifier.value;
-    final next = index < _files.length - 1 ? index + 1 : index - 1;
+    var dir = _browseDir;
+    var next = index + dir;
+    if (next < 0 || next >= _files.length) {
+      next = index - dir; // 删末张/首张：回退反向（dir 同步翻转）
+      dir = -dir;
+    }
+    _thumbDeleteDir = dir;
     _deletingInProgress = true;
     _suppressThumbScroll = true;
     // ─ 条：补位动画 ─
@@ -2108,8 +2161,13 @@ class _DetailPageState extends ConsumerState<DetailPage>
         // 删空守卫（2026-09-13 真机实证 ⚠）：min(index, -1) = -1 喂进
         // center → Filmstrip clamp(0,-1) 产出 -1 → thumbnail(-1)
         // RangeError → 条内 ErrorWidget（黄色 ⚠）。空列表不写 center。
+        // 收缩对齐索引按补位方向（2026-09-15）：dir=+1 = 下一格收缩后
+        // 落到 index 位（min 镜像）；dir=-1 = 上一格 index-1（index 不
+        // 平移）。dir=-1 蕴含 index ≥ 1（删首张时 dir 已回退为 +1）。
         if (_thumbFiles.isNotEmpty) {
-          _thumbCenterIndex?.value = min(index, _thumbFiles.length - 1);
+          _thumbCenterIndex?.value = dir > 0
+              ? min(index, _thumbFiles.length - 1)
+              : index - 1;
         }
         _thumbDeleteIndex = -1;
       }),
@@ -2135,7 +2193,11 @@ class _DetailPageState extends ConsumerState<DetailPage>
                 _files.removeAt(index);
                 _indexById = null; // F19：结构变更，查表重建
               });
-              final newIndex = min(index, _files.length - 1);
+              // 收缩后选中索引按补位方向（同条 center 对齐注释：
+              // dir=+1 = 下一格落到 index 位；dir=-1 = 上一格 index-1）。
+              final newIndex = dir > 0
+                  ? min(index, _files.length - 1)
+                  : index - 1;
               _selectedIndexNotifier.value = newIndex;
               widget.onIndexChanged?.call(newIndex);
               if (_pageController.hasClients) {
@@ -2147,7 +2209,9 @@ class _DetailPageState extends ConsumerState<DetailPage>
               _files.removeAt(index);
               _indexById = null; // F19：结构变更，查表重建
             });
-            final newIndex = min(index, _files.length - 1);
+            final newIndex = dir > 0
+                ? min(index, _files.length - 1)
+                : index - 1;
             _selectedIndexNotifier.value = newIndex;
             widget.onIndexChanged?.call(newIndex);
             // 删除倒数第二张时 pixels 可能在旧 maxScrollExtent 之外——校正。

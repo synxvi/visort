@@ -236,11 +236,21 @@ class _PageSettleTakeOverState extends State<PageSettleTakeOver>
         _stopSpring();
         return;
       }
-      // 【对撞防御】activity 已被其它动画/手势接管（条驱动 animateToPage
-      // 的 Driven、用户 drag）→ spring 让位自停，杜绝互写。
+      // 【对撞防御】activity 已被其它动画/手势接管 → spring 让位自停，杜绝
+      // 互写。三类让位源：Ballistic（原生 fling）/ Driven（条驱动
+      // animateToPage）/ **Idle（2026-09-15 闪图根因修复）**——
+      // jumpToPage（条轻扫跟手硬跳，detail _onThumbCenterChanged）落地后
+      // activity 恒为 Idle：旧表只认前两种，弹簧不知被跳页打断、ticker
+      // 继续朝旧 target setPixels = 主图「新页↔旧 target 页」每档来回闪
+      // （真机 probe.log 实证：cross i=N→opc N→2ms 后 opc idx=旧页+sel 被
+      // onPageChanged 写回旧页，pick/attach 涟漪齐发，弹簧 sim 收敛 ~300ms
+      // 后自愈）。自无误伤：弹簧运行期 activity 是自设的 _FreeScrollActivity
+      // （非 Idle），收敛终点归位 Idle 发生在 _stopSpring 之后同帧。
       // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
       final act = ctrl.position.activity;
-      if (act is BallisticScrollActivity || act is DrivenScrollActivity) {
+      if (act is BallisticScrollActivity ||
+          act is DrivenScrollActivity ||
+          act is IdleScrollActivity) {
         _stopSpring();
         return;
       }

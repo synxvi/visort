@@ -33,6 +33,13 @@
 //   4. 外部指令（主图翻页/删除同步写 center）：近距弹簧滑移（运动中
 //      无聚焦，到达后撑开——2026-09 用户定稿），远距（> 一屏）同帧
 //      落位；条自身拖动/甩动中忽略外部指令（对标 e() 的静止门控）；
+//   4b. 删除补位方向感知（2026-09-15 用户定稿）：补位侧由宿主按浏览
+//      方向决定（deleteDir）——顺序删除下一格顶入、被删项之前的灰显
+//      项【完全不动】；倒序删除上一格顶入、之后项不动。实现 = travel
+//      启动时对钉死侧可见项做屏幕位置快照（_pinSnap），动画期间快照
+//      项直接按快照渲染（不参与 _selDx/focus 几何），removeAt 收缩时
+//      清快照——收缩后几何 == 快照位置（删除稳态下另一侧不变），同帧
+//      无缝。被删项恒在快照内（原地缩小淡出，不再随滑移平移）。
 //   5. 锁步（可选 pagePos 输入）：主图用户拖动时，条按翻页 fraction
 //      逐帧双项插值跟随（对标 p()）；主图正被条程序驱动（pagerDriven）
 //      时锁步让位，避免与条自身动画互搏。
@@ -125,6 +132,7 @@ class Filmstrip extends StatefulWidget {
     this.frozen,
     this.deleteAnim,
     this.deleteIndex = -1,
+    this.deleteDir = 1,
     this.pagePos,
     this.pagerDriven,
     this.flingLimit,
@@ -159,6 +167,10 @@ class Filmstrip extends StatefulWidget {
 
   /// 正在删除的条索引（-1 = 无）。
   final int deleteIndex;
+
+  /// 删除补位方向（宿主按浏览方向给出）：+1 = 下一格顶入（左侧钉死），
+  /// -1 = 上一格顶入（右侧钉死）。仅 deleteIndex ≥ 0 时有意义。
+  final int deleteDir;
 
   /// 主图翻页连续位置（PageController.page）：条静止时按 fraction 锁步
   /// 跟随（双项插值，对标系统 p()）。null = 不启用锁步。
@@ -201,6 +213,14 @@ class _FilmstripState extends State<Filmstrip>
 
   /// 删除补位 travel 的一次性武装标志（见 didUpdateWidget 触发点注释）。
   bool _deleteTravelArmed = false;
+
+  /// 删除补位钉死快照（index → 启动时项中心相对视口中心偏移）：补位
+  /// travel 期间快照项直接按快照渲染，不参与 _selDx/focus 几何——被删
+  /// 项之前的灰显项完全不动（2026-09-15 用户定稿，见文件头 4b）。收缩
+  /// （didUpdateWidget itemCount 分支）时清空，切换到收缩后几何——已
+  /// 验证收缩后几何位置 == 快照位置，同帧无缝。
+  final Map<int, double> _pinSnap = {};
+
   double _selDx = 0; // selection 中心相对视口中心的偏移（px）
 
   /// 非零 focus fraction（通常 0~2 项；1 = 聚焦大样式）。
@@ -296,7 +316,8 @@ class _FilmstripState extends State<Filmstrip>
     }
     // 数据收缩（删除流程 removeAt 后）：对齐外部 center、几何归零位。
     // focus 清为 0（下一项此刻是小图——补位动画终态）；frozen 解除时
-    // 由 _onFrozenChanged 补撑开。
+    // 由 _onFrozenChanged 补撑开。_cancelAnims 连带清删除补位钉死快照
+    // ——收缩后几何 == 快照位置（见 _buildPinSnap），同帧无缝接管。
     if (old.itemCount != widget.itemCount) {
       _cancelAnims();
       _phase = _Phase.idle;
@@ -396,7 +417,9 @@ class _FilmstripState extends State<Filmstrip>
   double get _maxDx => _dist(0, _sel);
 
   /// 可见条目 (index, dx)：dx = 项中心相对视口中心偏移；从 selection
-  /// 向两侧展开到缓冲边界为止（O(视口)，与列表长度无关）。
+  /// 向两侧展开到缓冲边界为止（O(视口)，与列表长度无关）。删除补位
+  /// 钉死快照内的项直接用快照位置（动画期间完全不动），裁剪判断同用
+  /// 快照位置——几何把该项推往界外时不会误裁仍在界内的视觉位置。
   List<(int, double)> _visibleItems() {
     final n = widget.itemCount;
     // 渲染侧兜底（见 initState 注释）：空列表零项输出——_sel 在删空窗口
@@ -406,14 +429,14 @@ class _FilmstripState extends State<Filmstrip>
     var d = 0.0;
     for (var i = _sel + 1; i < n; i++) {
       d += _step(_fOf(i - 1), _fOf(i));
-      final dx = _selDx + d;
+      final dx = _pinSnap[i] ?? (_selDx + d);
       if (dx - _wOf(_fOf(i)) / 2 > _vw / 2 + _kCullBuffer) break;
       out.add((i, dx));
     }
     d = 0.0;
     for (var i = _sel - 1; i >= 0; i--) {
       d -= _step(_fOf(i), _fOf(i + 1));
-      final dx = _selDx + d;
+      final dx = _pinSnap[i] ?? (_selDx + d);
       if (dx + _wOf(_fOf(i)) / 2 < -_vw / 2 - _kCullBuffer) break;
       out.add((i, dx));
     }
@@ -516,17 +539,20 @@ class _FilmstripState extends State<Filmstrip>
   // ─────────────── 程序滑移（外部指令/点按） ───────────────
 
   /// 删除补位 travel 的一次性触发（didUpdateWidget 武装，microtask 执行
-  /// ——build 结束后启动，_travelTo 内的 setState 安全）。g 取被删格的
-  /// 下一格；删末项则取上一格（detail_page 的 next 镜像规则）。
+  /// ——build 结束后启动，_travelTo 内的 setState 安全）。g 按补位方向
+  /// 取邻格：顺序删除（dir=+1）取下一格、倒序删除（dir=-1）取上一格；
+  /// 越界回退反向（删末张/首张，与宿主 next 的镜像规则一致）。
   void _fireDeleteTravel() {
     if (!mounted || !_deleteTravelArmed) return;
     _deleteTravelArmed = false;
     if (widget.deleteAnim == null || widget.itemCount <= 1) return;
     final del = widget.deleteIndex;
     if (del < 0) return;
-    final g = del + 1 < widget.itemCount ? del + 1 : del - 1;
+    final dir = widget.deleteDir;
+    var g = del + dir;
+    if (g < 0 || g >= widget.itemCount) g = del - dir;
     if (g < 0 || g == _sel) return;
-    _travelTo(g);
+    _travelTo(g, pinDir: dir);
   }
 
   void _onExternalCenter() {
@@ -550,11 +576,13 @@ class _FilmstripState extends State<Filmstrip>
   }
 
   /// 滑移到 g：近距弹簧（运动中无聚焦），远距（> 一屏）同帧落位。
-  void _travelTo(int g) {
+  /// [pinDir] 非零 = 删除补位场景：换基后对非补位侧可见项建屏幕位置
+  /// 快照（见 [_buildPinSnap] / 文件头 4b）。
+  void _travelTo(int g, {int pinDir = 0}) {
     // 删空窗口守卫（见 initState 注释）：clamp(0, -1) 会产出 -1。
     if (widget.itemCount == 0) return;
     g = g.clamp(0, widget.itemCount - 1);
-    _cancelAnims();
+    _cancelAnims(); // 连带清旧 _pinSnap（travel 打断/重入时回纯几何）
     // 锚点换基（屏幕位置连续）：新 selDx = 旧值 + 有符号距离。
     final old = _sel;
     final nd = _selDx + _dist(old, g);
@@ -578,8 +606,35 @@ class _FilmstripState extends State<Filmstrip>
     _twStart0 = _now;
     _twDur = _kTravelDuration;
     _phase = _Phase.traveling;
+    // 换基后构建（换基恒等式保证几何未动，快照 = 当前屏幕位置）。
+    if (pinDir != 0) _buildPinSnap(pinDir);
     _startClock();
     setState(() {});
+  }
+
+  /// 删除补位钉死快照构建：对非补位侧（dir>0 = selection 左侧全部，
+  /// dir<0 = 右侧全部）沿展开方向累计到裁剪边界，逐项记录当前屏幕
+  /// 位置。被删项（_travelOld，紧邻 selection）天然是展开第一步——
+  /// 原地缩小淡出，不再随滑移平移。快照项渲染期完全不参与几何
+  ///（_visibleItems 覆盖），removeAt 收缩时清空（didUpdateWidget
+  /// itemCount 分支的 _cancelAnims）。
+  void _buildPinSnap(int dir) {
+    _pinSnap.clear();
+    if (dir > 0) {
+      var d = _selDx;
+      for (var i = _sel - 1; i >= 0; i--) {
+        d -= _step(_fOf(i), _fOf(i + 1));
+        if (d + _wOf(_fOf(i)) / 2 < -_vw / 2 - _kCullBuffer) break;
+        _pinSnap[i] = d;
+      }
+    } else {
+      var d = _selDx;
+      for (var i = _sel + 1; i < widget.itemCount; i++) {
+        d += _step(_fOf(i - 1), _fOf(i));
+        if (d - _wOf(_fOf(i)) / 2 > _vw / 2 + _kCullBuffer) break;
+        _pinSnap[i] = d;
+      }
+    }
   }
 
   /// frozen 解除（删除流程收尾）：对齐外部 center——同位只补撑开
@@ -789,6 +844,10 @@ class _FilmstripState extends State<Filmstrip>
     _twDur = Duration.zero;
     _twFocusIdx = -1;
     _travelOld = -1;
+    // 钉死快照随动画一起撤（removeAt 收缩分支 / travel 重入 / frozen
+    // 置位都经此处清）——清后 _visibleItems 回纯几何，位置 == 快照
+    //（删除稳态下另一侧不变），同帧无缝。
+    _pinSnap.clear();
   }
 
   // ─────────────── 渲染 ───────────────
