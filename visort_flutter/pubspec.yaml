@@ -1,7 +1,7 @@
 name: visort_flutter
 description: "Image organizer — keyboard-driven photo sorting tool."
 publish_to: 'none'
-version: 1.4.0+4
+version: 1.5.0+5
 
 environment:
   sdk: ^3.10.4
