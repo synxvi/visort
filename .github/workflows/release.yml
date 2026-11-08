@@ -119,13 +119,17 @@ jobs:
       - name: Build APK (split per ABI)
         working-directory: visort_flutter
         # 产出 arm64-v8a / armeabi-v7a / universal 三个分包。
+        # --obfuscate + --split-debug-info：剥离 libapp.so 内的 Dart 符号/调试
+        # 信息（省 0.5~1.5MB），符号映射写入 build/symbols/ 并以 artifact 归档，
+        # 反混淆堆栈时按 tag 下载对应一份。
         # settings.gradle.kts 的国内镜像在 CI runner 上公网可达，无需改 Gradle 配置。
         # ⚠️ flutter 工具对 per-ABI versionCode 定制过的 universal 包会误报
         # "failed to produce an .apk"（exit 1），实际三包全部成功——universal
         # 生成在 apk/release/ 而工具只在 flutter-apk/ 找。故 || true 后以
         # 产物存在性为准，universal 缺席时从 apk/release/ 补拷。
         run: |
-          flutter build apk --release --split-per-abi || true
+          flutter build apk --release --split-per-abi \
+            --obfuscate --split-debug-info=build/symbols || true
           SRC=build/app/outputs
           test -f "$SRC/flutter-apk/app-arm64-v8a-release.apk" || { echo "::error::arm64 APK 缺失"; exit 1; }
           test -f "$SRC/flutter-apk/app-armeabi-v7a-release.apk" || { echo "::error::v7a APK 缺失"; exit 1; }
@@ -156,6 +160,16 @@ jobs:
           name: android-apks
           path: visort_flutter/build/app/outputs/flutter-apk/*.apk
           if-no-files-found: error
+
+      - name: Upload obfuscation symbols
+        # --obfuscate 产物必须配对归档：堆栈里的类名/函数名都是混淆后的别名，
+        # 反混淆只能靠这份符号文件。artifact 默认 90 天过期，放 1 年。
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-symbols
+          path: visort_flutter/build/symbols/*
+          if-no-files-found: error
+          retention-days: 365
 
   build-windows:
     name: Build Windows
