@@ -59,6 +59,15 @@ jobs:
           fi
           echo "analyze 通过（error 级为零；info/warning 存量见上方日志）"
 
+      - name: Prefetch sqlite3 native assets (bypass GH release CDN 504)
+        # 2026-11 起 GitHub release 资产下载端点持续 504，sqlite3 包的
+        # native-assets hook 把 504 错误页落盘、哈希校验失败挂掉 job。
+        # 预取走 api.github.com 通道（不受影响）+ 哈希校验，填入 hook
+        # shared 缓存后 hook 命中即跳过下载。详见脚本头注释。
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash visort_flutter/tools/prefetch_sqlite3_assets.sh linux
+
       - name: Test
         working-directory: visort_flutter
         run: flutter test
@@ -115,6 +124,13 @@ jobs:
       - name: Install dependencies
         working-directory: visort_flutter
         run: flutter pub get
+
+      - name: Prefetch sqlite3 native assets (bypass GH release CDN 504)
+        # 同 quality job（见其注释）：android 需 arm64/arm/x64 三个 ABI 资产
+        #（split-per-ABI + universal）。
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash visort_flutter/tools/prefetch_sqlite3_assets.sh android
 
       - name: Build APK (split per ABI)
         working-directory: visort_flutter
@@ -197,6 +213,14 @@ jobs:
       - name: Install dependencies
         working-directory: visort_flutter
         run: flutter pub get
+
+      - name: Prefetch sqlite3 native assets (bypass GH release CDN 504)
+        # 同 quality job（见其注释）。windows job 默认 pwsh，须切 bash
+        #（脚本依赖 sha256sum/sed/awk 等 git-bash 工具）。
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash visort_flutter/tools/prefetch_sqlite3_assets.sh windows
 
       - name: Build Windows
         working-directory: visort_flutter
