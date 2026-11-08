@@ -159,9 +159,15 @@ jobs:
       - name: Use official Maven repos (bypass aliyun mirror 502)
         # settings.gradle.kts 的国内镜像（aliyun/flutter-io.cn）是本地开发
         # 加速；CI runner（美国）访问 aliyun 间歇 502，且 Gradle 对 5xx 的
-        # 行为是禁用整个仓库、不回退到列表后面的官方源——镜像行必须整个
-        # 拿掉。只改 CI checkout 副本，走 google()/mavenCentral() 直连。
-        run: sed -i '/maven\.aliyun\.com\|storage\.flutter-io\.cn/d' visort_flutter/android/settings.gradle.kts
+        # 行为是禁用整个仓库、不回退到列表中排在其后的官方源——镜像行必须
+        # 拿掉。aliyun 行删除（google()/mavenCentral() 是其官方兜底）；
+        # ⚠ flutter-io.cn 行不能删只能换 host：io.flutter:flutter_embedding
+        # 只存在于 download.flutter.io 仓库，官方兜底列表里没有它。
+        # 只改 CI checkout 副本，仓库与本地构建零影响。
+        run: |
+          sed -i -e '/maven\.aliyun\.com/d' \
+                 -e 's|storage\.flutter-io\.cn|storage.googleapis.com|' \
+                 visort_flutter/android/settings.gradle.kts
 
       - name: Build APK (split per ABI)
         working-directory: visort_flutter
