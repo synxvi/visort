@@ -234,6 +234,8 @@ const Map<String, String> stringsEn = {
   'batch_restore_confirm': 'Restore {0} photos?',
   'batch_delete_permanent_confirm':
       'Permanently delete {0} photos? This cannot be undone.',
+  'selected_albums_n': '{0} albums selected',
+  'albums_delete_confirm': 'Delete {1} photos in {0} albums?',
 
   // ───────── Sort ─────────
   'move_to': 'Move to →',

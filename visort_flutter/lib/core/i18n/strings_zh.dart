@@ -222,6 +222,8 @@ const Map<String, String> stringsZh = {
   'batch_delete_confirm': '确认删除 {0} 张图片？',
   'batch_restore_confirm': '确认恢复 {0} 张图片？',
   'batch_delete_permanent_confirm': '确认彻底删除 {0} 张图片？此操作不可恢复。',
+  'selected_albums_n': '已选 {0} 个相册',
+  'albums_delete_confirm': '删除 {0} 个相册中的 {1} 张照片？',
 
   // ───────── Sort ─────────
   'move_to': '移动到 →',

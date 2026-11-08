@@ -40,7 +40,11 @@ class _FakeMediaStoreChannel extends MediaStoreChannel {
   /// 模拟权限未授予：listBuckets 抛 PERMISSION_DENIED（对齐原生
   /// handleListBuckets 的前置检查）。
   bool denyPermission = false;
+  /// 模拟用户取消系统回收站弹窗：requestTrash 抛 trashCancelled。
+  bool cancelTrash = false;
   final List<String> scanCalls = []; // 记录每次 scanImages 的 afterCursor
+  /// 记录每次 requestTrash 的入参（验证「一次弹窗合并整批」语义）。
+  final List<List<String>> trashCalls = [];
 
   /// 模拟 MediaStore 查询语义：普通查询排除已删除/已回收站项；
   /// [trashedOnly] 时只返回回收站项。
@@ -137,6 +141,10 @@ class _FakeMediaStoreChannel extends MediaStoreChannel {
 
   @override
   Future<bool> requestTrash(List<String> ids) async {
+    trashCalls.add(ids);
+    if (cancelTrash) {
+      throw const MsException(MsErrorCode.trashCancelled, '用户取消');
+    }
     _trashedIds.addAll(ids);
     return true;
   }
@@ -430,6 +438,76 @@ void main() {
       await controller.setFavorites(['3', '4'], false);
       st = container.read(galleryControllerProvider);
       expect(st.photos.every((p) => !p.isFavorite), true);
+    });
+  });
+
+  group('trashBuckets（相册页长按多选 → 批量清空）', () {
+    /// 双桶容器：b1 两张 + b2 三张（setUp 的单桶 fake 覆盖不到跨桶合并）。
+    (ProviderContainer, _FakeMediaStoreChannel) dualBucketEnv() {
+      final fake = _FakeMediaStoreChannel(
+        [_bucket('b1', 'Camera', 2), _bucket('b2', 'Downloads', 3)],
+        {
+          'b1': [
+            _info('1', bucket: 'b1', added: 10),
+            _info('2', bucket: 'b1', added: 20),
+          ],
+          'b2': [
+            _info('3', bucket: 'b2', added: 30),
+            _info('4', bucket: 'b2', added: 40),
+            _info('5', bucket: 'b2', added: 50),
+          ],
+        },
+      );
+      final container = ProviderContainer(overrides: [
+        mediaStoreChannelProvider.overrideWithValue(fake),
+        mediaStoreChangeStreamProvider.overrideWith(
+            (ref) => const Stream<MsChangeEvent>.empty()),
+      ]);
+      return (container, fake);
+    }
+
+    test('只清所选桶：逐桶取全量 id 合并为一次 requestTrash，未选桶不动', () async {
+      final (container, fake) = dualBucketEnv();
+      addTearDown(container.dispose);
+      final controller = container.read(galleryControllerProvider.notifier);
+      await controller.loadBuckets();
+
+      final err = await controller.trashBuckets(['b1']);
+      expect(err, isNull);
+      // 一次系统弹窗（requestTrash 一调用），且 id 为所选桶全量
+      expect(fake.trashCalls.length, 1);
+      expect(fake.trashCalls.single, {'1', '2'});
+      // count 权威校准（fake listBuckets 实时派生：清空 → 0），未选桶不变
+      final st = container.read(galleryControllerProvider);
+      expect(st.buckets.firstWhere((b) => b.id == 'b1').count, 0);
+      expect(st.buckets.firstWhere((b) => b.id == 'b2').count, 3);
+    });
+
+    test('用户取消系统弹窗：返回 trash_cancelled', () async {
+      final (container, fake) = dualBucketEnv();
+      addTearDown(container.dispose);
+      fake.cancelTrash = true;
+      final controller = container.read(galleryControllerProvider.notifier);
+
+      final err = await controller.trashBuckets(['b1']);
+      expect(err, 'trash_cancelled');
+      expect(fake._trashedIds, isEmpty);
+    });
+
+    test('所选相册均为空：no-op 直接返回 null，不触发 requestTrash', () async {
+      final fake = _FakeMediaStoreChannel(
+          [_bucket('b2', 'Empty', 0)], {'b2': const <MsImageInfo>[]});
+      final container = ProviderContainer(overrides: [
+        mediaStoreChannelProvider.overrideWithValue(fake),
+        mediaStoreChangeStreamProvider.overrideWith(
+            (ref) => const Stream<MsChangeEvent>.empty()),
+      ]);
+      addTearDown(container.dispose);
+      final controller = container.read(galleryControllerProvider.notifier);
+
+      final err = await controller.trashBuckets(['b2']);
+      expect(err, isNull);
+      expect(fake.trashCalls, isEmpty);
     });
   });
 

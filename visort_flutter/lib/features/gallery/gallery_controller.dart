@@ -1042,6 +1042,43 @@ class GalleryController extends Notifier<GalleryState> {
     }
   }
 
+  /// 批量清空所选相册（相册页长按多选 → 删除）：把所选相册内全部可见图片
+  /// 移入回收站。相册列表页无照片上下文（albums 视图 state.photos 为空，
+  /// 不能走 trashPhotos 的 photos 定位链）——先逐桶 scanImages 取全量 id，
+  /// 合并为一次 requestTrash（一次系统弹窗确认整批，对齐 RunController
+  /// 单弹窗批量语义）。成功后清缓存 + 重查相册列表：清空桶随 listBuckets
+  /// 的实时聚合消失，count/封面权威校准。返回 null 成功，否则错误信息。
+  Future<String?> trashBuckets(List<String> bucketIds) async {
+    if (bucketIds.isEmpty) return null;
+    try {
+      final ids = <String>[];
+      for (final bucketId in bucketIds) {
+        final page = await _channel.scanImages(
+          [bucketId],
+          afterCursor: null,
+          limit: _pageSize,
+          sortBy: state.sqlSort,
+          asc: state.effectivePhotoSortAsc,
+        );
+        for (final p in page.images) {
+          ids.add(p.id);
+        }
+      }
+      if (ids.isEmpty) return null; // 所选相册均已为空：无操作
+      // 静默窗先开（对齐 deletePhotos）：requestTrash 的系统侧删除完成 →
+      // observer delete 事件经 Kotlin 300ms 防抖先期到达，先开窗再提交。
+      _markSelfMutation();
+      await _channel.requestTrash(ids);
+      for (final id in ids) {
+        evictImageCache(id);
+      }
+      await loadBuckets();
+      return null;
+    } catch (e) {
+      return _cancelKeyOrRaw(e);
+    }
+  }
+
   /// 批量 existsStatus（审查 F20）：原逐 id 串行 await，每个一次
   /// method-channel 往返——千张级长阻塞无响应。此处按 [_kExistsBatch]
   /// 一批 Future.wait 并发发起（Kotlin 侧仍按序执行查询，省的是串行

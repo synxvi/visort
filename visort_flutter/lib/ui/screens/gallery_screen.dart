@@ -16,6 +16,7 @@
 import 'dart:async' show unawaited;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:visort_flutter/core/config/models.dart' show HomeLayout;
 import 'package:visort_flutter/core/fs/image_loader.dart';
@@ -24,6 +25,9 @@ import 'package:visort_flutter/core/i18n/i18n.dart';
 import 'package:visort_flutter/core/theme/app_animations.dart';
 import 'package:visort_flutter/core/theme/app_colors.dart';
 import 'package:visort_flutter/shared/widgets/app_bar_title.dart';
+import 'package:visort_flutter/shared/widgets/confirm_sheet.dart';
+import 'package:visort_flutter/shared/widgets/glyph_icons.dart';
+import 'package:visort_flutter/shared/widgets/toast.dart';
 import 'package:visort_flutter/features/gallery/gallery_controller.dart';
 import 'package:visort_flutter/shared/widgets/view_options_toggle.dart';
 import 'package:visort_flutter/ui/router.dart';
@@ -47,6 +51,14 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
   /// 据此屏蔽非目标 tile（含屏外预构建）；push 返回后清除。
   String? _flightTag;
 
+  // ── 相册多选模式（长按 tile 进入）：勾选 → 底栏批量移入回收站 ──
+  // UI 对齐相册内图片多选（album_screen）：顶栏计数 + 全选/✕，底栏操作。
+  bool _selectMode = false;
+  final Set<String> _selectedBucketIds = {};
+
+  /// 批量提交进行中（await 系统弹窗/IO 期间）：底栏禁用，防同批二次提交。
+  bool _batchProcessing = false;
+
   @override
   void initState() {
     super.initState();
@@ -58,6 +70,13 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     currentRouteName.addListener(_onRouteChanged);
     widget.shellHandle?.onActivated = () {
       ref.read(galleryControllerProvider.notifier).loadBuckets();
+    };
+    // 返回键四段分发的「当前页勾选态」段：多选态先退多选不退页（与相册内
+    // 勾选态返回行为一致），返回 true 表示已消费。
+    widget.shellHandle?.onBack = () {
+      if (!_selectMode) return false;
+      _exitSelectMode();
+      return true;
     };
   }
 
@@ -83,11 +102,36 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
     });
   }
 
+  void _enterSelectMode(String bucketId) {
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _selectMode = true;
+      _selectedBucketIds.add(bucketId);
+    });
+  }
+
+  void _exitSelectMode() {
+    setState(() {
+      _selectMode = false;
+      _selectedBucketIds.clear();
+    });
+  }
+
+  void _toggleSelect(String bucketId) {
+    HapticFeedback.selectionClick();
+    setState(() {
+      if (!_selectedBucketIds.remove(bucketId)) {
+        _selectedBucketIds.add(bucketId);
+      }
+    });
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     currentRouteName.removeListener(_onRouteChanged);
     widget.shellHandle?.onActivated = null;
+    widget.shellHandle?.onBack = null;
     super.dispose();
   }
 
@@ -106,9 +150,52 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
         ),
         titleSpacing: 0,
         // 标题视觉对齐共用组件（CJK 字形重心偏下 −1.4dp 上移贴中线，
-        // 见 app_bar_title.dart）。
-        title: AppBarTitleText(t(ref, 'gallery_title')),
-        actions: [
+        // 见 app_bar_title.dart）。多选态显示已选相册数。
+        title: AppBarTitleText(
+          _selectMode
+              ? t(ref, 'selected_albums_n', [_selectedBucketIds.length])
+              : t(ref, 'gallery_title'),
+        ),
+        actions: _selectMode
+            ? [
+                // 全选（自绘 Glyph 形制，同相册内勾选态顶栏；dx +12 挤向
+                // 右侧 ✕，图形间隙对齐顶栏 ~22dp 基准——album_screen 同构）。
+                Transform.translate(
+                  offset: const Offset(12, 0),
+                  child: IconButton(
+                    // 框内勾 = ≥1 个相册被勾选才显示（空框 = 一项没勾，
+                    // 2026-09 用户定稿，同相册内）。
+                    icon: SelectAllGlyphIcon(
+                      checked: _selectedBucketIds.isNotEmpty,
+                    ),
+                    tooltip: t(ref, 'select_all'),
+                    // toggle：当前已全选（列表全部在选）→ 清空；否则全选。
+                    onPressed: () {
+                      HapticFeedback.selectionClick();
+                      setState(() {
+                        final ids = gallery.sortedBuckets
+                            .map((b) => b.id)
+                            .toSet();
+                        final allSelected = ids.isNotEmpty &&
+                            ids.every(_selectedBucketIds.contains);
+                        if (allSelected) {
+                          _selectedBucketIds.clear();
+                        } else {
+                          _selectedBucketIds.addAll(ids);
+                        }
+                      });
+                    },
+                  ),
+                ),
+                // 退出多选（返回键经 ShellHandle.onBack 先退多选，两出口
+                // 语义一致；✕ 自绘 Glyph，与全选框同形制）。
+                IconButton(
+                  icon: const CloseGlyphIcon(),
+                  tooltip: t(ref, 'batch_cancel'),
+                  onPressed: _exitSelectMode,
+                ),
+              ]
+            : [
           // 搜索（[ente 对齐] 选项按钮左侧）：进入分类搜索页
           //（人物/位置/文件类型），页内支持文件名过滤与结果网格。
           // 自绘放大镜：与三线选项按钮/返回箭头同形制（28 画布、
@@ -168,6 +255,8 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
           ),
         ),
       ),
+      // 相册多选底栏：批量删除（所选相册全部图片移入回收站）。
+      bottomNavigationBar: _selectMode ? _buildAlbumBatchBar() : null,
     );
   }
 
@@ -185,6 +274,91 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
         ref.read(configProvider).copyWith(galleryGridColumns: cols);
     ref.read(configProvider.notifier).state = updated;
     await ref.read(profilesServiceProvider).save(updated);
+  }
+
+  /// 相册多选底栏（UI 对齐相册内批量栏 album_screen._buildBatchBar）：
+  /// 单操作「删除」= 所选相册内全部图片移入回收站。edge-to-edge：不用
+  /// SafeArea（背景止步手势条上缘会露 Scaffold 背景黑条）——Container
+  /// 自垫 bottomInset，背景（surface）延伸到物理底边。
+  Widget _buildAlbumBatchBar() {
+    final enabled = _selectedBucketIds.isNotEmpty && !_batchProcessing;
+    return Container(
+      color: AppColors.surface,
+      padding: EdgeInsets.only(
+        top: 6,
+        bottom: 6 + MediaQuery.viewPaddingOf(context).bottom,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextButton.icon(
+              onPressed: enabled ? _runBatchDelete : null,
+              // 图标统一 dy +1.2 光学补偿：CJK 文字视觉重心低 ~1.4dp，
+              // 行内元素视觉水平共线（2026-09 规范，同相册内批量栏 op()）。
+              icon: Transform.translate(
+                offset: const Offset(0, 1.2),
+                child: const Icon(Icons.delete_outline, size: 18),
+              ),
+              label: Text(
+                t(ref, 'delete_photo'),
+                style: const TextStyle(fontSize: 12),
+              ),
+              style: TextButton.styleFrom(foregroundColor: AppColors.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 批量提交 busy 包装（同 album_screen._runBatchGuarded）：确认弹窗后
+  /// 提交期间置位 _batchProcessing（底栏禁用），finally 复位。
+  Future<void> _runBatchGuarded(Future<void> Function() action) async {
+    if (_batchProcessing) return;
+    setState(() => _batchProcessing = true);
+    try {
+      await action();
+    } finally {
+      if (mounted) setState(() => _batchProcessing = false);
+    }
+  }
+
+  /// 批量删除：所选相册内全部图片移入回收站（trashBuckets 合并为一次
+  /// requestTrash = 一次系统弹窗确认整批，可从回收站恢复）。
+  Future<void> _runBatchDelete() async {
+    // 与当前 buckets 取交集：observer 刷新可能已移除部分所选桶。
+    final idSet = _selectedBucketIds.toSet();
+    final selected = ref
+        .read(galleryControllerProvider)
+        .sortedBuckets
+        .where((b) => idSet.contains(b.id))
+        .toList();
+    if (selected.isEmpty) {
+      _exitSelectMode();
+      return;
+    }
+    final photoCount = selected.fold<int>(0, (sum, b) => sum + b.count);
+    final confirmed = await showConfirmSheet(
+      context,
+      title: t(ref, 'albums_delete_confirm', [selected.length, photoCount]),
+      desc: t(ref, 'delete_confirm_desc'),
+      cancelText: t(ref, 'cancel'),
+      confirmText: t(ref, 'confirm'),
+    ).confirmed;
+    if (confirmed != true || !mounted) return;
+    await _runBatchGuarded(() async {
+      final err = await ref
+          .read(galleryControllerProvider.notifier)
+          .trashBuckets(selected.map((b) => b.id).toList());
+      if (!mounted) return;
+      _exitSelectMode();
+      // 取消弹窗静默；失败提示真实原因（对齐相册内批量删除分支）。
+      if (err == null) {
+        toast(context, t(ref, 'trashed'));
+      } else if (err != 'trash_cancelled') {
+        toast(context, t(ref, 'trash_failed'));
+      }
+    });
   }
 
   Widget _buildBody(GalleryState gallery) {
@@ -309,6 +483,12 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
                                 flightTag: _flightTag,
                                 onFlightStart: (tag) =>
                                     setState(() => _flightTag = tag),
+                                selectMode: _selectMode,
+                                selected:
+                                    _selectedBucketIds.contains(buckets[i].id),
+                                onToggle: () => _toggleSelect(buckets[i].id),
+                                onLongPress: () =>
+                                    _enterSelectMode(buckets[i].id),
                               ),
                             ),
                           ),
@@ -346,6 +526,10 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen>
         bucket: buckets[i],
         flightTag: _flightTag,
         onFlightStart: (tag) => setState(() => _flightTag = tag),
+        selectMode: _selectMode,
+        selected: _selectedBucketIds.contains(buckets[i].id),
+        onToggle: () => _toggleSelect(buckets[i].id),
+        onLongPress: () => _enterSelectMode(buckets[i].id),
       ),
     );
   }
@@ -465,12 +649,18 @@ class _PermissionBannerState extends ConsumerState<_PermissionBanner> {
 
 /// 单个相册 cell：网格态（封面 + 名称 + 内嵌数量 badge）/ 列表态
 /// （封面 + 名称 + 数量 + chevron 行式）→ 点击进相册。
+/// 多选态（长按进入，UI 对齐相册内图片勾选 gallery_file_widget）：
+/// 点击=切换勾选（不进相册），封面叠 40% 黑罩 + 右上勾选圈。
 class _AlbumTile extends ConsumerStatefulWidget {
   const _AlbumTile({
     required this.bucket,
     required this.grid,
     this.flightTag,
     this.onFlightStart,
+    this.selectMode = false,
+    this.selected = false,
+    this.onToggle,
+    this.onLongPress,
   });
 
   final MsBucket bucket;
@@ -484,6 +674,18 @@ class _AlbumTile extends ConsumerStatefulWidget {
   /// 点击时通知父级置位飞行目标（父级 setState 后本 tile rebuild）。
   /// String?：返回清除须传 null（'' 会屏蔽全部 tile 的 HeroMode，见 _open）。
   final ValueChanged<String?>? onFlightStart;
+
+  /// 多选模式：true 时点击 = 切换勾选（不进相册）。
+  final bool selectMode;
+
+  /// 本相册是否被勾选（勾选渲染：40% 黑罩 + 右上勾选圈）。
+  final bool selected;
+
+  /// 多选模式下点击回调（切换勾选）。
+  final VoidCallback? onToggle;
+
+  /// 长按进入多选（父级置位并选中本相册）。
+  final VoidCallback? onLongPress;
 
   @override
   ConsumerState<_AlbumTile> createState() => _AlbumTileState();
@@ -556,18 +758,30 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
   /// 行式 tile（列表布局）：封面 + 名称/数量两行 + 右 chevron。
   Widget _buildRow(MsBucket bucket) {
     return GestureDetector(
-      onTap: _open,
+      // 多选态点击 = 切换勾选（不进相册）；长按仅非多选态生效（进入多选）。
+      onTap: widget.selectMode ? widget.onToggle : _open,
+      onLongPress: widget.selectMode ? null : widget.onLongPress,
       behavior: HitTestBehavior.opaque,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Row(
           children: [
-            _CoverThumb(
-              coverId: bucket.coverId,
-              heroTag: _heroTag,
-              heroEnabled:
-                  widget.flightTag == null || widget.flightTag == _heroTag,
-              size: 56,
+            // 勾选渲染：56 封面上叠黑罩 + 勾选圈（同网格态样式）。
+            SizedBox(
+              width: 56,
+              height: 56,
+              child: Stack(
+                children: [
+                  _CoverThumb(
+                    coverId: bucket.coverId,
+                    heroTag: _heroTag,
+                    heroEnabled:
+                        widget.flightTag == null || widget.flightTag == _heroTag,
+                    size: 56,
+                  ),
+                  ..._selectionOverlay(),
+                ],
+              ),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -607,6 +821,28 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
     );
   }
 
+  /// 勾选渲染层（selected 时叠在封面上）：40% 黑罩 + 右上角勾选圈。
+  /// 样式对齐相册内图片勾选（gallery_file_widget 同值
+  /// Color.fromARGB(102, 0, 0, 0)、check_circle 16 accent）。全部
+  /// IgnorePointer：点击穿透到底层 GestureDetector（切换勾选/进相册）。
+  List<Widget> _selectionOverlay() {
+    if (!widget.selected) return const [];
+    return const [
+      Positioned.fill(
+        child: IgnorePointer(
+          child: ColoredBox(color: Color.fromARGB(102, 0, 0, 0)),
+        ),
+      ),
+      Positioned(
+        right: 4,
+        top: 4,
+        child: IgnorePointer(
+          child: Icon(Icons.check_circle, size: 16, color: AppColors.accent),
+        ),
+      ),
+    ];
+  }
+
   /// 网格 tile：裸 GestureDetector 无按压反馈（Hero 封面飞行即反馈；
   /// 旧版 PressScale 按压缩放是已废弃的交互）。数量为封面左下角内嵌
   /// 黑 badge，名称单行紧贴封面下。
@@ -622,7 +858,9 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
               fit: StackFit.expand,
               children: [
                 GestureDetector(
-                  onTap: _open,
+                  // 多选态点击 = 切换勾选（不进相册）；长按仅非多选态生效。
+                  onTap: widget.selectMode ? widget.onToggle : _open,
+                  onLongPress: widget.selectMode ? null : widget.onLongPress,
                   child: LayoutBuilder(
                     builder: (ctx, c) => _CoverThumb(
                       coverId: bucket.coverId,
@@ -659,12 +897,15 @@ class _AlbumTileState extends ConsumerState<_AlbumTile> {
                     ),
                   ),
                 ),
+                // 勾选渲染：黑罩盖 badge、勾选圈在右上（多选态）。
+                ..._selectionOverlay(),
               ],
             ),
           ),
           const SizedBox(height: 4),
           GestureDetector(
-            onTap: _open,
+            onTap: widget.selectMode ? widget.onToggle : _open,
+            onLongPress: widget.onLongPress,
             behavior: HitTestBehavior.opaque,
             child: Text(
               bucket.name.isEmpty ? t(ref, 'root_dir') : bucket.name,
