@@ -287,7 +287,12 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          # 不指定 name → 下载全部 artifact；merge 到同一目录供 gh-release 收集。
+          # 显式白名单，而非下载全部：android-symbols（混淆符号映射）只作
+          # CI artifact 归档（365 天），一旦混进 Release 等于公开反混淆
+          # 对照表、--obfuscate 全白做——v1.5.0 首发即中招（3 份 .symbols
+          # 发上了 Release，已手动移除）。今后新增面向用户的 artifact 须
+          # 同步加进此 pattern。
+          pattern: android-apks,windows-build
           merge-multiple: true
           path: release-assets
 
